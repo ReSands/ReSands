@@ -25,6 +25,13 @@ In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) versi
 - GOG copy of the PC version (includes GOG's preservation-program wrapper: widescreen/ultrawide, camera scaling, FPS limit, multi-monitor mouse lock).
 - PS2Recomp: https://github.com/ran-j/PS2Recomp (GPL-3.0).
 
+## Local layout
+
+All game material lives under `game/`, which is git-ignored. Never move game files outside it.
+
+- `game/ps2/`: the downloaded `.7z`; `iso/` (the ISO); `disc/` (extracted disc contents, incl. `SLUS_207.43` and `DATA/PRINCE.BF`).
+- `game/gog/installers/`: GOG offline installer (`setup_…_181_gog_v2_(92028).exe` + `-1.bin`) and the 28547→92028 patch. Install output, if extracted on the Mac, goes in `game/gog/install/`.
+
 ## Pipeline (PS2Recomp)
 
 1. Extract the ELF and data files from the ISO (standard ISO9660; mount or use 7-Zip).

@@ -16,6 +16,11 @@ SLES_*
 *.ELF
 *.IRX
 *.irx
+*.exe
+*.dll
+*.BF
+*.bf
+*.BIG
 game/
 extracted/
 iso/
