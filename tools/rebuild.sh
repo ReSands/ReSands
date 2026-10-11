@@ -75,16 +75,18 @@ if (( ! FAST )); then
     echo "errors=$(grep -c '\[error\]' $R/recomp_run.log || true) warnings=$(grep -c '\[warning\]' $R/recomp_run.log || true)"
 
     stage "Sync generated code into runtime worktree"
+    # Copy by content so unchanged files keep their timestamps (incremental build).
     # --delete: renamed functions get new filenames, and stale .cpp files break the build.
-    # Safe because upstream's only runner file (register_functions.cpp) is also generated,
-    # and our overrides are copied back in below.
-    rsync -rc --delete --include='*.cpp' --exclude='*' $R/output/ $RT/ps2xRuntime/src/runner/
-    rsync -rc --include='*.h' --exclude='*' $R/output/ $RT/ps2xRuntime/include/
+    # Safe because upstream's only runner file (register_functions.cpp) is also generated;
+    # our overrides are kept.
+    python3 -I $ROOT/tools/sync_generated.py $R/output $RT/ps2xRuntime/src/runner '*.cpp' \
+        --delete --keep $(cd $ROOT/tools/overrides && ls *.cpp)
+    python3 -I $ROOT/tools/sync_generated.py $R/output $RT/ps2xRuntime/include '*.h'
 fi
 
 stage "Sync game overrides"
 # Our game overrides must be in the executable's sources, not the runtime library (upstream #264).
-rsync -c $ROOT/tools/overrides/*.cpp $RT/ps2xRuntime/src/runner/
+python3 -I $ROOT/tools/sync_generated.py $ROOT/tools/overrides $RT/ps2xRuntime/src/runner '*.cpp'
 
 stage "Build runtime"
 if cmake --build $RT/build-mac > $R/runtime_build.log 2>&1; then

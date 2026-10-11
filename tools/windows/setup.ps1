@@ -30,7 +30,8 @@ Start-Service sshd
 Write-Host '== Long paths (56k generated files with long names)'
 New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled `
     -Value 1 -PropertyType DWORD -Force | Out-Null
-git config --system core.longpaths true
+# Full path: winget's PATH changes only reach new sessions.
+& 'C:\Program Files\Git\cmd\git.exe' config --system core.longpaths true
 
 Write-Host '== Defender exclusion for the project and tools (scanning 56k files slows MSVC a lot)'
 New-Item -ItemType Directory -Force -Path $Tools, (Split-Path $Proj) | Out-Null
