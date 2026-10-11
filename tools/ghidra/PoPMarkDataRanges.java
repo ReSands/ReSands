@@ -90,6 +90,7 @@ public class PoPMarkDataRanges extends GhidraScript {
             : trimmed.getName() + " body " + trimmed.getBody()));
 
         createCtorFunctions();
+        createDataPointedFunctions();
 
         for (Object[] m : IRX_MODULES) {
             createLabel(toAddr((Long) m[0]), (String) m[1], true, SourceType.USER_DEFINED);
@@ -118,6 +119,64 @@ public class PoPMarkDataRanges extends GhidraScript {
             }
         }
         println("Created " + created + " .ctors functions");
+    }
+
+    // Virtual methods and callbacks reached only through pointers in data (vtables)
+    // are never disassembled by auto-analysis, and the export's pointer scan only
+    // considers addresses that already hold instructions. Find data words pointing at
+    // undisassembled code that starts like a function, and make functions there.
+    private void createDataPointedFunctions() throws Exception {
+        Memory memory = currentProgram.getMemory();
+        int created = 0, candidates = 0;
+        for (MemoryBlock block : memory.getBlocks()) {
+            if (block.isExecute() || !block.isInitialized()) {
+                continue;
+            }
+            for (Address a = block.getStart(); a.compareTo(block.getEnd().subtract(3)) <= 0; a = a.add(4)) {
+                long target = getInt(a) & 0xFFFFFFFFL;
+                if ((target & 3) != 0) {
+                    continue;
+                }
+                MemoryBlock targetBlock = memory.getBlock(toAddr(target));
+                // Only our own code blocks: the EE loader also defines executable regions
+                // with no contents (reads throw).
+                if (targetBlock == null || !targetBlock.isExecute() || !targetBlock.isInitialized()
+                    || !targetBlock.getName().startsWith(".text")) {
+                    continue;
+                }
+                Address t = toAddr(target);
+                if (getInstructionAt(t) != null || getFunctionContaining(t) != null
+                    || !looksLikeFunctionStart(t)) {
+                    continue;
+                }
+                candidates++;
+                disassemble(t);
+                if (createFunction(t, null) != null) {
+                    created++;
+                }
+            }
+        }
+        println("Data-pointed functions: " + candidates + " candidates, " + created + " created");
+    }
+
+    // addiu $sp,$sp,-N in the first two instructions, or a leaf that returns
+    // (jr $ra) within its first four.
+    private boolean looksLikeFunctionStart(Address t) {
+        for (int i = 0; i < 4; i++) {
+            long insn;
+            try {
+                insn = getInt(t.add(4L * i)) & 0xFFFFFFFFL;
+            } catch (Exception e) {
+                return false;
+            }
+            if (i < 2 && (insn & 0xFFFF0000L) == 0x27BD0000L && (insn & 0x8000L) != 0) {
+                return true;
+            }
+            if (insn == 0x03E00008L) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Safe to re-run: only splits where a block does not already start.

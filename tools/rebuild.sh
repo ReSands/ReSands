@@ -1,7 +1,15 @@
 #!/bin/zsh
 # Ghidra cleanup -> PS2Recomp export -> recompile -> sync into runtime worktree -> build.
 # Logs go to game/ghidra/ and game/recomp/. Run from anywhere.
+#
+# Usage: tools/rebuild.sh          full pipeline (needed after any Ghidra-side change:
+#                                  data ranges, names, PS2Recomp recompiler changes)
+#        tools/rebuild.sh --fast   overrides and runtime only (tools/overrides/*.cpp or
+#                                  runtime sources changed); skips Ghidra and the recompile
 set -euo pipefail
+
+FAST=0
+[[ ${1:-} == --fast ]] && FAST=1
 
 ROOT=${0:A:h:h}
 GHIDRA=~/tools/ghidra_12.1.4_PUBLIC/support/analyzeHeadless
@@ -14,45 +22,74 @@ export PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH
 
 cd $ROOT
 
-echo "== Ghidra cleanup"
-$GHIDRA game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis \
-    -scriptPath tools/ghidra -postScript PoPMarkDataRanges.java > game/ghidra/headless_cleanup.log 2>&1
-grep 'PoPMarkDataRanges.java>' game/ghidra/headless_cleanup.log | sed 's/.*> //; s/ (GhidraScript)//'
+STAGE_START=$SECONDS
+stage() {
+    (( SECONDS > STAGE_START )) && echo "   ($(( SECONDS - STAGE_START ))s)"
+    STAGE_START=$SECONDS
+    echo "== $1"
+}
 
-echo "== SCE SDK signature names"
-mkdir -p $R/analyzer
-$RECOMP_SRC/build-mac/ps2xAnalyzer/ps2_analyzer game/ps2/disc/SLUS_207.43 $R/analyzer/analyzer.toml \
-    > $R/analyzer/analyzer_run.log 2>&1
-grep -oE '"[A-Za-z0-9_]+@0x[0-9A-Fa-f]+"' $R/analyzer/analyzer.toml | tr -d '"' | sed 's/@/,/' \
-    | sort -u > $R/analyzer/sce_names.csv
-echo "$(wc -l < $R/analyzer/sce_names.csv | tr -d ' ') names from ps2_analyzer"
-$GHIDRA game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis \
-    -scriptPath tools/ghidra -postScript PoPApplyNames.java $R/analyzer/sce_names.csv \
-    > game/ghidra/headless_names.log 2>&1
-grep 'PoPApplyNames.java>' game/ghidra/headless_names.log | sed 's/.*> //; s/ (GhidraScript)//'
+# Runs a headless Ghidra script and stops the pipeline if the script failed
+# (Ghidra itself still exits 0 in that case).
+ghidra() {
+    local log=$1; shift
+    $GHIDRA game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis "$@" > $log 2>&1
+    if grep -q 'SCRIPT ERROR' $log; then
+        echo "GHIDRA SCRIPT FAILED, see $log"; grep -m3 -A2 'SCRIPT ERROR' $log; exit 1
+    fi
+}
 
-echo "== Export"
-$GHIDRA game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis -readOnly \
-    -scriptPath $RECOMP_SRC/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java \
-    $R/config.toml $R/functions.csv > game/ghidra/headless_export.log 2>&1
-grep 'ExportPS2Functions.java> Exported [0-9]' game/ghidra/headless_export.log | sed 's/.*> //'
-# Ghidra reports the path with the casing it was launched through; keep one spelling.
-sed -i '' "s|/Users/jon/projects/POP_Decomp|$ROOT|g" $R/config.toml
+if (( ! FAST )); then
+    # Tools and runtime both come from the local "pop" branch (tools/ps2recomp-pop-branch.sh).
+    stage "PS2Recomp tools ($(git -C $RECOMP_SRC rev-parse --abbrev-ref HEAD) $(git -C $RECOMP_SRC rev-parse --short HEAD))"
+    cmake --build $RECOMP_SRC/build-mac --target ps2_recomp ps2_analyzer > $R/tools_build.log 2>&1 \
+        || { echo "TOOLS BUILD FAILED"; grep -m10 'error:' $R/tools_build.log; exit 1; }
+    git -C $RT checkout -q --detach $(git -C $RECOMP_SRC rev-parse HEAD)
+    echo "runtime worktree at $(git -C $RT rev-parse --short HEAD)"
 
-echo "== Recompile"
-rm -rf $R/output
-$RECOMP_SRC/build-mac/ps2xRecomp/ps2_recomp $R/config.toml > $R/recomp_run.log 2>&1
-echo "errors=$(grep -c '\[error\]' $R/recomp_run.log || true) warnings=$(grep -c '\[warning\]' $R/recomp_run.log || true)"
+    stage "Ghidra cleanup"
+    ghidra game/ghidra/headless_cleanup.log -scriptPath tools/ghidra -postScript PoPMarkDataRanges.java
+    grep 'PoPMarkDataRanges.java>' game/ghidra/headless_cleanup.log | sed 's/.*> //; s/ (GhidraScript)//'
 
-echo "== Sync into runtime worktree"
-# --delete: renamed functions get new filenames, and stale .cpp files break the build.
-# Safe because upstream's only runner file (register_functions.cpp) is also generated.
-rsync -rc --delete --include='*.cpp' --exclude='*' $R/output/ $RT/ps2xRuntime/src/runner/
-rsync -rc --include='*.h' --exclude='*' $R/output/ $RT/ps2xRuntime/include/
+    stage "SCE SDK signature names"
+    mkdir -p $R/analyzer
+    $RECOMP_SRC/build-mac/ps2xAnalyzer/ps2_analyzer game/ps2/disc/SLUS_207.43 $R/analyzer/analyzer.toml \
+        > $R/analyzer/analyzer_run.log 2>&1
+    grep -oE '"[A-Za-z0-9_]+@0x[0-9A-Fa-f]+"' $R/analyzer/analyzer.toml | tr -d '"' | sed 's/@/,/' \
+        | sort -u > $R/analyzer/sce_names.csv
+    echo "$(wc -l < $R/analyzer/sce_names.csv | tr -d ' ') names from ps2_analyzer"
+    ghidra game/ghidra/headless_names.log -scriptPath tools/ghidra -postScript PoPApplyNames.java $R/analyzer/sce_names.csv
+    grep 'PoPApplyNames.java>' game/ghidra/headless_names.log | sed 's/.*> //; s/ (GhidraScript)//'
 
-echo "== Build runtime"
+    stage "Export"
+    ghidra game/ghidra/headless_export.log -readOnly \
+        -scriptPath $RECOMP_SRC/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java \
+        $R/config.toml $R/functions.csv
+    grep 'ExportPS2Functions.java> Exported [0-9]' game/ghidra/headless_export.log | sed 's/.*> //'
+    # Ghidra reports the path with the casing it was launched through; keep one spelling.
+    sed -i '' "s|/Users/jon/projects/POP_Decomp|$ROOT|g" $R/config.toml
+
+    stage "Recompile"
+    rm -rf $R/output
+    $RECOMP_SRC/build-mac/ps2xRecomp/ps2_recomp $R/config.toml > $R/recomp_run.log 2>&1
+    echo "errors=$(grep -c '\[error\]' $R/recomp_run.log || true) warnings=$(grep -c '\[warning\]' $R/recomp_run.log || true)"
+
+    stage "Sync generated code into runtime worktree"
+    # --delete: renamed functions get new filenames, and stale .cpp files break the build.
+    # Safe because upstream's only runner file (register_functions.cpp) is also generated,
+    # and our overrides are copied back in below.
+    rsync -rc --delete --include='*.cpp' --exclude='*' $R/output/ $RT/ps2xRuntime/src/runner/
+    rsync -rc --include='*.h' --exclude='*' $R/output/ $RT/ps2xRuntime/include/
+fi
+
+stage "Sync game overrides"
+# Our game overrides must be in the executable's sources, not the runtime library (upstream #264).
+rsync -c $ROOT/tools/overrides/*.cpp $RT/ps2xRuntime/src/runner/
+
+stage "Build runtime"
 if cmake --build $RT/build-mac > $R/runtime_build.log 2>&1; then
     echo "build ok, errors=$(grep -c 'error:' $R/runtime_build.log || true)"
 else
     echo "BUILD FAILED"; grep -m10 'error:' $R/runtime_build.log; exit 1
 fi
+stage "Done"

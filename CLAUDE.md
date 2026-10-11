@@ -64,7 +64,28 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - Builds. A PS2Recomp worktree at `game/recomp/runtime-src` (ignored) holds the generated code: `output/*.cpp` copied into `ps2xRuntime/src/runner/` (replacing the placeholder `register_functions.cpp`), `output/*.h` into `ps2xRuntime/include/`. Needs Homebrew `ffmpeg` (found through pkg-config).
 - Configure with `-DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF`; build about 7 min on 8 cores (1,879 steps). Output: `build-mac/ps2xRuntime/ps2EntryRunner`, arm64, 179 MB. 0 errors, 22 warnings.
 - Known upstream bug (not yet fixed): 14 generated `vcallmsr $vi27` sites read `ctx->vi[27]`, but `vi` has only 16 entries. VI27 is the VU0 control register CMSAR0, which the runtime does not model there, so these reads are out of bounds (undefined behaviour) when the game starts VU0 microprograms.
-- Not yet run.
+- `tools/rebuild.sh` does the whole loop (PS2Recomp tools from the `pop` branch, Ghidra cleanup, SDK naming, export, recompile, sync, runtime build); `tools/boot.sh [secs] [logname]` boots with a time limit (exit 142 = time limit).
+
+## Boot log (11 Oct 2026)
+
+- Boot 1: hung on an indirect call to 0x651380, a C++ static constructor. Cause: the ELF is one executable block in Ghidra, so the export's data function-pointer scan never ran. Fixed by splitting blocks in `PoPMarkDataRanges.java` (incl. a `.ctors` block, 0x652E70–0x652F30, 48 entries) and creating functions at every `.ctors` target (3 are prologue-less leaf functions the export heuristic misses).
+- Boot 2: hung in `sceSifInitRpc` (0x10B500) waiting on `sceSifGetSreg` for an IOP reply. Cause: stripped ELF, so no SDK names, so PS2Recomp's HLE stubs were not used. Fixed by running `ps2_analyzer` (embedded SCE signature DB, 508 matches) and applying the names in Ghidra (`PoPApplyNames.java`).
+- Boot 3: first GS commands (display setup, buffer swaps, clear sprites); SIF RPC init via HLE; the 7 embedded IOP modules are DMA'd to IOP RAM. Then freezes about 5 s in, inside `sceCdLayerSearchFile` (0x101FA8, loop at 0x102060). No HLE handler for it (runtime has `sceCdSearchFile`); the analyzer also flags it as self-modifying. Planned fix: Game Override mapping it to `sceCdSearchFile`, but check upstream issue #264 first (overrides registered from the static library are never applied).
+- Boot 4 (on `pop`): same as boot 3.
+- Boot 5: game override `tools/overrides/pop_slus20743.cpp` (keyed by entry 0x100008 + CRC-32 0x7E7889A9) binds 0x101FA8 to `sceCdSearchFile`. Works: `\SYSTEM.CNF;1` found, CDVD streaming thread starts, GS image upload. Then hangs in 0x102A48 = `sceCdDiskReady` (unnamed by the analyzer; binds cdvdfsv RPC 0x8000059A).
+- Boot 6: override also binds 0x102A48 to `sceCdDiskReady`. Passes. Then a vtable call (vtable 0x653230) to 0x134C80, which Ghidra never disassembled.
+- Boot 7/8: `PoPMarkDataRanges.java` now creates functions at undisassembled code targets of data pointers that start like functions (741 + 167 recovered; 8,384 functions total). Boot 8 then reaches the game's own C++ exception: `exception.cpp` line 35, "An exception is about to be thrown". Next: find what throws.
+- Other unnamed functions in the CD library range, identified: 0x1022C0 = `sceCdSearchFile` wrapper (calls LayerSearchFile with layer 0); 0x1022E0 / 0x1025F8 = internal N-/S-command RPC helpers (servers 0x80000595 / 0x80000593; only caller is inside the HLE'd `sceCdRead`); 0x101380/0x101880 = allocator internals; 0x103240 = game's command-line option parser.
+- `tools/rebuild.sh --fast` skips Ghidra and the recompile (override/runtime-only changes). Moving the build loop to the Windows PC: see `tools/windows/SETUP.md`.
+
+## PS2Recomp PRs (reviewed 11 Oct 2026)
+
+Decision: build on upstream (MSVC-first, Windows is the end target) plus selected small open PRs on a local `pop` branch, made by `tools/ps2recomp-pop-branch.sh`. Not the DQ8 fork (#254): its runtime does not build with MSVC (`ucontext.h`, weak symbols). Its VU1 compiler (has SSE2 paths) and LLE IOP/SPU2 (runs LIBSD/SDRDRV unmodified) are worth lifting later.
+
+- Merged on `pop`: #268 (vcallmsr, replaces our patch), #277, #215, #235, #266, #267, #270, #279. All read line by line; no network, process or out-of-tree file access.
+- Conflicted, not merged: #195 (sceSifSendCmd args in $t0/$t1; only its test file conflicts, worth redoing), #239 (path containment + Windows drive paths; conflicts with upstream #244 IOP emulator), #241 (SIF init handshake; conflicts with #244, probably not needed since HLE `sceSifInitRpc` works).
+- Deferred: #272 (PS2 float clamping everywhere; slows VU ops, overlaps #277). Dropped: #240 (already upstream as #274), #135 (stale, 3.4k lines).
+- Claude Code's auto-mode permission check blocks merging/building/running unreviewed external code. The user runs `tools/ps2recomp-pop-branch.sh` themselves; building and booting need a permission rule for `tools/rebuild.sh` and `tools/boot.sh`.
 
 ## Pipeline (PS2Recomp)
 
