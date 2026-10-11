@@ -11,6 +11,8 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.SourceType;
 
@@ -39,8 +41,24 @@ public class PoPMarkDataRanges extends GhidraScript {
     // Function whose body Ghidra ran on into the data that follows it.
     private static final long TRIMMED_FUNCTION = 0x00652E40L;
 
+    // The ELF has a single "main" section, so Ghidra loads code and data as one
+    // executable block. PS2Recomp's export only scans non-executable blocks for
+    // function pointers (vtables, callbacks, .ctors), so split it up. Each entry:
+    // start, name, executable. A block runs to the next entry's start.
+    // .ctors: 48 static-constructor pointers walked by crt0 (a0..a1 = 0x652E70..0x652F30).
+    private static final Object[][] BLOCKS = {
+        {0x00100000L, ".text", true},
+        {0x004EB020L, ".data", false},
+        {0x00651380L, ".text.ctor_funcs", true},
+        {0x00652E64L, ".data2", false},
+        {0x00652E70L, ".ctors", false},
+        {0x00652F30L, ".data3", false},
+    };
+
     @Override
     public void run() throws Exception {
+        splitBlocks();
+
         AddressSet data = new AddressSet();
         for (long[] r : DATA_RANGES) {
             data.add(toAddr(r[0]), toAddr(r[1] - 1));
@@ -71,10 +89,57 @@ public class PoPMarkDataRanges extends GhidraScript {
         println("Recreated " + (trimmed == null ? "NOTHING at " + toAddr(TRIMMED_FUNCTION)
             : trimmed.getName() + " body " + trimmed.getBody()));
 
+        createCtorFunctions();
+
         for (Object[] m : IRX_MODULES) {
             createLabel(toAddr((Long) m[0]), (String) m[1], true, SourceType.USER_DEFINED);
         }
         println("Labelled " + IRX_MODULES.length + " embedded IOP modules");
+    }
+
+    // Some constructors are long leaf functions with no prologue, which the export's
+    // data-pointer heuristic does not recognise, so make every .ctors target a function.
+    private void createCtorFunctions() throws Exception {
+        MemoryBlock ctors = currentProgram.getMemory().getBlock(".ctors");
+        int created = 0;
+        for (Address a = ctors.getStart(); a.compareTo(ctors.getEnd()) < 0; a = a.add(4)) {
+            Address target = toAddr(getInt(a) & 0xFFFFFFFFL);
+            if (getFunctionAt(target) != null) {
+                continue;
+            }
+            if (getInstructionAt(target) == null) {
+                disassemble(target);
+            }
+            Function f = createFunction(target, null);
+            if (f == null) {
+                println("Could not create .ctors function at " + target);
+            } else {
+                created++;
+            }
+        }
+        println("Created " + created + " .ctors functions");
+    }
+
+    // Safe to re-run: only splits where a block does not already start.
+    private void splitBlocks() throws Exception {
+        Memory memory = currentProgram.getMemory();
+        for (Object[] b : BLOCKS) {
+            Address start = toAddr((Long) b[0]);
+            MemoryBlock block = memory.getBlock(start);
+            if (block == null) {
+                throw new IllegalStateException("No memory block at " + start);
+            }
+            if (!block.getStart().equals(start)) {
+                memory.split(block, start);
+            }
+        }
+        for (Object[] b : BLOCKS) {
+            MemoryBlock block = memory.getBlock(toAddr((Long) b[0]));
+            block.setName((String) b[1]);
+            block.setExecute((Boolean) b[2]);
+            println("Block " + block.getName() + " " + block.getStart() + "-" + block.getEnd()
+                + (block.isExecute() ? " exec" : " data"));
+        }
     }
 
     // Calls or jumps from code outside the data ranges into them would mean the
