@@ -112,6 +112,19 @@ namespace
     int g_heapTraceBudget = 40;
     // ---- Heap debugger: ring buffer of the last malloc/free calls, dumped (once) with the
     // allocator state when malloc first returns a pointer below the heap start. ----
+    // Set true to re-enable the heap debugger and file-system/kernel-call tracing
+    // (used to find the guest-heap clash; slows the game and is very verbose).
+    constexpr bool kDebugTracing = false;
+    // Records thread/semaphore/CD kernel calls (name, a0, caller, sp) in a ring buffer that
+    // is dumped when the bigfile reader stalls (see traceStreamRead).
+    constexpr bool kKernelCallLog = true;
+    struct KernelEvent { const char *name; uint32_t a0, caller, sp; };
+    KernelEvent g_kernelRing[150];
+    uint32_t g_kernelRingCount = 0;
+    void kernelRingRecord(const char *name, uint32_t a0, uint32_t caller, uint32_t sp)
+    {
+        g_kernelRing[g_kernelRingCount++ % 150] = {name, a0, caller, sp};
+    }
     constexpr uint32_t kHeapStart = 0x006E7000u;
     struct HeapEvent { char kind; uint32_t arg, result, caller, chunkSize; };
     HeapEvent g_heapRing[48];
@@ -260,13 +273,18 @@ namespace
         {0x00108BE0u, "WaitSema", nullptr},       {0x00108BF0u, "PollSema", nullptr},
         {0x00108E20u, "FlushCache", nullptr},     {0x00108F60u, "sceSifSetDma", nullptr},
         {0x0010BD40u, "sceSifCallRpc", nullptr},
+        {0x00108BD0u, "iSignalSema", nullptr},    {0x00108BB0u, "DeleteSema", nullptr},
+        {0x00101A10u, "sceCdCallback", nullptr},  {0x00101BD0u, "sceCdInitEeCB", nullptr},
     };
     constexpr size_t kWatchedCount = sizeof(g_watched) / sizeof(g_watched[0]);
     template <size_t I>
     void watchedCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t caller = getRegU32(ctx, 31);
-        heapWalkCheck(rdram, g_watched[I].name, caller);
+        if (kDebugTracing)
+            heapWalkCheck(rdram, g_watched[I].name, caller);
+        if (kKernelCallLog && g_watched[I].addr != 0x00108A90u /* GetThreadId: noise */)
+            kernelRingRecord(g_watched[I].name, getRegU32(ctx, 4), caller, getRegU32(ctx, 29));
         g_lastCallName = g_watched[I].name;
         g_lastCallCaller = caller;
         g_watched[I].orig(rdram, ctx, runtime);
@@ -311,14 +329,128 @@ namespace
         SET_GPR_U32(ctx, 2, kGameHeapEnd); // like runtime stubs: leave pc, the dispatcher returns
     }
 
+    // Bigfile read path: readFully(handle, buf, size) 0x494cc0 loops on
+    // streamRead(reader, request, size, dest) 0x156c00 until size bytes have arrived.
+    int g_readTraceBudget = 200;
+    void traceReadFully(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_readTraceBudget-- > 0)
+            std::cerr << "[pop:rd] readFully(" << hex(getRegU32(ctx, 4)) << ", buf=" << hex(getRegU32(ctx, 5))
+                      << ", size=" << hex(getRegU32(ctx, 6)) << ") from " << hex(getRegU32(ctx, 31)) << std::endl;
+        FUN_00494cc0_0x494cc0(rdram, ctx, runtime);
+    }
+    void traceStreamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t req = getRegU32(ctx, 5);
+        std::string args = "reader=" + hex(getRegU32(ctx, 4)) + ", req=" + hex(req) + ", size=" + hex(getRegU32(ctx, 6)) +
+                           ", dest=" + hex(getRegU32(ctx, 7)) + " [req pos=" + hex(guestU32(rdram, req)) +
+                           " +5=" + hex(guestU32(rdram, req + 0x14)) + " +7=" + hex(guestU32(rdram, req + 0x1c)) +
+                           " +8=" + hex(guestU32(rdram, req + 0x20)) + "]";
+        const uint32_t ra = getRegU32(ctx, 31);
+        if (g_readTraceBudget-- > 0)
+            traced<FUN_00156c00_0x156c00>("streamRead", rdram, ctx, runtime, args);
+        else
+            FUN_00156c00_0x156c00(rdram, ctx, runtime);
+        // Stall detector: after 3 zero-byte reads in a row, dump the recent kernel calls once.
+        static int zeros = 0;
+        static bool dumped = false;
+        if (ctx->pc == ra && getRegU32(ctx, 2) == 0u)
+            ++zeros;
+        else if (ctx->pc == ra)
+            zeros = 0;
+        if (zeros >= 3 && !dumped)
+        {
+            dumped = true;
+            const uint32_t n = std::min<uint32_t>(g_kernelRingCount, 150);
+            std::cerr << "[pop:stall] reader returned 0 three times; last " << n << " kernel calls:" << std::endl;
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                const KernelEvent &e = g_kernelRing[(g_kernelRingCount - n + i) % 150];
+                std::cerr << "[pop:stall]   " << e.name << "(" << hex(e.a0) << ") from " << hex(e.caller) << " sp=" << hex(e.sp) << std::endl;
+            }
+        }
+    }
+
+    // ---- CD read completion callback ----
+    // The game's CD device runs a worker thread that issues sceCdRead and then blocks on
+    // a semaphore until the completion callback it registered with sceCdCallback
+    // (0x14EFC0) does iSignalSema(device + 0x4040). PS2Recomp's sceCdCallback is a no-op
+    // and its sceCdRead completes synchronously without calling anything, so once the main
+    // thread stops submitting requests (it waits for that read's data) both threads wait
+    // forever: the bigfile reader returned 0 bytes in a loop. After a successful read we
+    // do what the callback would: signal the worker's semaphore. The device pointer is the
+    // global the callback itself reads, lw v0, -0x779C(gp) = 0x66D254.
+    constexpr uint32_t kSceCdRead = 0x00102D40u;
+    constexpr uint32_t kSceCdCallback = 0x00101A10u;
+    constexpr uint32_t kISignalSema = 0x00108BD0u;
+    constexpr uint32_t kGameCdCallback = 0x0014EFC0u;
+    constexpr uint32_t kCdDeviceGlobal = 0x0066D254u;
+    PS2Runtime::RecompiledFunction g_origCdRead = nullptr, g_origCdCallback = nullptr, g_iSignalSema = nullptr;
+    uint32_t g_cdCallback = 0;
+
+    void cdCallbackRecorded(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t previous = g_cdCallback;
+        g_cdCallback = getRegU32(ctx, 4);
+        g_origCdCallback(rdram, ctx, runtime);
+        SET_GPR_U32(ctx, 2, previous); // sceCdCallback returns the previous callback
+    }
+
+    void cdReadWithCompletion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_origCdRead(rdram, ctx, runtime);
+        if (getRegU32(ctx, 2) == 0u || g_cdCallback == 0u)
+            return; // read failed, or no callback registered
+        if (g_cdCallback != kGameCdCallback)
+        {
+            static bool warned = false;
+            if (!warned)
+            {
+                warned = true;
+                std::cerr << "[pop] sceCdRead: unknown CD callback " << hex(g_cdCallback) << " not emulated" << std::endl;
+            }
+            return;
+        }
+        const uint32_t device = guestU32(rdram, kCdDeviceGlobal);
+        if (device == 0u)
+            return;
+        const uint32_t a0 = getRegU32(ctx, 4), v0 = getRegU32(ctx, 2);
+        SET_GPR_U32(ctx, 4, guestU32(rdram, device + 0x4040u));
+        g_iSignalSema(rdram, ctx, runtime);
+        SET_GPR_U32(ctx, 4, a0);
+        SET_GPR_U32(ctx, 2, v0);
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        if (kKernelCallLog)
+        {
+            runtime.replaceFunction(0x00494cc0u, traceReadFully);
+            runtime.replaceFunction(0x00156c00u, traceStreamRead);
+        }
         runtime.replaceFunction(0x00111c68u, initSysWithRuntimeHeapMoved);
         runtime.replaceFunction(0x00108b80u, endOfHeap);
 
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdLayerSearchFile, "sceCdSearchFile");
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
+        g_origCdRead = runtime.lookupFunction(kSceCdRead);
+        g_origCdCallback = runtime.lookupFunction(kSceCdCallback);
+        g_iSignalSema = runtime.lookupFunction(kISignalSema);
+        if (g_origCdRead && g_origCdCallback && g_iSignalSema)
+        {
+            runtime.replaceFunction(kSceCdCallback, cdCallbackRecorded);
+            runtime.replaceFunction(kSceCdRead, cdReadWithCompletion);
+        }
+        else
+        {
+            std::cerr << "[pop] could not look up sceCdRead/sceCdCallback/iSignalSema handlers" << std::endl;
+        }
+
+        if (kDebugTracing || kKernelCallLog)
+            installWatched(runtime, std::make_index_sequence<kWatchedCount>{});
+        if (!kDebugTracing)
+            return;
         runtime.replaceFunction(0x00153940u, traceMount);
         runtime.replaceFunction(0x00153140u, traceAlias);
         runtime.replaceFunction(0x00152080u, traceResolve);
@@ -341,7 +473,6 @@ namespace
         {
             std::cerr << "[pop:heap] could not look up memset/memcpy/memmove handlers" << std::endl;
         }
-        installWatched(runtime, std::make_index_sequence<kWatchedCount>{});
     }
 }
 
