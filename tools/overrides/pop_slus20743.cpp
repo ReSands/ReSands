@@ -15,6 +15,7 @@
 #include <iostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -421,8 +422,60 @@ namespace
         SET_GPR_U32(ctx, 2, v0);
     }
 
+    // ---- IOP modules loaded from a buffer the game DMA'd to the IOP ----
+    // The game starts its 7 embedded IRX modules (incl. UbiSound_Driver, whose RPC server
+    // 0x12345678 it waits for) the standard Sony way: sceSifAllocSysMemory, sceSifSetDma
+    // the image into IOP memory, then sceSifLoadModuleBuffer(iopAddress). PS2Recomp's
+    // handler for _sceSifLoadModuleBuffer (0x110288) reads the image from *EE* memory at
+    // that address, so the load fails. We remember each SIF DMA (EE source -> IOP
+    // destination) and hand the loader the EE source of the transfer to that address.
+    struct SifDmaRecord { uint32_t eeSrc, iopDst, size; };
+    std::vector<SifDmaRecord> g_sifDmas;
+    constexpr uint32_t kSceSifSetDma = 0x00108F60u;
+    constexpr uint32_t kSifLoadModuleBuffer = 0x00110288u;
+    PS2Runtime::RecompiledFunction g_origSifSetDma = nullptr, g_origLoadModuleBuffer = nullptr;
+
+    void sifSetDmaRecorded(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        // sceSifSetDma(sceSifDmaData *list, int count); entry = {data(EE), addr(IOP), size, mode}
+        const uint32_t list = getRegU32(ctx, 4), count = getRegU32(ctx, 5);
+        for (uint32_t i = 0; i < count && i < 32u; ++i)
+        {
+            const uint32_t e = list + i * 16u;
+            g_sifDmas.push_back({guestU32(rdram, e), guestU32(rdram, e + 4u), guestU32(rdram, e + 8u)});
+        }
+        if (g_sifDmas.size() > 256u)
+            g_sifDmas.erase(g_sifDmas.begin(), g_sifDmas.begin() + 128);
+        g_origSifSetDma(rdram, ctx, runtime);
+    }
+
+    void loadModuleBufferFromEeSource(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t iopAddr = getRegU32(ctx, 4);
+        for (auto it = g_sifDmas.rbegin(); it != g_sifDmas.rend(); ++it)
+        {
+            if (it->iopDst == iopAddr)
+            {
+                std::cerr << "[pop] sceSifLoadModuleBuffer: IOP " << hex(iopAddr) << " -> EE source " << hex(it->eeSrc)
+                          << " (" << hex(it->size) << " bytes)" << std::endl;
+                SET_GPR_U32(ctx, 4, it->eeSrc);
+                break;
+            }
+        }
+        g_origLoadModuleBuffer(rdram, ctx, runtime);
+        std::cerr << "[pop] sceSifLoadModuleBuffer -> " << static_cast<int32_t>(getRegU32(ctx, 2)) << std::endl;
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        g_origSifSetDma = runtime.lookupFunction(kSceSifSetDma);
+        g_origLoadModuleBuffer = runtime.lookupFunction(kSifLoadModuleBuffer);
+        if (g_origSifSetDma && g_origLoadModuleBuffer)
+        {
+            runtime.replaceFunction(kSceSifSetDma, sifSetDmaRecorded);
+            runtime.replaceFunction(kSifLoadModuleBuffer, loadModuleBufferFromEeSource);
+        }
+
         if (kKernelCallLog)
         {
             runtime.replaceFunction(0x00494cc0u, traceReadFully);
