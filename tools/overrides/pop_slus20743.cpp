@@ -9,7 +9,10 @@
 #include "runtime/ps2_memory.h"
 #include <ps2_recompiled_functions.h>
 
+#include "raylib.h"
+
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
@@ -278,9 +281,34 @@ namespace
         {0x00101A10u, "sceCdCallback", nullptr},  {0x00101BD0u, "sceCdInitEeCB", nullptr},
     };
     constexpr size_t kWatchedCount = sizeof(g_watched) / sizeof(g_watched[0]);
+    // ---- Frame dumper: saves the frame the runtime presents to the window as a PNG every
+    // kFrameDumpSeconds of real time (up to kFrameDumpMax), into game/recomp/screens/.
+    // Driven from the instrumented kernel calls, which run constantly. ExportImage is
+    // CPU-only, so this is safe off the render thread.
+    constexpr bool kFrameDump = true;
+    constexpr int kFrameDumpSeconds = 10, kFrameDumpMax = 9;
+    void maybeDumpFrame(PS2Runtime *runtime)
+    {
+        static int dumped = 0;
+        static auto next = std::chrono::steady_clock::now() + std::chrono::seconds(kFrameDumpSeconds);
+        if (!kFrameDump || dumped >= kFrameDumpMax || std::chrono::steady_clock::now() < next)
+            return;
+        next = std::chrono::steady_clock::now() + std::chrono::seconds(kFrameDumpSeconds);
+        std::vector<uint8_t> pixels;
+        uint32_t w = 0, h = 0, displayFbp = 0;
+        if (!runtime->gs().copyLatchedHostPresentationFrame(pixels, w, h, &displayFbp) || w == 0 || h == 0 ||
+            pixels.size() < static_cast<size_t>(w) * h * 4u)
+            return;
+        Image img{pixels.data(), static_cast<int>(w), static_cast<int>(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        const std::string path = "../../recomp/screens/frame_" + std::to_string(++dumped * kFrameDumpSeconds) + "s.png";
+        const bool ok = ExportImage(img, path.c_str());
+        std::cerr << "[pop] frame dump " << path << " " << w << "x" << h << " fbp=" << displayFbp << (ok ? "" : " FAILED") << std::endl;
+    }
+
     template <size_t I>
     void watchedCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        maybeDumpFrame(runtime);
         const uint32_t caller = getRegU32(ctx, 31);
         if (kDebugTracing)
             heapWalkCheck(rdram, g_watched[I].name, caller);
