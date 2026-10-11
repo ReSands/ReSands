@@ -7,6 +7,7 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_memory.h"
+#include "runtime/gs/ps2_gs_psmct32.h"
 #include <ps2_recompiled_functions.h>
 
 #include "raylib.h"
@@ -15,8 +16,10 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -303,12 +306,303 @@ namespace
         const std::string path = "../../recomp/screens/frame_" + std::to_string(++dumped * kFrameDumpSeconds) + "s.png";
         const bool ok = ExportImage(img, path.c_str());
         std::cerr << "[pop] frame dump " << path << " " << w << "x" << h << " fbp=" << displayFbp << (ok ? "" : " FAILED") << std::endl;
+        // Raw GS VRAM alongside the 20 s and 30 s frames, for offline decoding (tools/gsvram.py).
+        if (dumped == 2 || dumped == 3)
+        {
+            const std::string vpath = "../../recomp/screens/vram_" + std::to_string(dumped * kFrameDumpSeconds) + "s.bin";
+            if (FILE *f = std::fopen(vpath.c_str(), "wb"))
+            {
+                std::fwrite(runtime->memory().getGSVRAM(), 1, PS2_GS_VRAM_SIZE, f);
+                std::fclose(f);
+                std::cerr << "[pop] vram dump " << vpath << std::endl;
+            }
+        }
+    }
+
+    // ---- Render-path sampler: every 3 s, the VIF1 (D1) and GIF (D2) DMA channel registers,
+    // VU1 microcode uploads, and GS packet/image counters. Shows which part of the
+    // CPU -> DMA -> VIF1 -> VU1 -> GS path the game uses and where output stops.
+    constexpr bool kRenderStats = true;
+    // Everything the GS receives through the GIF arbiter (PATH1 XGKICK, PATH2 DIRECT, PATH3).
+    uint64_t g_gifPackets = 0, g_gifBytes = 0, g_gifPrimTags = 0;
+    PS2Runtime *g_runtime = nullptr;
+
+    // Decodes GIF packets (PACKED and A+D) for one 300-packet window about 20 s into the boot:
+    // logs A+D register writes (FRAME, ZBUF, TEST, ALPHA, SCISSOR, TEX0...), PRIM values, and
+    // aggregates RGBAQ colours and XYZ ranges, to see where and in what colour the game draws.
+    void decodeGifSample(const uint8_t *data, uint32_t size)
+    {
+        // Repeats every 10 s (first at 10 s); A+D register values are logged in the first window only.
+        static auto start = std::chrono::steady_clock::now();
+        static int window = -1, windowsDone = 0; // -1 waiting, >0 packets left
+        if (window == -1)
+        {
+            if (windowsDone >= 6 || std::chrono::steady_clock::now() - start < std::chrono::seconds(10))
+                return;
+            window = 300;
+            std::cerr << "[pop:gif] --- sample window " << windowsDone << " start ---" << std::endl;
+        }
+        --window;
+        static std::unordered_map<uint32_t, int> adSeen;
+        static uint64_t frame[2] = {0, 0}, test[2] = {0, 0}, alphaReg[2] = {0, 0}, xyoff[2] = {0, 0}, tex0[2] = {0, 0};
+        static uint32_t curPrim = 0, curAlpha = 0;
+        static std::unordered_map<std::string, int> combos;
+        static uint64_t bigTex0 = 0;
+        auto notePrim = [&](uint32_t prim)
+        {
+            curPrim = prim;
+            const uint32_t c = (prim >> 9) & 1u;
+            char key[260];
+            const uint64_t t = tex0[c];
+            std::snprintf(key, sizeof(key), "type=%u tme=%u abe=%u ctxt=%u FRAME fbp=%u fbmsk=%08x TEST=%05llx ALPHA=%llx A=%02x TEX0 tbp=%u tbw=%u psm=%#x tw=%u th=%u cbp=%u",
+                          prim & 7u, (prim >> 4) & 1u, (prim >> 6) & 1u, c, static_cast<unsigned>(frame[c] & 0x1FF),
+                          static_cast<unsigned>(frame[c] >> 32), static_cast<unsigned long long>(test[c] & 0x7FFFF),
+                          static_cast<unsigned long long>(alphaReg[c]), curAlpha,
+                          static_cast<unsigned>(t & 0x3FFF), static_cast<unsigned>((t >> 14) & 0x3F), static_cast<unsigned>((t >> 20) & 0x3F),
+                          static_cast<unsigned>((t >> 26) & 0xF), static_cast<unsigned>((t >> 30) & 0xF), static_cast<unsigned>((t >> 37) & 0x3FFF));
+            ++combos[key];
+            if ((prim & 7u) == 6u && ((prim >> 4) & 1u) && ((tex0[c] >> 26) & 0xF) == 9u)
+            {
+                bigTex0 = tex0[c];
+                // Raw dump of the first two font-draw packets (window 1), to read vertex colours/positions.
+                static int rawDumps = 0;
+                if (windowsDone == 1 && rawDumps < 2)
+                {
+                    ++rawDumps;
+                    std::cerr << "[pop:raw] packet size=" << size << " prim=" << hex(prim) << std::endl;
+                    for (uint32_t q = 0; q + 16u <= size && q < 16u * 48u; q += 16u)
+                    {
+                        uint64_t lo, hi;
+                        std::memcpy(&lo, data + q, 8);
+                        std::memcpy(&hi, data + q + 8, 8);
+                        char line[80];
+                        std::snprintf(line, sizeof(line), "[pop:raw] %04x: %016llx %016llx", q,
+                                      static_cast<unsigned long long>(hi), static_cast<unsigned long long>(lo));
+                        std::cerr << line << std::endl;
+                    }
+                }
+            }
+        };
+        static uint32_t minX = ~0u, maxX = 0, minY = ~0u, maxY = 0, colours = 0;
+        static std::unordered_map<uint32_t, int> colourCounts;
+        uint32_t off = 0;
+        while (off + 16u <= size)
+        {
+            uint64_t tag, regs;
+            std::memcpy(&tag, data + off, 8);
+            std::memcpy(&regs, data + off + 8, 8);
+            off += 16u;
+            const uint32_t nloop = tag & 0x7FFFu, flg = (tag >> 58) & 3u;
+            uint32_t nreg = (tag >> 60) & 0xFu;
+            if (nreg == 0)
+                nreg = 16;
+            if ((tag >> 46) & 1u)
+            {
+                const uint32_t prim = (tag >> 47) & 0x7FFu;
+                notePrim(prim);
+                if (adSeen[0x10000u | prim]++ == 0)
+                    std::cerr << "[pop:gif] PRIM(tag)=" << hex(prim) << " type=" << (prim & 7) << " tme=" << ((prim >> 4) & 1)
+                              << " abe=" << ((prim >> 6) & 1) << " ctxt=" << ((prim >> 9) & 1) << std::endl;
+            }
+            if (flg == 0) // PACKED
+            {
+                for (uint32_t l = 0; l < nloop && off + 16u <= size; ++l)
+                    for (uint32_t r = 0; r < nreg && off + 16u <= size; ++r, off += 16u)
+                    {
+                        const uint32_t reg = (regs >> (r * 4)) & 0xF;
+                        uint64_t lo, hi;
+                        std::memcpy(&lo, data + off, 8);
+                        std::memcpy(&hi, data + off + 8, 8);
+                        if (reg == 0xE) // A+D
+                        {
+                            const uint32_t addr = hi & 0xFF;
+                            if (addr == 0x4C || addr == 0x4D) frame[addr - 0x4C] = lo;
+                            if (addr == 0x06 || addr == 0x07) tex0[addr - 0x06] = lo;
+                            if (addr == 0x47 || addr == 0x48) test[addr - 0x47] = lo;
+                            if (addr == 0x42 || addr == 0x43) alphaReg[addr - 0x42] = lo;
+                            if (addr == 0x00) notePrim(static_cast<uint32_t>(lo & 0x7FF));
+                            if (windowsDone == 0 && adSeen[addr]++ < 3)
+                                std::cerr << "[pop:gif] A+D reg " << hex(addr) << " = 0x" << std::hex << lo << std::dec << std::endl;
+                        }
+                        else if (reg == 0x1) // RGBAQ packed: R,G,B,A in the low bytes of 4 words
+                        {
+                            const uint32_t rgba = (lo & 0xFF) | ((lo >> 32 & 0xFF) << 8) | ((hi & 0xFF) << 16) | ((hi >> 32 & 0xFF) << 24);
+                            curAlpha = rgba >> 24;
+                            if (colourCounts[rgba]++ == 0)
+                                ++colours;
+                        }
+                        else if (reg == 0x4 || reg == 0x5) // XYZF2 / XYZ2 packed: X, Y 12.4 fixed
+                        {
+                            const uint32_t x = (lo & 0xFFFF) >> 4, y = ((lo >> 32) & 0xFFFF) >> 4;
+                            minX = std::min(minX, x); maxX = std::max(maxX, x);
+                            minY = std::min(minY, y); maxY = std::max(maxY, y);
+                        }
+                    }
+            }
+            else if (flg == 2) // IMAGE
+                off += nloop * 16u;
+            else // REGLIST
+                off += ((nloop * nreg + 1u) & ~1u) * 8u;
+        }
+        if (window == 0)
+        {
+            std::cerr << "[pop:gif] XYZ range x " << minX << ".." << maxX << " y " << minY << ".." << maxY
+                      << " (GS units incl. offset), distinct colours " << colours << ":";
+            int shown = 0;
+            for (const auto &[c, n] : colourCounts)
+                if (shown++ < 12)
+                    std::cerr << " " << hex(c) << "x" << n;
+            std::cerr << std::endl;
+            for (const auto &[k, n] : combos)
+                std::cerr << "[pop:gif] prims " << n << "x: " << k << std::endl;
+            if (bigTex0 != 0)
+            {
+                // VRAM at the end of the window, with the 512-wide texture's TEX0, for tools/gsvram.py.
+                const std::string vpath = "../../recomp/screens/vram_w" + std::to_string(windowsDone) + ".bin";
+                if (FILE *f = std::fopen(vpath.c_str(), "wb"))
+                {
+                    std::fwrite(g_runtime->memory().getGSVRAM(), 1, PS2_GS_VRAM_SIZE, f);
+                    std::fclose(f);
+                }
+                std::cerr << "[pop:gif] vram " << vpath << " bigTex0=0x" << std::hex << bigTex0 << std::dec << std::endl;
+                if (windowsDone == 1)
+                {
+                    // VU1 data memory and EE RAM, to trace where the font draws' zero alpha comes from.
+                    if (FILE *f = std::fopen("../../recomp/screens/vu1data_w1.bin", "wb"))
+                    {
+                        std::fwrite(g_runtime->memory().getVU1Data(), 1, PS2_VU1_DATA_SIZE, f);
+                        std::fclose(f);
+                    }
+                    if (FILE *f = std::fopen("../../recomp/screens/rdram_w1.bin", "wb"))
+                    {
+                        std::fwrite(g_runtime->memory().getRDRAM(), 1, PS2_RAM_SIZE, f);
+                        std::fclose(f);
+                    }
+                }
+            }
+            combos.clear();
+            colourCounts.clear();
+            colours = 0;
+            ++windowsDone;
+            window = -1;
+            start = std::chrono::steady_clock::now();
+        }
+    }
+
+    // EXPERIMENT: rewrite TEST_1/TEST_2 A+D writes to ZTST=ALWAYS (keep everything else),
+    // to check whether the game's draws are rejected by the depth test.
+    constexpr bool kForceZtstAlways = false;
+    void forceDepthAlways(std::vector<uint8_t> &pkt)
+    {
+        uint32_t off = 0;
+        const uint32_t size = static_cast<uint32_t>(pkt.size());
+        while (off + 16u <= size)
+        {
+            uint64_t tag, regs;
+            std::memcpy(&tag, pkt.data() + off, 8);
+            std::memcpy(&regs, pkt.data() + off + 8, 8);
+            off += 16u;
+            const uint32_t nloop = tag & 0x7FFFu, flg = (tag >> 58) & 3u;
+            uint32_t nreg = (tag >> 60) & 0xFu;
+            if (nreg == 0)
+                nreg = 16;
+            if (flg == 0)
+            {
+                for (uint32_t l = 0; l < nloop && off + 16u <= size; ++l)
+                    for (uint32_t r = 0; r < nreg && off + 16u <= size; ++r, off += 16u)
+                    {
+                        if (((regs >> (r * 4)) & 0xF) != 0xE)
+                            continue;
+                        uint64_t lo, hi;
+                        std::memcpy(&lo, pkt.data() + off, 8);
+                        std::memcpy(&hi, pkt.data() + off + 8, 8);
+                        const uint32_t addr = hi & 0xFF;
+                        if (addr == 0x47 || addr == 0x48) // TEST_1 / TEST_2
+                        {
+                            lo = (lo & ~(3ull << 17)) | (1ull << 16) | (1ull << 17); // ZTE=1, ZTST=ALWAYS
+                            std::memcpy(pkt.data() + off, &lo, 8);
+                        }
+                    }
+            }
+            else if (flg == 2)
+                off += nloop * 16u;
+            else
+                off += ((nloop * nreg + 1u) & ~1u) * 8u;
+        }
+    }
+
+    void countGifPacket(const uint8_t *data, uint32_t size)
+    {
+        decodeGifSample(data, size);
+        ++g_gifPackets;
+        g_gifBytes += size;
+        if (size >= 16u)
+        {
+            uint64_t tag;
+            std::memcpy(&tag, data, sizeof(tag));
+            if ((tag >> 46) & 1u) // PRE: tag carries a PRIM value
+                ++g_gifPrimTags;
+        }
+    }
+    // GS rasterizer self-test (once, 35 s in): draw a red untextured sprite into FBP 0 with
+    // depth/alpha tests off through the normal GIF path, then read the pixel back from VRAM.
+    void maybeGsSelfTest(PS2Runtime *runtime)
+    {
+        static auto when = std::chrono::steady_clock::now() + std::chrono::seconds(35);
+        static bool done = false;
+        if (done || std::chrono::steady_clock::now() < when)
+            return;
+        done = true;
+        auto ad = [](uint64_t *q, uint64_t data, uint64_t reg) { q[0] = data; q[1] = reg; };
+        uint64_t pkt[2 * 12] = {};
+        // GIFtag: NLOOP=11, EOP=1, FLG=PACKED, NREG=1, REGS=A+D (0xE)
+        pkt[0] = 11ull | (1ull << 15) | (0ull << 58) | (1ull << 60);
+        pkt[1] = 0xE;
+        uint64_t *q = pkt + 2;
+        ad(q, 0x000A0000ull, 0x4C); q += 2;          // FRAME_1: FBP 0, FBW 10, PSMCT32, no mask
+        ad(q, 0x0000ull | (1ull << 32), 0x4E); q += 2; // ZBUF_1: ZMSK=1 (no z writes)
+        ad(q, 0x30000ull, 0x47); q += 2;              // TEST_1: ZTE=1, ZTST=ALWAYS, no alpha test
+        ad(q, (639ull << 16) | (447ull << 48), 0x40); q += 2; // SCISSOR_1: 0..639 x 0..447
+        ad(q, 0x0ull, 0x18); q += 2;                  // XYOFFSET_1: 0,0
+        ad(q, 0x0ull, 0x42); q += 2;                  // ALPHA_1
+        ad(q, 6ull, 0x00); q += 2;                    // PRIM: sprite, no texture, no blend
+        ad(q, 0xFFull | (0x80ull << 24), 0x01); q += 2; // RGBAQ: red, A=0x80
+        ad(q, (16ull * 100) | ((16ull * 100) << 16), 0x05); q += 2; // XYZ2 (100,100)
+        ad(q, (16ull * 200) | ((16ull * 200) << 16), 0x05); q += 2; // XYZ2 (200,200) -> kick
+        ad(q, 0x0ull, 0x61); q += 2;                  // FINISH
+        runtime->gs().processGIFPacket(reinterpret_cast<const uint8_t *>(pkt), sizeof(pkt));
+        const uint8_t *vram = runtime->memory().getGSVRAM();
+        const uint32_t a = GSPSMCT32::addrPSMCT32(0, 10, 150, 150) % PS2_GS_VRAM_SIZE;
+        std::cerr << "[pop:gstest] after red sprite, pixel (150,150) of FBP 0 = " << hex(vram[a]) << "," << hex(vram[a + 1])
+                  << "," << hex(vram[a + 2]) << "," << hex(vram[a + 3]) << (vram[a] == 0xFF ? "  -> RASTERIZER WORKS" : "  -> NOT DRAWN")
+                  << std::endl;
+    }
+
+    void maybeSampleRenderPath(PS2Runtime *runtime)
+    {
+        maybeGsSelfTest(runtime);
+        static int samples = 0;
+        static auto next = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        if (!kRenderStats || samples >= 25 || std::chrono::steady_clock::now() < next)
+            return;
+        next = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        ++samples;
+        auto &mem = runtime->memory();
+        auto reg = [&](uint32_t a) { return hex(mem.readIORegister(a)); };
+        std::cerr << "[pop:gfx] dmaStarts=" << mem.dmaStartCount() << " gifCopies=" << mem.gifCopyCount()
+                  << " gsWrites=" << mem.gsWriteCount() << " vu1CodeGen=" << mem.getVU1CodeGeneration()
+                  << " gsPackets=" << runtime->gs().nativePackedGIFPacketCount() << " gsImages=" << runtime->gs().nativeImageUploadCount()
+                  << " | D1 chcr=" << reg(0x10009000) << " madr=" << reg(0x10009010) << " qwc=" << reg(0x10009020) << " tadr=" << reg(0x10009030)
+                  << " | D2 chcr=" << reg(0x1000A000) << " madr=" << reg(0x1000A010) << " tadr=" << reg(0x1000A030)
+                  << " | VIF1 stat=" << reg(0x10003C00)
+                  << " | GIF in: packets=" << g_gifPackets << " bytes=" << g_gifBytes << " primTags=" << g_gifPrimTags << std::endl;
     }
 
     template <size_t I>
     void watchedCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         maybeDumpFrame(runtime);
+        maybeSampleRenderPath(runtime);
         const uint32_t caller = getRegU32(ctx, 31);
         if (kDebugTracing)
             heapWalkCheck(rdram, g_watched[I].name, caller);
@@ -591,6 +885,23 @@ namespace
 
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        if (kRenderStats)
+        {
+            PS2Runtime *rt = &runtime;
+            g_runtime = rt;
+            runtime.gifArbiter().setProcessPacketFn([rt](const uint8_t *data, uint32_t size)
+                                                    {
+                                                        countGifPacket(data, size);
+                                                        if (!kForceZtstAlways)
+                                                        {
+                                                            rt->gs().processGIFPacket(data, size);
+                                                            return;
+                                                        }
+                                                        std::vector<uint8_t> copy(data, data + size);
+                                                        forceDepthAlways(copy);
+                                                        rt->gs().processGIFPacket(copy.data(), size);
+                                                    });
+        }
         if (kKernelCallLog)
         {
             runtime.replaceFunction(0x00488240u, traceBinReadCaller);

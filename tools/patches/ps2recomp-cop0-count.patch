@@ -1,0 +1,80 @@
+From 55ada1c1f53de686b7f1c2f9ea28e84dee98a77c Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 11 Oct 2026 23:37:59 +0100
+Subject: [PATCH] runtime/recomp: COP0 Count advances with host time at the EE
+ clock
+
+mfc0 Count read a field nothing ever updated, so games timing frames with
+Count saw no time pass (Prince of Persia: fades stuck at alpha 0).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VfPfhekt4t2ioqgw678eFZ
+---
+ ps2xRecomp/src/lib/cop0_translator.cpp |  4 ++--
+ ps2xRuntime/include/ps2_runtime.h      | 21 +++++++++++++++++++++
+ 2 files changed, 23 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRecomp/src/lib/cop0_translator.cpp b/ps2xRecomp/src/lib/cop0_translator.cpp
+index 1823a39..5a01941 100644
+--- a/ps2xRecomp/src/lib/cop0_translator.cpp
++++ b/ps2xRecomp/src/lib/cop0_translator.cpp
+@@ -44,7 +44,7 @@ namespace ps2recomp
+             case COP0_REG_BADVADDR:
+                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_badvaddr);", rt);
+             case COP0_REG_COUNT:
+-                return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_count);", rt);
++                return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ps2ReadCop0Count(ctx));", rt);
+             case COP0_REG_ENTRYHI:
+                 return fmt::format("SET_GPR_S32(ctx, {}, (int32_t)ctx->cop0_entryhi);", rt);
+             case COP0_REG_COMPARE:
+@@ -94,7 +94,7 @@ namespace ps2recomp
+             case COP0_REG_BADVADDR:
+                 return "// MTC0 to BADVADDR register ignored (read-only)";
+             case COP0_REG_COUNT:
+-                return fmt::format("ctx->cop0_count = GPR_U32(ctx, {});", rt);
++                return fmt::format("ps2WriteCop0Count(ctx, GPR_U32(ctx, {}));", rt);
+             case COP0_REG_ENTRYHI:
+                 return fmt::format("ctx->cop0_entryhi = GPR_U32(ctx, {}) & 0xC00000FF;", rt);
+             case COP0_REG_COMPARE:
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index 4b9242c..cb6d99b 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -16,6 +16,7 @@
+ #include <smmintrin.h> // For SSE4.1 instructions
+ #endif
+ #include <atomic>
++#include <chrono>
+ #include <array>
+ #include <mutex>
+ #include <filesystem>
+@@ -190,6 +191,26 @@ struct alignas(16) R5900Context
+     ~R5900Context() = default;
+ };
+ 
++// COP0 Count runs at the EE clock (294.912 MHz). Games time frames and fades with it, so it
++// must advance: derive it from host time. cop0_count holds the offset set by MTC0 Count.
++inline uint32_t ps2HostEeCycles()
++{
++    static const auto start = std::chrono::steady_clock::now();
++    const uint64_t ns = static_cast<uint64_t>(
++        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
++    return static_cast<uint32_t>(ns * 36864u / 125000u); // ns * 0.294912
++}
++
++inline uint32_t ps2ReadCop0Count(const R5900Context *ctx)
++{
++    return ctx->cop0_count + ps2HostEeCycles();
++}
++
++inline void ps2WriteCop0Count(R5900Context *ctx, uint32_t value)
++{
++    ctx->cop0_count = value - ps2HostEeCycles();
++}
++
+ inline uint32_t getRegU32(const R5900Context *ctx, int reg)
+ {
+     // Check if reg is valid (0-31)
+-- 
+2.54.0 (Apple Git-157)
+
