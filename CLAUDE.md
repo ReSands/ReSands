@@ -31,6 +31,16 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 
 - `game/ps2/`: the downloaded `.7z`; `iso/` (the ISO); `disc/` (extracted disc contents, incl. `SLUS_207.43` and `DATA/PRINCE.BF`).
 - `game/gog/installers/`: GOG offline installer (`setup_…_181_gog_v2_(92028).exe` + `-1.bin`) and the 28547→92028 patch. Install output, if extracted on the Mac, goes in `game/gog/install/`.
+- `game/ghidra/`: Ghidra project `PoP_SLUS20743` for the PS2 ELF, plus headless logs.
+
+## Mac tool setup (done 11 Oct 2026)
+
+- Tools live outside the repo in `~/tools/`: `ghidra_12.1.4_PUBLIC/` (EE Reloaded v2.1.38 installed in `Ghidra/Extensions/`), `PS2Recomp/` (clone).
+- Java: Homebrew `openjdk@21`. Ghidra's launcher does not find it on its own in non-interactive shells; export it first:
+  `export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH`
+- Ghidra ships no macOS natives. They were built with `cd ~/tools/ghidra_12.1.4_PUBLIC/support/gradle && ./gradlew buildNatives` and copied from each module's `build/os/mac_arm_64/` into `os/mac_arm_64/`. Redo this after any Ghidra upgrade.
+- EE language ID for headless imports: `r5900:LE:32:default`.
+- `innoextract` (Homebrew) unpacks the GOG installer.
 
 ## Pipeline (PS2Recomp)
 
@@ -111,10 +121,11 @@ Remote workflow: enable Windows OpenSSH Server (Settings > Optional Features); S
 
 ## Open questions
 
-- Does the US ELF contain debug symbols?
+- ~~Does the US ELF contain debug symbols?~~ No. `SLUS_207.43` (v1.01, SHA-1 `a5bc95777d458e1dc36a9bd3d3cb7d3523d06c7d`) is stripped: no symtab, no `.mdebug`, one `main` section at `0x100000`, entry `0x100008`. About 48 source filenames survive in assert strings (`AIengine.c`, `BIGfat.c`, `OBJload.c`, `RPS2.cpp`, …), plus Sony lib strings (`sceGs…`, `sceCd…`).
 - Does PS2Recomp build and run on Apple Silicon (at least the recompiler)?
-- Is the PC version compatible with RTX Remix, with and without GOG's wrapper?
-- Which engine name is correct (Jade vs Scimitar), and what file formats does the game use?
+- Is the PC version compatible with RTX Remix, with and without GOG's wrapper? Partial answer: `POP.EXE` is Direct3D 9 (not 8) and links D3DX shader assembly plus `CreateVertexShader`/`CreatePixelShader`, which lowers the odds; could be library code only. Needs a real test on Windows.
+- Which engine name is correct (Jade vs Scimitar), and what file formats does the game use? Very likely Jade: PS2 `DATA/PRINCE.BF` and PC `prince.bf` both start with `BIG\0` version `0x25` (Jade bigfile, as in Beyond Good & Evil), and source-file prefixes (AI, BIG, COL, EVE, GRI, OBJ, MDF, LOA, INO) match Jade's module naming. Sound engine is DARE (`DARE_RT.IRX`). Neither "Jade" nor "Scimitar" appears as a string in the ELF.
+- PC `POP.EXE` has a PDB path (`e:\builds\v181a (sans safedisk)\Output\ExeDlls\PC\POP4.pdb`) but no PDB, and only 8 RTTI names, so it gives little for naming functions.
 - What does DLSS 5 require from the renderer?
 
 ## Sources
