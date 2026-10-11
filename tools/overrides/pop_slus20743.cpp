@@ -734,6 +734,33 @@ namespace
         SET_GPR_U32(ctx, 2, previous); // sceCdCallback returns the previous callback
     }
 
+    // Movies (*.INT: Ubisoft logo, PoP logo, intro, cutscenes) need the IPU MPEG decoder,
+    // which PS2Recomp does not emulate: the movie manager stays busy forever. Until there is
+    // a decoder, report movie files as missing so the game skips them.
+    constexpr bool kSkipMovies = true;
+    PS2Runtime::RecompiledFunction g_cdSearchFile = nullptr;
+    void cdSearchFileSkippingMovies(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (kSkipMovies)
+        {
+            std::string name;
+            for (uint32_t a = getRegU32(ctx, 5), i = 0; i < 64; ++i)
+            {
+                const char c = static_cast<char>(rdram[(a + i) & 0x1FFFFFFu]);
+                if (!c)
+                    break;
+                name += c;
+            }
+            if (name.size() >= 6 && name.compare(name.size() - 6, 6, ".INT;1") == 0)
+            {
+                std::cerr << "[pop] skipping movie " << name << " (no IPU decoder)" << std::endl;
+                SET_GPR_U32(ctx, 2, 0u);
+                return;
+            }
+        }
+        g_cdSearchFile(rdram, ctx, runtime);
+    }
+
     void cdReadWithCompletion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_origCdRead(rdram, ctx, runtime);
@@ -925,6 +952,9 @@ namespace
         runtime.replaceFunction(0x00108b80u, endOfHeap);
 
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdLayerSearchFile, "sceCdSearchFile");
+        g_cdSearchFile = runtime.lookupFunction(kSceCdLayerSearchFile);
+        if (g_cdSearchFile)
+            runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);

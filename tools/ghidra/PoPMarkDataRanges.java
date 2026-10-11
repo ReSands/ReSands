@@ -92,6 +92,7 @@ public class PoPMarkDataRanges extends GhidraScript {
         createCtorFunctions();
         createDataPointedFunctions();
         createOrphanPrologueFunctions();
+        createAfterPaddingFunctions();
 
         for (Object[] m : IRX_MODULES) {
             createLabel(toAddr((Long) m[0]), (String) m[1], true, SourceType.USER_DEFINED);
@@ -206,6 +207,48 @@ public class PoPMarkDataRanges extends GhidraScript {
             }
         }
         println("Orphan prologue functions: " + created + " created, " + failed + " failed");
+    }
+
+    // Leaf functions with no stack frame, reached only through addresses built at runtime
+    // (e.g. method tables filled by code), are invisible to the passes above. The compiler
+    // pads functions with zero words, so: non-zero code at an 8-aligned address that no
+    // function owns, preceded by zero padding, where the code before the padding ended with
+    // jr $ra, j or an unconditional b (possibly followed by its delay slot). 0x41CD00 is one.
+    private void createAfterPaddingFunctions() throws Exception {
+        int created = 0, failed = 0;
+        MemoryBlock text = currentProgram.getMemory().getBlock(".text");
+        long start = text.getStart().getOffset() + 8, end = text.getEnd().getOffset() - 3;
+        for (long a = start; a <= end; a += 8) {
+            Address addr = toAddr(a);
+            if (word(a) == 0 || word(a - 4) != 0 || getFunctionContaining(addr) != null) {
+                continue;
+            }
+            long last = a - 4;
+            while (last > start && word(last) == 0) {
+                last -= 4;
+            }
+            if (!endsFlow(word(last)) && !endsFlow(word(last - 4))) {
+                continue;
+            }
+            if (getInstructionAt(addr) == null) {
+                disassemble(addr);
+            }
+            if (createFunction(addr, null) != null) {
+                created++;
+            } else {
+                failed++;
+            }
+        }
+        println("After-padding functions: " + created + " created, " + failed + " failed");
+    }
+
+    private long word(long a) throws Exception {
+        return getInt(toAddr(a)) & 0xFFFFFFFFL;
+    }
+
+    // jr $ra, j target, or b (beq $zero,$zero).
+    private static boolean endsFlow(long insn) {
+        return insn == 0x03E00008L || (insn >>> 26) == 2 || (insn >>> 16) == 0x1000L;
     }
 
     // addiu $sp,$sp,-N in the first two instructions, or a leaf that returns
