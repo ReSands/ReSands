@@ -72,7 +72,11 @@ if (( ! FAST )); then
     stage "Recompile"
     rm -rf $R/output
     $RECOMP_SRC/build-mac/ps2xRecomp/ps2_recomp $R/config.toml > $R/recomp_run.log 2>&1
-    echo "errors=$(grep -c '\[error\]' $R/recomp_run.log || true) warnings=$(grep -c '\[warning\]' $R/recomp_run.log || true)"
+    errors=$(grep -c '\[error\]' $R/recomp_run.log || true)
+    echo "errors=$errors warnings=$(grep -c '\[warning\]' $R/recomp_run.log || true)"
+    if (( errors > 0 )) || [[ ! -f $R/output/register_functions.cpp ]]; then
+        echo "RECOMPILE FAILED, see $R/recomp_run.log"; grep -m5 '\[error\]' $R/recomp_run.log; exit 1
+    fi
 
     stage "Sync generated code into runtime worktree"
     # Copy by content so unchanged files keep their timestamps (incremental build).
