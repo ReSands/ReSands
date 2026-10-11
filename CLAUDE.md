@@ -55,7 +55,9 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
   - `entry_00652e40` (0x652E40–0x66D080): starts as real MIPS code, then runs into data. Do not skip it wholesale; split it in Ghidra.
 - The ELF embeds seven IOP modules (R3000 ELFs) as data from 0x52DBC0: sio2man, padman, (unnamed at 0x53A500), mcserv, Sound_Device_Library (libsd), sdr_driver, UbiSound_Driver. They are loaded at runtime from memory, not from `MODULES/`. ps2xIOP/HLE must cover them.
 - 4,458 control-flow warnings: unresolved `jr`/`jalr` (mostly switch tables) handled by fallback entries. 237 "Unknown MMI function" decoder messages, also data decoded as code.
-- Not yet fixed: mark those data ranges as data in Ghidra, re-export, re-run; then build the runtime.
+- Fixed the same day with `tools/ghidra/PoPMarkDataRanges.java` (run headless with `-process SLUS_207.43 -noanalysis -scriptPath tools/ghidra -postScript PoPMarkDataRanges.java`, before the export). It clears code in 0x4EB020–0x651380 and 0x652E64–0x66D080, removes the 404 bogus functions there (mostly IOP code), trims `FUN_00652e40` to 0x652E40–0x652E64, and labels the IOP modules `irx_*`. It found no calls or jumps from real code into those ranges.
+- After cleanup: 7,418 functions + 49,140 labels; 0 errors, 0 unknown-MMI messages; 4,291 warnings, all unresolved `jr`/`jalr` with fallback entries; 56,561 `.cpp` files, 404 MB.
+- Real EE code: 0x100000–0x4E82D0 (main) and 0x651380–0x652E64 (a small block of short functions after the data; not yet identified).
 
 ## Pipeline (PS2Recomp)
 

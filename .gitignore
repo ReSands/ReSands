@@ -28,7 +28,7 @@ iso/
 # Ghidra projects and exports (contain disassembled game code)
 *.gpr
 *.rep/
-ghidra/
+/ghidra/
 
 # Recompiler output and builds
 recomp_out/
