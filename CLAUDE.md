@@ -41,6 +41,21 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - Ghidra ships no macOS natives. They were built with `cd ~/tools/ghidra_12.1.4_PUBLIC/support/gradle && ./gradlew buildNatives` and copied from each module's `build/os/mac_arm_64/` into `os/mac_arm_64/`. Redo this after any Ghidra upgrade.
 - EE language ID for headless imports: `r5900:LE:32:default`.
 - `innoextract` (Homebrew) unpacks the GOG installer.
+- PS2Recomp recompiler builds on Apple Silicon (uses sse2neon on ARM). Homebrew `cmake` + `ninja`; recompiler only:
+  `cmake -S ~/tools/PS2Recomp -B ~/tools/PS2Recomp/build-mac -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF && cmake --build ~/tools/PS2Recomp/build-mac`
+- Export from Ghidra headlessly (script's two `askFile` prompts are answered by positional args):
+  `analyzeHeadless game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis -readOnly -scriptPath ~/tools/PS2Recomp/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java <abs>/game/recomp/config.toml <abs>/game/recomp/functions.csv`
+- Recompile: `~/tools/PS2Recomp/build-mac/ps2xRecomp/ps2_recomp game/recomp/config.toml` (about 15 s, 0.8 GB RAM; 59,674 `.cpp` files, 458 MB in `game/recomp/output/`).
+
+## First recompile results (11 Oct 2026, PS2Recomp `2c5fbb9`)
+
+- Completed. 12,371 unhandled-instruction errors, all inside three Ghidra "functions" that are mostly data, not code:
+  - `entry_004eb020` (0x4EB020–0x4ED920): data tables.
+  - `entry_004ed920` (0x4ED920–0x52DDEC): data (libipu tables etc.) running into embedded IOP modules.
+  - `entry_00652e40` (0x652E40–0x66D080): starts as real MIPS code, then runs into data. Do not skip it wholesale; split it in Ghidra.
+- The ELF embeds seven IOP modules (R3000 ELFs) as data from 0x52DBC0: sio2man, padman, (unnamed at 0x53A500), mcserv, Sound_Device_Library (libsd), sdr_driver, UbiSound_Driver. They are loaded at runtime from memory, not from `MODULES/`. ps2xIOP/HLE must cover them.
+- 4,458 control-flow warnings: unresolved `jr`/`jalr` (mostly switch tables) handled by fallback entries. 237 "Unknown MMI function" decoder messages, also data decoded as code.
+- Not yet fixed: mark those data ranges as data in Ghidra, re-export, re-run; then build the runtime.
 
 ## Pipeline (PS2Recomp)
 
