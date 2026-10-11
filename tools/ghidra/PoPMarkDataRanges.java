@@ -91,6 +91,7 @@ public class PoPMarkDataRanges extends GhidraScript {
 
         createCtorFunctions();
         createDataPointedFunctions();
+        createOrphanPrologueFunctions();
 
         for (Object[] m : IRX_MODULES) {
             createLabel(toAddr((Long) m[0]), (String) m[1], true, SourceType.USER_DEFINED);
@@ -122,9 +123,9 @@ public class PoPMarkDataRanges extends GhidraScript {
     }
 
     // Virtual methods and callbacks reached only through pointers in data (vtables)
-    // are never disassembled by auto-analysis, and the export's pointer scan only
-    // considers addresses that already hold instructions. Find data words pointing at
-    // undisassembled code that starts like a function, and make functions there.
+    // are often not functions after auto-analysis: either never disassembled, or
+    // disassembled but not owned by any function. Find data words pointing at such
+    // code that starts like a function, and make functions there.
     private void createDataPointedFunctions() throws Exception {
         Memory memory = currentProgram.getMemory();
         int created = 0, candidates = 0;
@@ -145,18 +146,66 @@ public class PoPMarkDataRanges extends GhidraScript {
                     continue;
                 }
                 Address t = toAddr(target);
-                if (getInstructionAt(t) != null || getFunctionContaining(t) != null
-                    || !looksLikeFunctionStart(t)) {
+                // Also when instructions exist but no function owns them: the export then
+                // only emits a short entry_* fragment there, and a call into it returns
+                // garbage (the allocator method at 0x1399C0 did exactly that).
+                if (getFunctionContaining(t) != null || !looksLikeFunctionStart(t)) {
                     continue;
                 }
                 candidates++;
-                disassemble(t);
+                if (getInstructionAt(t) == null) {
+                    disassemble(t);
+                }
                 if (createFunction(t, null) != null) {
                     created++;
                 }
             }
         }
         println("Data-pointed functions: " + candidates + " candidates, " + created + " created");
+    }
+
+    // Auto-analysis leaves many instruction runs that no function owns (reached only
+    // through labels or pointers). The export turns those into short entry_* fragments,
+    // so a call into one returns early with garbage. Make a function at every unowned
+    // instruction that opens a stack frame (addiu $sp,$sp,-N), repeating until stable
+    // because each new function can absorb or expose others.
+    private void createOrphanPrologueFunctions() throws Exception {
+        int created = 0, failed = 0;
+        for (int pass = 0; pass < 5; pass++) {
+            int before = created;
+            for (MemoryBlock block : currentProgram.getMemory().getBlocks()) {
+                if (!block.isExecute() || !block.getName().startsWith(".text")) {
+                    continue;
+                }
+                InstructionIterator it = currentProgram.getListing()
+                    .getInstructions(new AddressSet(block.getStart(), block.getEnd()), true);
+                List<Address> starts = new ArrayList<>();
+                while (it.hasNext()) {
+                    Instruction insn = it.next();
+                    if (getFunctionContaining(insn.getAddress()) != null) {
+                        continue;
+                    }
+                    long word = getInt(insn.getAddress()) & 0xFFFFFFFFL;
+                    if ((word & 0xFFFF0000L) == 0x27BD0000L && (word & 0x8000L) != 0) {
+                        starts.add(insn.getAddress());
+                    }
+                }
+                for (Address a : starts) {
+                    if (getFunctionContaining(a) != null) {
+                        continue;
+                    }
+                    if (createFunction(a, null) != null) {
+                        created++;
+                    } else {
+                        failed++;
+                    }
+                }
+            }
+            if (created == before) {
+                break;
+            }
+        }
+        println("Orphan prologue functions: " + created + " created, " + failed + " failed");
     }
 
     // addiu $sp,$sp,-N in the first two instructions, or a leaf that returns
