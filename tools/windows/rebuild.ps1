@@ -29,6 +29,9 @@ $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if (-not $vs) { throw 'MSVC not found (Visual Studio Build Tools with the C++ workload)' }
 & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+# Stops the MSVC tools starting vctip.exe (telemetry), which lingers after builds holding
+# inherited handles to our log files.
+$env:VSCMD_SKIP_SENDTELEMETRY = '1'
 
 Set-Location $Root
 $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -52,7 +55,8 @@ function Invoke-Logged($log, $exe, [string[]]$argList, [int]$TimeoutMinutes = 30
         "TIMEOUT after $TimeoutMinutes min: $exe (see $log.out)"
         exit 1
     }
-    $p.WaitForExit()
+    # No untimed WaitForExit() here: it also waits for the redirected files to be released,
+    # and a lingering child that inherited them (MSVC's vctip.exe) made it hang.
     # A child the program started (Ghidra's launcher starts java) can still hold the
     # redirected files for a moment after it exits, so retry instead of failing the run.
     for ($i = 0; $i -lt 20; $i++) {
