@@ -1,0 +1,48 @@
+# Game data and anything derived from it must never be committed (see CLAUDE.md ground rules).
+
+# Disc images and archives
+*.iso
+*.bin
+*.cue
+*.img
+*.7z
+*.zip
+*.rar
+
+# Extracted disc contents, ELF and game executables
+SLUS_*
+SLES_*
+*.elf
+*.ELF
+*.IRX
+*.irx
+game/
+extracted/
+iso/
+
+# Ghidra projects and exports (contain disassembled game code)
+*.gpr
+*.rep/
+ghidra/
+
+# Recompiler output and builds
+recomp_out/
+generated/
+build/
+out/
+
+# Texture packs, save states, dumps
+textures/
+*.p2s
+*.dds
+*.png
+memcards/
+dumps/
+
+# PC (GOG) install
+gog/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
