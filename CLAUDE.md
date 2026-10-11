@@ -59,6 +59,13 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - After cleanup: 7,418 functions + 49,140 labels; 0 errors, 0 unknown-MMI messages; 4,291 warnings, all unresolved `jr`/`jalr` with fallback entries; 56,561 `.cpp` files, 404 MB.
 - Real EE code: 0x100000–0x4E82D0 (main) and 0x651380–0x652E64 (a small block of short functions after the data; not yet identified).
 
+## Runtime build on the Mac (11 Oct 2026)
+
+- Builds. A PS2Recomp worktree at `game/recomp/runtime-src` (ignored) holds the generated code: `output/*.cpp` copied into `ps2xRuntime/src/runner/` (replacing the placeholder `register_functions.cpp`), `output/*.h` into `ps2xRuntime/include/`. Needs Homebrew `ffmpeg` (found through pkg-config).
+- Configure with `-DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF`; build about 7 min on 8 cores (1,879 steps). Output: `build-mac/ps2xRuntime/ps2EntryRunner`, arm64, 179 MB. 0 errors, 22 warnings.
+- Known upstream bug (not yet fixed): 14 generated `vcallmsr $vi27` sites read `ctx->vi[27]`, but `vi` has only 16 entries. VI27 is the VU0 control register CMSAR0, which the runtime does not model there, so these reads are out of bounds (undefined behaviour) when the game starts VU0 microprograms.
+- Not yet run.
+
 ## Pipeline (PS2Recomp)
 
 1. Extract the ELF and data files from the ISO (standard ISO9660; mount or use 7-Zip).
