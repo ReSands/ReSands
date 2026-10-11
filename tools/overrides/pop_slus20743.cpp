@@ -348,10 +348,25 @@ namespace
                            " +5=" + hex(guestU32(rdram, req + 0x14)) + " +7=" + hex(guestU32(rdram, req + 0x1c)) +
                            " +8=" + hex(guestU32(rdram, req + 0x20)) + "]";
         const uint32_t ra = getRegU32(ctx, 31);
+        const uint32_t destBefore = getRegU32(ctx, 7);
         if (g_readTraceBudget-- > 0)
             traced<FUN_00156c00_0x156c00>("streamRead", rdram, ctx, runtime, args);
         else
             FUN_00156c00_0x156c00(rdram, ctx, runtime);
+        // First bytes of large reads, to check them against PRINCE.BF on the host.
+        static int bigDumps = 12;
+        if (ctx->pc == ra && (destBefore == 0x00571bc0u || getRegU32(ctx, 2) >= 0x1000u) && bigDumps > 0)
+        {
+            --bigDumps;
+            std::cerr << "[pop:data] " << hex(getRegU32(ctx, 2)) << " bytes at " << hex(destBefore) << ":";
+            for (uint32_t i = 0; i < 32; ++i)
+            {
+                char b[4];
+                std::snprintf(b, sizeof(b), " %02x", *getConstMemPtr(rdram, destBefore + i));
+                std::cerr << b;
+            }
+            std::cerr << std::endl;
+        }
         // Stall detector: after 3 zero-byte reads in a row, dump the recent kernel calls once.
         static int zeros = 0;
         static bool dumped = false;
@@ -466,8 +481,94 @@ namespace
         std::cerr << "[pop] sceSifLoadModuleBuffer -> " << static_cast<int32_t>(getRegU32(ctx, 2)) << std::endl;
     }
 
+    // Decompressor used for BIG "bin" chunks: FUN_0048dfc0(src, srcLen, dst, &dstLen, 0).
+    // Saves the first few chunks' input and output to game/recomp/dumps/ so they can be
+    // checked against an independent decompressor on the host.
+    int g_decompDumps = 4;
+    void traceDecompress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t src = getRegU32(ctx, 4), srcLen = getRegU32(ctx, 5), dst = getRegU32(ctx, 6), dstLenPtr = getRegU32(ctx, 7);
+        const uint32_t expected = guestU32(rdram, dstLenPtr), ra = getRegU32(ctx, 31);
+        FUN_0048dfc0_0x48dfc0(rdram, ctx, runtime);
+        if (ctx->pc != ra)
+            return;
+        const uint32_t produced = guestU32(rdram, dstLenPtr);
+        std::cerr << "[pop:lzo] decompress(src=" << hex(src) << ", srcLen=" << hex(srcLen) << ", dst=" << hex(dst)
+                  << ", expected=" << hex(expected) << ") -> produced " << hex(produced) << ", v0=" << hex(getRegU32(ctx, 2))
+                  << (produced != expected ? "  MISMATCH" : "") << std::endl;
+        if (g_decompDumps-- > 0 && srcLen < 0x100000u && produced < 0x100000u)
+        {
+            const std::string base = "../../recomp/dumps/lzo" + std::to_string(4 - g_decompDumps - 1);
+            if (FILE *f = std::fopen((base + ".in").c_str(), "wb"))
+            {
+                std::fwrite(getConstMemPtr(rdram, src), 1, srcLen, f);
+                std::fclose(f);
+            }
+            if (FILE *f = std::fopen((base + ".out").c_str(), "wb"))
+            {
+                std::fwrite(getConstMemPtr(rdram, dst), 1, produced, f);
+                std::fclose(f);
+            }
+        }
+    }
+
+    // BIGio.c bin reader FUN_00488280(this, size): globals ReadSize 0x674e48, pos 0x674e50,
+    // data 0x674e58, buf 0x674e5c, avail 0x674e60, cur 0x674e64, end 0x674e68, remaining 0x674e6c.
+    int g_binTrace = 30;
+    std::string binState(uint8_t *rdram)
+    {
+        std::string s;
+        const std::pair<const char *, uint32_t> fields[] = {{"readSize", 0x674e48}, {"pos", 0x674e50}, {"data", 0x674e58},
+            {"buf", 0x674e5c}, {"avail", 0x674e60}, {"cur", 0x674e64}, {"end", 0x674e68}, {"remain", 0x674e6c},
+            {"base", 0x674e44}, {"swap", 0x6750d0}, {"flags", 0x674f08}, {"forced", 0x674f04}};
+        for (const auto &f : fields)
+            s += std::string(" ") + f.first + "=" + hex(guestU32(rdram, f.second));
+        return s;
+    }
+    void traceBinRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t size = getRegU32(ctx, 5), ra = getRegU32(ctx, 31);
+        const bool log = g_binTrace-- > 0;
+        if (log)
+        {
+            std::cerr << "[pop:bin] read(size=" << hex(size) << ") from " << hex(ra) << " before:" << binState(rdram) << std::endl;
+            for (const uint32_t at : {guestU32(rdram, 0x674e58), 0x00571bc0u, guestU32(rdram, 0x674e44)})
+            {
+                if (at == 0u)
+                    continue;
+                std::cerr << "[pop:bin]   bytes at " << hex(at) << ":";
+                for (uint32_t i = 0; i < 32; ++i)
+                {
+                    char b[4];
+                    std::snprintf(b, sizeof(b), " %02x", *getConstMemPtr(rdram, at + i));
+                    std::cerr << b;
+                }
+                std::cerr << std::endl;
+            }
+        }
+        FUN_00488280_0x488280(rdram, ctx, runtime);
+        if (log && ctx->pc == ra)
+            std::cerr << "[pop:bin]   -> " << hex(getRegU32(ctx, 2)) << " after:" << binState(rdram) << std::endl;
+    }
+
+    // FUN_00488240(size): thin wrapper over the bin reader; log who asks for what.
+    int g_binCallerTrace = 40;
+    void traceBinReadCaller(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_binCallerTrace-- > 0)
+            std::cerr << "[pop:bin] FUN_00488240(" << hex(getRegU32(ctx, 4)) << ", " << hex(getRegU32(ctx, 5))
+                      << ") from " << hex(getRegU32(ctx, 31)) << std::endl;
+        FUN_00488240_0x488240(rdram, ctx, runtime);
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        if (kKernelCallLog)
+        {
+            runtime.replaceFunction(0x00488240u, traceBinReadCaller);
+            runtime.replaceFunction(0x0048dfc0u, traceDecompress);
+            runtime.replaceFunction(0x00488280u, traceBinRead);
+        }
         g_origSifSetDma = runtime.lookupFunction(kSceSifSetDma);
         g_origLoadModuleBuffer = runtime.lookupFunction(kSifLoadModuleBuffer);
         if (g_origSifSetDma && g_origLoadModuleBuffer)
