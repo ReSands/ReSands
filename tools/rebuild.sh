@@ -64,6 +64,18 @@ if (( ! FAST )); then
     ghidra game/ghidra/headless_names.log -scriptPath tools/ghidra -postScript PoPApplyNames.java $R/analyzer/sce_names.csv
     grep 'PoPApplyNames.java>' game/ghidra/headless_names.log | sed 's/.*> //; s/ (GhidraScript)//'
 
+    # Names from the Aug 2003 prototype's symbols (tools/proto_names.py writes the list).
+    # Names only: the recompiled code stays the same, because names PS2Recomp would stub
+    # carry a pop_ prefix.
+    stage "Prototype names"
+    PROTO_NAMES=$ROOT/game/proto/analysis/proto_names.tsv
+    if [[ -f $PROTO_NAMES ]]; then
+        ghidra game/ghidra/headless_proto_names.log -scriptPath tools/ghidra -postScript PoPApplyProtoNames.java $PROTO_NAMES
+        grep 'Prototype names:' game/ghidra/headless_proto_names.log | sed 's/.*> //; s/ (GhidraScript)//'
+    else
+        echo "skipped: no $PROTO_NAMES"
+    fi
+
     stage "Export"
     ghidra game/ghidra/headless_export.log -readOnly \
         -scriptPath $RECOMP_SRC/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java \

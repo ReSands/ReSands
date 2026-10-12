@@ -131,6 +131,18 @@ if (-not $Fast) {
     Run-Ghidra "$Root\game\ghidra\headless_names.log" @('-scriptPath', "$Root\tools\ghidra", '-postScript', 'PoPApplyNames.java', "$R\analyzer\sce_names.csv")
     Show-ScriptLines "$Root\game\ghidra\headless_names.log" 'PoPApplyNames.java'
 
+    # Names from the Aug 2003 prototype's symbols (tools/proto_names.py writes the list; copy
+    # game\proto\analysis\proto_names.tsv over from the Mac). Names only: the recompiled code
+    # stays the same, because names PS2Recomp would stub carry a pop_ prefix.
+    Stage 'Prototype names'
+    $protoNames = "$Root\game\proto\analysis\proto_names.tsv"
+    if (Test-Path $protoNames) {
+        Run-Ghidra "$Root\game\ghidra\headless_proto_names.log" @('-scriptPath', "$Root\tools\ghidra", '-postScript', 'PoPApplyProtoNames.java', $protoNames)
+        Show-ScriptLines "$Root\game\ghidra\headless_proto_names.log" 'PoPApplyProtoNames.java' | Select-String 'Prototype names:'
+    } else {
+        "skipped: no $protoNames"
+    }
+
     Stage 'Export'
     Run-Ghidra "$Root\game\ghidra\headless_export.log" @('-readOnly', '-scriptPath', "$RecompSrc\ps2xRecomp\tools\ghidra",
         '-postScript', 'ExportPS2Functions.java', "$R\config.toml", "$R\functions.csv")

@@ -35,7 +35,7 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - `game/ps2/`: the downloaded `.7z`; `iso/` (the ISO); `disc/` (extracted disc contents, incl. `SLUS_207.43` and `DATA/PRINCE.BF`).
 - `game/gog/installers/`: GOG offline installer (`setup_…_181_gog_v2_(92028).exe` + `-1.bin`) and the 28547→92028 patch. Install output, if extracted on the Mac, goes in `game/gog/install/`.
 - `game/ghidra/`: Ghidra project `PoP_SLUS20743` for the PS2 ELF, plus headless logs.
-- Planned: `game/gc/`, `game/xbox/` (other retail versions), `game/proto/` (prototypes).
+- `game/gc/` (GameCube: `iso/`, `disc/`, `analysis/`), `game/proto/` (PS2 prototype). Planned: `game/xbox/`.
 
 ## Mac tool setup (done 11 Oct 2026)
 
@@ -179,7 +179,21 @@ Goal: combine the best assets of each 2003 version (PS2, GameCube, Xbox, PC) int
 - Higher-resolution textures cannot go through the game's own loading: GS VRAM is 4 MB. Replace them in the renderer at draw time, keyed by the PS2 texture (same hook as the HD texture packs).
 - (unverified) The Xbox version is generally considered the best-looking console version. The PC bigfile being 1.8x the PS2 one suggests larger assets. Compare before assuming.
 - Movies: the PC's Bink movies (640x346) could become an optional source next to the IPU path, if they look better.
+- GameCube (12 Oct 2026): US Rev 1, `GPTE41`, NKit image in `game/gc/iso/`, files extracted to `game/gc/disc/` with `game/gc/analysis/gcm.py <iso> <outdir>` (reads the GCM file table directly). No `.map` file, and `main.dol` (4.0 MB) has no symbols (47 source filenames in strings). Movies are **Bink**, like the PC; the `VIS_*.int` files are byte-identical to the PC ones. It has extra `CINE_901`–`905` movies and its own `pop1.dol` (the bonus original Prince of Persia). `prince.bf` (241 MB) is a Jade BIG v0x25 too, with 1,602-entry FAT tables; 1,598 of its first table's keys are in the PS2 file.
 - Symbol check for each new disc: `.map` files on the GameCube disc, symbol strings in `main.dol`, debug sections or a PDB in the Xbox `default.xbe`, an unstripped ELF in any prototype. Names found can be carried to the PS2 ELF with Ghidra Version Tracking.
+
+## PS2 prototype, 19 Aug 2003 (examined 12 Oct 2026)
+
+Hidden Palace dump, under `game/proto/` (`archive/` the .7z, `extract/` the .bin/.cue, `disc/` the files, `analysis/` our outputs). Plain ISO9660, 2048-byte sectors; macOS `tar` extracts both the .7z and the ISO.
+
+- `disc/SLUS_207.43` is **not stripped**: 30,207 symbols, 10,618 named functions (CodeWarrior-mangled C++), relocations (`.relmain`), built with Metrowerks CodeWarrior (`.mwcats`). Main section 0x3DDA80 bytes vs retail 0x3E82D0, so the code is close to retail.
+- `disc/MAPFILE.MAP` (51k lines): linker map with libraries and objects, e.g. the VU1 drivers in `Ps2Graphic_cwf.lib` (`multchanneldriv…`, `animunpackeddri…`, `nolightdriver`, `particledriver`, `water3ddriver`, `shadowdriver`, `spg_sprite`; the map truncates object names to 15 characters).
+- Other differences: `E3_INTRO.INT`, debug sound driver `DARE_DG.IRX`, smaller `PRINCE.BF` (189 MB).
+- `analysis/proto_symbols.tsv`: the symbol table. `analysis/match.py` matches retail functions to prototype functions by instructions with immediates and jump targets masked: 4,750 unique exact matches, 1,910 ambiguous (identical small functions). Output: `analysis/retail_names_from_proto.tsv` (retail addr, proto addr, size, name, old name). Fuzzy matching (Ghidra Version Tracking) should raise the count.
+- Movie player found: class `FullMovie` (retail 0x19AA40–0x19F440: `mLoadMovie`, `mDoFrame`, `mStreamData`, `mQueueSoundData`…), `MovieLoadMovie` 0x19F440, `VID_fn_vSetDMAFromIPU` 0x4A0840, Sony `sceIpu*` at 0x19A050–0x19A368. Sound engine names (`SND_*`, association/fade code) match too.
+- Names applied to the retail Ghidra project (12 Oct 2026): `tools/proto_names.py` (proto ELF, retail ELF, `functions.csv`, PS2Recomp dirs) writes `game/proto/analysis/proto_names.tsv`; `tools/ghidra/PoPApplyProtoNames.java` applies it (a "Prototype names" stage in rebuild.sh / rebuild.ps1; copy the TSV to the PC). 4,292 functions renamed, 1,112 matches in C++ class namespaces (e.g. `FullMovie::mLoadMovie`), mangled name in a plate comment. Only default-named functions are touched. Where ps2_analyzer had already named a function, the prototype agreed every time.
+- Names PS2Recomp would replace with its own stubs (its `ps2_call_list.h` and the exporter's runtime handler list) get a `pop_` prefix (230, e.g. `pop_memcpy`, `pop_sceIpuInit`), so the recompile does not change. Checked: same 301 stubs; 6 extra `untracked_stubs` (entry-point hints only); generated code identical apart from names (73,657 files). Ghidra backup from before: `game/ghidra/backup_20261012_pre_proto_names/`.
+- Names and anything derived from the prototype stay under `game/`. Function names in our public code comments are a judgement call; never copy prototype code or data into git.
 
 ## Renderer and DLSS notes
 
@@ -207,6 +221,7 @@ Earlier status (12 Oct morning): steps 2-5 largely done. The game reaches gamepl
 
 - **Speed.** GPU GS renderer (D3D12/Vulkan; this is also step 6's hook for texture replacement and DLSS). A faster VU1 path: the interpreter is cycle-accurate and costs ~1/3 of the game thread; options are a non-cycle-accurate mode or recompiling the game's VU1 microprograms. On the PC, try clang-cl (MSVC Dev build is ~1.8x slower than clang on the Mac); a Release/LTCG link did not finish within 90 minutes on the 5800X (12 Oct).
 - **Movies.** PoP-specific HLE of the game's movie player (libipu-based; .INT files in MOVIEPS2.BIG), decoding with the runtime's FFmpeg MPEG-2 path instead of emulating the IPU.
+- **Sound references:** OpenGOAL (`open-goal/jak-project`, ISC licence) `game/sound/common/` has a native SPU2-style voice synth (ADPCM decode, ADSR envelopes, pitch, mixing; no reverb seen), and `game/sound/sdshim.*` a minimal libsd stand-in. Use them to check the SotC fork's SPU2, or as the base of a native mixer if we replace the sound path. Its `989snd` is Sony's 989 library (Jak only), irrelevant to PoP's DARE/UbiSound. OpenGOAL has no IPU/movie code (Jak has no FMV).
 - **Sound.** SPU2 emulation for the IOP (the game's own UbiSound driver already runs), or HLE of the sound RPC.
 - **Correctness sweep.** Other PS2Recomp C++ stand-ins may be wrong like libvu0 was. libm `sin/cos/atan/floor/ceil/fabs` were checked by the self-test and are correct (float ABI); the internal `__kernel_*`/`__ieee754_rem_pio2f` stand-ins are simplified but only matter if called directly. Extend `[pop:vu0test]`-style checks before trusting other stubs.
 
