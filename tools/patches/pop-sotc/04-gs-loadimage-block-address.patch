@@ -1,0 +1,36 @@
+From e978a331fcae191d85616cf83565f97e261c7913 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 12 Oct 2026 20:18:05 +0100
+Subject: [PATCH] sceGsExecLoadImage/StoreImage: the image's VRAM address is in
+ 64-word blocks already (was multiplied by 8: uploads landed at the wrong
+ address)
+
+---
+ ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index 9c54919..789fc95 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -631,7 +631,7 @@ namespace ps2_stubs
+             return;
+         }
+ 
+-        uint32_t dbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
++        uint32_t dbp = img.vram_addr; // sceGsSetDefLoadImage takes the address in 64-word blocks already
+         uint32_t dsax = static_cast<uint32_t>(img.x);
+         uint32_t dsay = static_cast<uint32_t>(img.y);
+ 
+@@ -696,7 +696,7 @@ namespace ps2_stubs
+             return;
+         }
+ 
+-        uint32_t sbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
++        uint32_t sbp = img.vram_addr; // sceGsSetDefStoreImage takes the address in 64-word blocks already
+         uint64_t bitbltbuf = (static_cast<uint64_t>(sbp & 0x3FFFu) << 0) |
+                              (static_cast<uint64_t>(fbw & 0x3Fu) << 16) |
+                              (static_cast<uint64_t>(img.psm & 0x3Fu) << 24) |
+-- 
+2.54.0 (Apple Git-157)
+

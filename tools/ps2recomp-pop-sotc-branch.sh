@@ -20,4 +20,5 @@ git apply "$PATCHES/01-cop0-count.patch" && git commit -q -am "COP0 Count advanc
 for n in 235 279; do git merge -q --no-ff --no-edit -m "Merge upstream PR #$n" pr/$n >/dev/null; done
 git apply "$PATCHES/02-vcallmsr-cmsar0.patch" && git commit -q -am "VCALLMSR reads CMSAR0 (as upstream PR #268)"
 git apply "$PATCHES/03-runner-vu1-generated.patch" && git commit -q -am "Runner: build compiled VU1 programs from src/vu1_generated"
+git apply "$PATCHES/04-gs-loadimage-block-address.patch" && git commit -q -am "sceGsExecLoadImage/StoreImage: VRAM address is in 64-word blocks"
 echo "pop-sotc = $(git rev-parse --short HEAD)"
