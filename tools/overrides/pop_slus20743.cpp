@@ -14,6 +14,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -27,6 +31,8 @@
 
 namespace
 {
+    void drainAsyncGs(); // async GS experiment: wait for queued GIF packets (defined below)
+
     constexpr uint32_t kEntry = 0x00100008u;
     constexpr uint32_t kElfCrc32 = 0x7E7889A9u; // whole-file CRC-32 of SLUS_207.43
 
@@ -301,6 +307,7 @@ namespace
         next = std::chrono::steady_clock::now() + std::chrono::seconds(kFrameDumpSeconds);
         std::vector<uint8_t> pixels;
         uint32_t w = 0, h = 0, displayFbp = 0;
+        drainAsyncGs();
         if (!runtime->gs().copyLatchedHostPresentationFrame(pixels, w, h, &displayFbp) || w == 0 || h == 0 ||
             pixels.size() < static_cast<size_t>(w) * h * 4u)
             return;
@@ -493,6 +500,7 @@ namespace
             }
             if (bigTex0 != 0)
             {
+                drainAsyncGs();
                 // VRAM at the end of the window, with the 512-wide texture's TEX0, for tools/gsvram.py.
                 const std::string vpath = "../../recomp/screens/vram_w" + std::to_string(windowsDone) + ".bin";
                 if (FILE *f = std::fopen(vpath.c_str(), "wb"))
@@ -712,6 +720,7 @@ namespace
     // depth/alpha tests off through the normal GIF path, then read the pixel back from VRAM.
     void maybeGsSelfTest(PS2Runtime *runtime)
     {
+        drainAsyncGs();
         static auto when = std::chrono::steady_clock::now() + std::chrono::seconds(35);
         static bool done = false;
         if (done || std::chrono::steady_clock::now() < when)
@@ -1194,6 +1203,66 @@ namespace
         checkSpawnerFrame(rdram, ctx, "rand", a0, a1, a2, a3);
     }
 
+    // EXPERIMENT (POP_ASYNC_GS=1): rasterize GIF packets on a worker thread, in order, so the
+    // game thread (EE code + VU1) runs in parallel with the CPU rasterizer. The queue is drained
+    // before each end-of-frame flip and before anything reads VRAM, so presentation only sees
+    // finished frames. GS FINISH/SIGNAL only set atomic CSR bits, so no guest code runs on the
+    // worker.
+    struct AsyncGs
+    {
+        std::mutex m;
+        std::condition_variable work, idle;
+        std::deque<std::vector<uint8_t>> queue;
+        bool busy = false;
+        PS2Runtime *rt = nullptr;
+
+        void start(PS2Runtime *runtime)
+        {
+            rt = runtime;
+            std::thread([this] { run(); }).detach();
+        }
+        void run()
+        {
+            for (;;)
+            {
+                std::vector<uint8_t> packet;
+                {
+                    std::unique_lock<std::mutex> lock(m);
+                    work.wait(lock, [&] { return !queue.empty(); });
+                    packet = std::move(queue.front());
+                    queue.pop_front();
+                    busy = true;
+                }
+                rt->gs().processGIFPacket(packet.data(), static_cast<uint32_t>(packet.size()));
+                {
+                    std::lock_guard<std::mutex> lock(m);
+                    busy = false;
+                    if (queue.empty())
+                        idle.notify_all();
+                }
+            }
+        }
+        void push(const uint8_t *data, uint32_t size)
+        {
+            {
+                std::lock_guard<std::mutex> lock(m);
+                queue.emplace_back(data, data + size);
+            }
+            work.notify_one();
+        }
+        void drain()
+        {
+            std::unique_lock<std::mutex> lock(m);
+            idle.wait(lock, [&] { return queue.empty() && !busy; });
+        }
+    };
+    AsyncGs *g_asyncGs = nullptr; // set when POP_ASYNC_GS=1
+    void drainAsyncGs()
+    {
+        if (g_asyncGs)
+            g_asyncGs->drain();
+    }
+
     // Frame-rate counter: wraps the display driver's end-of-frame flip (FUN_004B5200, slot 7)
     // and prints frames per second every 5 s.
     PS2Runtime::RecompiledFunction g_origFlip = nullptr;
@@ -1210,6 +1279,7 @@ namespace
             frames = 0;
             last = now;
         }
+        drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
     }
 
@@ -1368,9 +1438,20 @@ namespace
         {
             PS2Runtime *rt = &runtime;
             g_runtime = rt;
+            if (const char *async = std::getenv("POP_ASYNC_GS"); async && std::atoi(async) != 0)
+            {
+                g_asyncGs = new AsyncGs();
+                g_asyncGs->start(rt);
+                std::cerr << "[pop] async GS rasterizer thread on" << std::endl;
+            }
             runtime.gifArbiter().setProcessPacketFn([rt](const uint8_t *data, uint32_t size)
                                                     {
                                                         countGifPacket(data, size);
+                                                        if (g_asyncGs)
+                                                        {
+                                                            g_asyncGs->push(data, size);
+                                                            return;
+                                                        }
                                                         if (!kForceZtstAlways)
                                                         {
                                                             rt->gs().processGIFPacket(data, size);
