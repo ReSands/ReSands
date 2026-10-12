@@ -1,10 +1,10 @@
 # Windows version of tools/boot.sh: boot the recompiled game from the disc folder with a time limit.
-# Usage: tools\windows\boot.ps1 [-Seconds 90] [-Name boot] [-Input 'start@55,cross@85,lleft@150:5']
-#        -Input sets POP_INPUT (scripted pad input, see tools/overrides/pop_slus20743.cpp).
+# Usage: tools\windows\boot.ps1 [-Seconds 90] [-Name boot] [-PadInput 'start@55,cross@85,lleft@150:5']
+#        -PadInput sets POP_INPUT (scripted pad input, see tools/overrides/pop_slus20743.cpp).
 #        Frame dumps go to game\recomp\screens.
 # Log: game\recomp\<Name>.log (stdout then stderr). "timeout" means the time limit was hit.
 # Run it from a desktop session (Claude Code on the PC): over SSH there is no desktop for the window.
-param([int]$Seconds = 90, [string]$Name = 'boot', [string]$Input = '')
+param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '')
 $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -14,7 +14,7 @@ $Out  = "$Log.stdout"
 $Err  = "$Log.stderr"
 
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
-$env:POP_INPUT = $Input
+$env:POP_INPUT = $PadInput
 $p = Start-Process -FilePath $Exe -ArgumentList '.\SLUS_207.43' -WorkingDirectory "$Root\game\ps2\disc" `
         -RedirectStandardOutput $Out -RedirectStandardError $Err -PassThru -NoNewWindow
 $result = 'exited'
