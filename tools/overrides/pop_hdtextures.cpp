@@ -9,6 +9,7 @@
 
 #include "raylib.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -360,6 +362,65 @@ namespace pop_hdtex
             p += 12 + size;
         }
         return pack;
+    }
+
+    namespace
+    {
+        constexpr size_t kMaxPacks = 24; // loaded PC packs kept (least recently requested dropped)
+        std::mutex g_packsMutex;
+        std::unordered_map<uint32_t, std::shared_ptr<Pack>> g_packs; // pack key -> textures (null while loading)
+        std::vector<uint32_t> g_packOrder;                          // least recently requested first
+    }
+
+    // The game looked up bigfile key `key` (BIG_ul_SearchKeyToPos). For a world pack (0xFF......),
+    // load the PC pack with the same key on a worker thread, once.
+    void onBigfileLookup(uint32_t key)
+    {
+        if ((key >> 24) != 0xFFu)
+            return;
+        {
+            std::lock_guard<std::mutex> lock(g_packsMutex);
+            auto pos = std::find(g_packOrder.begin(), g_packOrder.end(), key);
+            if (pos != g_packOrder.end())
+            {
+                g_packOrder.erase(pos);
+                g_packOrder.push_back(key);
+                return;
+            }
+            g_packOrder.push_back(key);
+            g_packs[key] = nullptr;
+            while (g_packOrder.size() > kMaxPacks)
+            {
+                g_packs.erase(g_packOrder.front());
+                g_packOrder.erase(g_packOrder.begin());
+            }
+        }
+        std::thread([key] {
+            const auto start = std::chrono::steady_clock::now();
+            auto pack = loadPack(key);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+            if (pack && !pack->empty())
+                std::cerr << "[pop:hdtex] PC pack " << std::hex << key << std::dec << ": " << pack->size() << " textures in "
+                          << ms << " ms" << std::endl;
+            std::lock_guard<std::mutex> lock(g_packsMutex);
+            if (auto it = g_packs.find(key); it != g_packs.end())
+                it->second = std::move(pack);
+        }).detach();
+    }
+
+    // The PC texture for a bigfile texture key, from any loaded pack, or nullptr.
+    std::shared_ptr<const Texture> find(uint32_t textureKey)
+    {
+        std::lock_guard<std::mutex> lock(g_packsMutex);
+        for (auto it = g_packOrder.rbegin(); it != g_packOrder.rend(); ++it)
+        {
+            const auto &pack = g_packs[*it];
+            if (!pack)
+                continue;
+            if (auto t = pack->find(textureKey); t != pack->end())
+                return std::shared_ptr<const Texture>(pack, &t->second); // keeps the pack alive
+        }
+        return nullptr;
     }
 
     // Debug: POP_HDTEX_TEST=<pack key>:<texture key>

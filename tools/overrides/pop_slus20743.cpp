@@ -30,7 +30,13 @@
 #include <vector>
 
 void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
-namespace pop_hdtex { void runSelfTest(); } // pop_hdtextures.cpp: PC textures
+namespace pop_hdtex // pop_hdtextures.cpp: PC textures
+{
+    struct Texture;
+    void runSelfTest();
+    void onBigfileLookup(uint32_t key);
+    std::shared_ptr<const Texture> find(uint32_t textureKey);
+}
 
 namespace
 {
@@ -1022,7 +1028,19 @@ namespace
     {
         const uint32_t data = getRegU32(ctx, 5), index = getRegU32(ctx, 7);
         if (data)
-            g_textureKeys[index] = guestU32(rdram, data);
+        {
+            const uint32_t key = guestU32(rdram, data);
+            g_textureKeys[index] = key;
+            if (textureLog())
+            {
+                static unsigned registered = 0, covered = 0;
+                ++registered;
+                if (pop_hdtex::find(key))
+                    ++covered;
+                if (registered % 50 == 0)
+                    std::fprintf(stderr, "[pop:tex] %u textures registered, %u with a PC version loaded\n", registered, covered);
+            }
+        }
         g_origTextureLoad(rdram, ctx, runtime);
     }
 
@@ -1048,6 +1066,15 @@ namespace
             std::fprintf(stderr, "[pop:tex] tbp=0x%04x key=%08x %ux%u %ubpp index=%u\n", tbp, t.key, t.width, t.height,
                          t.bpp, index);
         }
+    }
+
+    // BIG_ul_SearchKeyToPos(key) 0x488940: every bigfile lookup by key; world packs trigger
+    // loading the PC pack with the same key (high-res textures).
+    PS2Runtime::RecompiledFunction g_origBigSearch = nullptr;
+    void bigSearchHd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        pop_hdtex::onBigfileLookup(getRegU32(ctx, 4));
+        g_origBigSearch(rdram, ctx, runtime);
     }
 
     // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
@@ -1691,6 +1718,9 @@ namespace
             runtime.replaceFunction(0x004B4E80u, textureLoadMapped);
             runtime.replaceFunction(0x004B3840u, loadTextureMapped);
         }
+        g_origBigSearch = runtime.lookupFunction(0x00488940u);
+        if (g_origBigSearch)
+            runtime.replaceFunction(0x00488940u, bigSearchHd);
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);
