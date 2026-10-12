@@ -187,7 +187,7 @@ if ($Play) {
 }
 # -Vu1 <dir>: compile the VU1 microcode captured in <dir> (PS2X_VU1_CAPTURE, see boot.ps1 -Env) to C++
 # with the runtime's vu1_recomp tool, into src\vu1_generated (the runner builds it if present; needs a
-# PS2Recomp with that CMake hook, e.g. pop-sotc 77706cd+).
+# PS2Recomp with that CMake hook, e.g. pop-sotc from tools/ps2recomp-pop-sotc-branch.sh).
 if ($Vu1) {
     Stage 'Compile captured VU1 microcode'
     & $Git -C $RT checkout -q --detach (& $Git -C $RecompSrc rev-parse HEAD)
