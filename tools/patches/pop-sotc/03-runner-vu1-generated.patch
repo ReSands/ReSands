@@ -1,0 +1,31 @@
+Runner: build AOT-compiled VU1 programs from src/vu1_generated if present
+
+Part of the pop-sotc branch; see tools/ps2recomp-pop-sotc-branch.sh.
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 1fc621f..9f2f4d4 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -593,6 +593,22 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebI
+     endif()
+ endif()
+ 
++# Game VU1 microcode compiled ahead of time by ps2xTest/tools/vu1_recomp (from a PS2X_VU1_CAPTURE run),
++# placed in src/vu1_generated/. Optional; without it VU1 programs run interpreted.
++file(GLOB PS2X_VU1_GENERATED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/vu1_generated/*.cpp")
++if(PS2X_VU1_GENERATED_SOURCES)
++    target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1_GENERATED_SOURCES})
++    set_source_files_properties(${PS2X_VU1_GENERATED_SOURCES} PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION TRUE
++        SKIP_PRECOMPILE_HEADERS TRUE
++        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu")
++    if(MSVC)
++        set_source_files_properties(${PS2X_VU1_GENERATED_SOURCES} PROPERTIES
++            COMPILE_OPTIONS "/bigobj;/fp:precise;/arch:AVX2;/W0")
++    endif()
++    target_compile_definitions(ps2EntryRunner PRIVATE PS2X_HAS_VU1_PROGRAMS=1)
++endif()
++
+ # Work around WinAPI vs raylib symbol clash for CloseWindow on x64
+ if(MSVC)
+     target_link_options(ps2EntryRunner PRIVATE "/FORCE:MULTIPLE")
