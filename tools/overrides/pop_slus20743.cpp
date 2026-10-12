@@ -964,6 +964,20 @@ namespace
         }
     }
 
+    // rand() 0x118918. ps2_analyzer names it, so PS2Recomp replaces it with its stand-in,
+    // which returns std::rand() & 0x7FFF. The game's newlib rand returns 31 bits, and lRand
+    // (0x1B9A40) scales by 1/2^31, so with the stand-in lRand(a, b) is always a, and the first
+    // in-game cutscene after CINE_010 spins forever drawing random numbers. This is the game's
+    // own algorithm on its own state (seeded by its own srand): 64-bit LCG in the reent block.
+    void newlibRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        (void)runtime;
+        const uint32_t reent = guestU32(rdram, 0x004E8768u);
+        auto *state = reinterpret_cast<uint64_t *>(getMemPtr(rdram, reent + 0xA8u));
+        *state = *state * 0x5851F42D4C957F2Dull + 1ull;
+        SET_GPR_U32(ctx, 2, static_cast<uint32_t>(*state >> 32) & 0x7FFFFFFFu);
+    }
+
     // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
     // the pad in analog mode, which PoP does not, and PoP does not walk with the D-pad. While an
     // arrow key is held, this sets the whole pad state (stick plus the runtime's button keys,
@@ -1595,6 +1609,7 @@ namespace
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
+        runtime.replaceFunction(0x00118918u, newlibRand);
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);
