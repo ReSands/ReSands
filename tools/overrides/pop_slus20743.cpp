@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -289,7 +290,7 @@ namespace
     // Driven from the instrumented kernel calls, which run constantly. ExportImage is
     // CPU-only, so this is safe off the render thread.
     constexpr bool kFrameDump = true;
-    constexpr int kFrameDumpSeconds = 10, kFrameDumpMax = 9;
+    constexpr int kFrameDumpSeconds = 10, kFrameDumpMax = 30;
     void maybeDumpFrame(PS2Runtime *runtime)
     {
         static int dumped = 0;
@@ -337,7 +338,9 @@ namespace
         static int window = -1, windowsDone = 0; // -1 waiting, >0 packets left
         if (window == -1)
         {
-            if (windowsDone >= 6 || std::chrono::steady_clock::now() - start < std::chrono::seconds(10))
+            // POP_GIF_SAMPLE_AT=<seconds>: first window starts then (default 10).
+            static const int firstAt = std::getenv("POP_GIF_SAMPLE_AT") ? std::atoi(std::getenv("POP_GIF_SAMPLE_AT")) : 10;
+            if (windowsDone >= 6 || std::chrono::steady_clock::now() - start < std::chrono::seconds(windowsDone == 0 ? firstAt : 10))
                 return;
             window = 300;
             std::cerr << "[pop:gif] --- sample window " << windowsDone << " start ---" << std::endl;
@@ -598,11 +601,81 @@ namespace
                   << " | GIF in: packets=" << g_gifPackets << " bytes=" << g_gifBytes << " primTags=" << g_gifPrimTags << std::endl;
     }
 
+}
+
+namespace ps2_stubs
+{
+    void setPadOverrideState(uint16_t buttons, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
+    void clearPadOverrideState();
+}
+
+namespace
+{
+    // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,down@100" presses
+    // each button for 0.3 s at that many seconds after boot. Between presses the real keyboard /
+    // gamepad is used.
+    void maybeScriptedInput()
+    {
+        struct Press
+        {
+            double at;
+            uint16_t mask;
+            std::string name;
+        };
+        static std::vector<Press> presses;
+        static bool parsed = false;
+        static size_t next = 0;
+        static bool held = false;
+        static auto start = std::chrono::steady_clock::now();
+        if (!parsed)
+        {
+            parsed = true;
+            const char *env = std::getenv("POP_INPUT");
+            static const std::unordered_map<std::string, uint16_t> kButtons = {
+                {"select", 1u << 0}, {"l3", 1u << 1}, {"r3", 1u << 2}, {"start", 1u << 3},
+                {"up", 1u << 4}, {"right", 1u << 5}, {"down", 1u << 6}, {"left", 1u << 7},
+                {"l2", 1u << 8}, {"r2", 1u << 9}, {"l1", 1u << 10}, {"r1", 1u << 11},
+                {"triangle", 1u << 12}, {"circle", 1u << 13}, {"cross", 1u << 14}, {"square", 1u << 15}};
+            std::string spec = env ? env : "";
+            size_t pos = 0;
+            while (pos < spec.size())
+            {
+                size_t comma = spec.find(',', pos);
+                if (comma == std::string::npos)
+                    comma = spec.size();
+                const std::string item = spec.substr(pos, comma - pos);
+                const size_t at = item.find('@');
+                if (at != std::string::npos && kButtons.count(item.substr(0, at)))
+                    presses.push_back({std::atof(item.c_str() + at + 1), kButtons.at(item.substr(0, at)), item.substr(0, at)});
+                pos = comma + 1;
+            }
+            if (!presses.empty())
+                std::cerr << "[pop:input] " << presses.size() << " scripted presses" << std::endl;
+        }
+        if (next >= presses.size())
+            return;
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        const Press &p = presses[next];
+        if (!held && t >= p.at)
+        {
+            ps2_stubs::setPadOverrideState(static_cast<uint16_t>(0xFFFFu & ~p.mask), 0x80, 0x80, 0x80, 0x80);
+            held = true;
+            std::cerr << "[pop:input] press " << p.name << " at " << t << " s" << std::endl;
+        }
+        else if (held && t >= p.at + 0.8)
+        {
+            ps2_stubs::clearPadOverrideState();
+            held = false;
+            ++next;
+        }
+    }
+
     template <size_t I>
     void watchedCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         maybeDumpFrame(runtime);
         maybeSampleRenderPath(runtime);
+        maybeScriptedInput();
         const uint32_t caller = getRegU32(ctx, 31);
         if (kDebugTracing)
             heapWalkCheck(rdram, g_watched[I].name, caller);
@@ -764,7 +837,7 @@ namespace
     // DEBUG (boot 54+): FUN_004547C0 (particle spawner, frame 0x180, $ra saved at sp+0xB0)
     // returns to a float. Watch its saved $ra slot across its calls to the vec3 helper
     // FUN_00495D60 and rand(), and report the first call that changes it.
-    constexpr bool kWatchParticleFrame = true;
+    constexpr bool kWatchParticleFrame = false;
     PS2Runtime::RecompiledFunction g_origSpawner = nullptr, g_origVecMadd = nullptr, g_origRand = nullptr;
     uint32_t g_spawnerRaSlot = 0, g_spawnerRa = 0;
     void checkSpawnerFrame(uint8_t *rdram, R5900Context *ctx, const char *who, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
