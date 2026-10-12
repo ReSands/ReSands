@@ -133,6 +133,14 @@ if (-not $Fast) {
     # The Ghidra project was imported on the Mac, so the export writes the Mac path to the ELF.
     $elf = ("$Root\game\ps2\disc\SLUS_207.43" -replace '\\', '/')
     (Get-Content "$R\config.toml") -replace '^input = .*$', "input = `"$elf`"" | Set-Content -Encoding ascii "$R\config.toml"
+    # Recompile the game's own libvu0 instead of PS2Recomp's C++ stand-ins (several are wrong;
+    # see rebuild.sh). The recompiler also stubs by name, so rename the functions as well.
+    (Get-Content "$R\config.toml") | Where-Object { $_ -notmatch '^  "sceVu0[A-Za-z0-9]*@0x[0-9A-F]*",$' } |
+        ForEach-Object { $_ -replace '\b_sceVu0', 'pop__sceVu0' -replace '\bsceVu0', 'pop_sceVu0' } |
+        Set-Content -Encoding ascii "$R\config.toml"
+    (Get-Content "$R\functions.csv") | ForEach-Object { $_ -replace '\b_sceVu0', 'pop__sceVu0' -replace '\bsceVu0', 'pop_sceVu0' } |
+        Set-Content -Encoding ascii "$R\functions.csv"
+    "libvu0: $((Select-String -Path "$R\functions.csv" -Pattern '^pop_+sceVu0').Count) functions renamed"
 
     Stage 'Recompile'
     if (Test-Path "$R\output") { Remove-Item -Recurse -Force "$R\output" }
