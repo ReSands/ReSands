@@ -197,6 +197,14 @@ Goal: combine the best assets of each 2003 version (PS2, GameCube, Xbox, PC) int
 - Bigfiles (`game/xbox/analysis/bigcmp.py`; file count at 0x08, then (offset, key) pairs from 0x44, each entry starts with a u32 size): PS2, Xbox and PC all have the same 3,308 keys. GameCube packs differently (1,602 keys, 1,598 shared). The prototype has 874, all in retail. Totals: PS2 195 MB, GameCube 209, Xbox 332, PC 377. The growth is in ~280 large world packs (keys `ff0…`, PS2 ~2 MB, Xbox ~3.5, PC ~4.3, stored in 128 KB compressed blocks): PC > Xbox > GameCube ≈ PS2. Most other keys are the same size everywhere. Sizes are compressed, so real texture resolution needs decoding.
 - Symbol check for each new disc: `.map` files on the GameCube disc, symbol strings in `main.dol`, debug sections or a PDB in the Xbox `default.xbe`, an unstripped ELF in any prototype. Names found can be carried to the PS2 ELF with Ghidra Version Tracking.
 
+## Texture formats and the PC upgrade (12 Oct 2026)
+
+`tools/jadetex.py` (unpack / list / png / compare) reads textures from the PS2 and PC bigfiles; its docstring has the format details. Summary:
+- World packs (bigfile keys `ff0…`) are 0x20000-byte LZO1X chunks; unpacked, a pack is a list of records `[u32 size][0xEEFFC099][u32 key][data]`.
+- Texture records (`+0x04` = 0xFFFFFFFF, magic 0xCAD01234 at `+0x18`, width/height at `+0x0C`): PS2 format 3 = 8-bit indices stored GS-swizzled (PSMT8 uploaded as PSMCT32) behind a GS upload packet, palette in a separate record (key at `+0x3C`, CSM1 order, alpha 0x80 = opaque). PC format 0xB = DXT1 (`+0x28` 5/11), DXT5 (7) or BGRA32 (0), with mip levels; data at `+0x38` (`+0x3C` when `+0x24` is 3).
+- Same keys on both. In the Aviary pack (`ff0b5b96`) 97 of 131 shared textures are 4x the pixels on PC (128x128 -> 256x256 typically). Some PC textures also differ in tone (grass greener than PS2): check in game before trusting colours, the PS2 modulates textures by vertex colour (0x80 = 1.0).
+- Plan (agreed): no conversion step. At runtime, when the game loads a PS2 world pack, also open the PC pack with the same key (if the user supplied the PC `prince.bf`), keep its textures resident on the GPU for the level, and substitute them when the game uses the matching PS2 texture. Identify textures at the game's texture loader (asset key known) rather than by hashing GS uploads. Load on a background thread; never upload high-res data per PS2 re-upload.
+
 ## PS2 prototype, 19 Aug 2003 (examined 12 Oct 2026)
 
 Hidden Palace dump, under `game/proto/` (`archive/` the .7z, `extract/` the .bin/.cue, `disc/` the files, `analysis/` our outputs). Plain ISO9660, 2048-byte sectors; macOS `tar` extracts both the .7z and the ISO.
