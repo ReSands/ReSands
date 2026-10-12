@@ -7,15 +7,17 @@
 #        add -Play to (also) build the log-free play build in build-win-play (configured on first
 #        use; PS2Recomp's verbose runtime logging costs about a third of the frame rate)
 #        add -Release with -Play for a Release build (/GL + LTCG, long link) in build-win-play-rel
-param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release)
+#        -RecompSrc / -Out select another PS2Recomp checkout and output folder, e.g.
+#        -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc (the pop-sotc setup)
+param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release,
+      [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $Root      = (Resolve-Path "$PSScriptRoot\..\..").Path
 $Tools     = 'C:\tools'
 $Ghidra    = "$Tools\ghidra_12.1.4_PUBLIC\support\analyzeHeadless.bat"
-$RecompSrc = "$Tools\PS2Recomp"
-$R         = "$Root\game\recomp"
+$R         = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { "$Root\$Out" }
 $RT        = "$R\runtime-src"
 $Git       = 'C:\Program Files\Git\cmd\git.exe'
 $Python    = (Get-Command python -ErrorAction Stop).Source

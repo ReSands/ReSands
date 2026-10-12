@@ -13,8 +13,11 @@ FAST=0
 
 ROOT=${0:A:h:h}
 GHIDRA=~/tools/ghidra_12.1.4_PUBLIC/support/analyzeHeadless
-RECOMP_SRC=~/tools/PS2Recomp
-R=$ROOT/game/recomp
+# PS2RECOMP / POP_R select another PS2Recomp checkout and output folder (e.g. the pop-sotc setup:
+# PS2RECOMP=~/tools/PS2Recomp-sotc POP_R=game/recomp-sotc).
+RECOMP_SRC=${PS2RECOMP:-~/tools/PS2Recomp}
+R=${POP_R:-$ROOT/game/recomp}
+[[ $R == /* ]] || R=$ROOT/$R
 RT=$R/runtime-src
 
 export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home

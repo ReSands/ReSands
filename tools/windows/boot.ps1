@@ -7,28 +7,29 @@
 #        Frame dumps go to game\recomp\screens.
 # Log: game\recomp\<Name>.log (stdout then stderr). "timeout" means the time limit was hit.
 # Run it from a desktop session (Claude Code on the PC): over SSH there is no desktop for the window.
-param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release)
+param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release, [string]$Out = 'game\recomp')
 $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $dir  = if ($Play -and $Release) { 'build-win-play-rel' } elseif ($Play) { 'build-win-play' } else { 'build-win' }
-$Exe  = "$Root\game\recomp\runtime-src\$dir\ps2xRuntime\ps2EntryRunner.exe"
-$Log  = "$Root\game\recomp\$Name.log"
-$Out  = "$Log.stdout"
+$R    = if ([IO.Path]::IsPathRooted($Out)) { $Out } else { "$Root\$Out" }
+$Exe  = "$R\runtime-src\$dir\ps2xRuntime\ps2EntryRunner.exe"
+$Log  = "$R\$Name.log"
+$StdOut = "$Log.stdout"
 $Err  = "$Log.stderr"
 
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
 $env:POP_INPUT = $PadInput
 $env:POP_ASYNC_GS = $(if ($Play -and -not $NoAsyncGs) { '1' } else { '0' })
 $p = Start-Process -FilePath $Exe -ArgumentList '.\SLUS_207.43' -WorkingDirectory "$Root\game\ps2\disc" `
-        -RedirectStandardOutput $Out -RedirectStandardError $Err -PassThru -NoNewWindow
+        -RedirectStandardOutput $StdOut -RedirectStandardError $Err -PassThru -NoNewWindow
 $result = 'exited'
 if (-not $p.WaitForExit($Seconds * 1000)) {
     Stop-Process -Id $p.Id -Force
     $p.WaitForExit()
     $result = 'timeout'
 }
-Get-Content $Out, $Err | Set-Content $Log
-Remove-Item $Out, $Err
+Get-Content $StdOut, $Err | Set-Content $Log
+Remove-Item $StdOut, $Err
 $lines = (Get-Content $Log | Measure-Object -Line).Lines
 "result=$result exit=$($p.ExitCode) lines=$lines log=$Log"

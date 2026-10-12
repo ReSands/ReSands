@@ -6,10 +6,12 @@ set -uo pipefail
 
 ROOT=${0:A:h:h}
 SECS=${1:-90}
-LOG=$ROOT/game/recomp/${2:-boot}.log
+R=${POP_R:-$ROOT/game/recomp}
+[[ $R == /* ]] || R=$ROOT/$R
+LOG=$R/${2:-boot}.log
 
 cd $ROOT/game/ps2/disc
-perl -e "alarm $SECS; exec @ARGV" $ROOT/game/recomp/runtime-src/${POP_BUILD:-build-mac}/ps2xRuntime/ps2EntryRunner ./SLUS_207.43 2>&1 \
+perl -e "alarm $SECS; exec @ARGV" $R/runtime-src/${POP_BUILD:-build-mac}/ps2xRuntime/ps2EntryRunner ./SLUS_207.43 2>&1 \
     | head -c 200000000 > $LOG
 code=${pipestatus[1]}
 echo "exit=$code lines=$(wc -l < $LOG) log=$LOG"
