@@ -6,7 +6,8 @@
 #        tools\windows\rebuild.ps1 -Setup   one-time: runtime worktree + CMake configure, then full
 #        add -Play to (also) build the log-free play build in build-win-play (configured on first
 #        use; PS2Recomp's verbose runtime logging costs about a third of the frame rate)
-param([switch]$Fast, [switch]$Setup, [switch]$Play)
+#        add -Release with -Play for a Release build (/GL + LTCG, long link) in build-win-play-rel
+param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -167,16 +168,17 @@ Stage 'Sync game overrides'
 
 $buildDir = "$RT\build-win"
 if ($Play) {
-    $buildDir = "$RT\build-win-play"
+    $buildDir = if ($Release) { "$RT\build-win-play-rel" } else { "$RT\build-win-play" }
     if (-not (Test-Path "$buildDir\build.ninja")) {
         Stage 'Configure play build'
         $devFlags = '/O2 /Ob2 /DNDEBUG'
-        if (Invoke-Logged "$R\runtime_configure_play.log" cmake @('-S', $RT, '-B', $buildDir, '-G', 'Ninja',
-                '-DCMAKE_BUILD_TYPE=Dev', "-DCMAKE_CXX_FLAGS_DEV=$devFlags", "-DCMAKE_C_FLAGS_DEV=$devFlags",
-                '-DCMAKE_EXE_LINKER_FLAGS_DEV=/INCREMENTAL:NO', '-DCMAKE_SHARED_LINKER_FLAGS_DEV=',
-                '-DCMAKE_MODULE_LINKER_FLAGS_DEV=', '-DCMAKE_STATIC_LINKER_FLAGS_DEV=',
+        $typeArgs = if ($Release) { @('-DCMAKE_BUILD_TYPE=Release') } else {
+            @('-DCMAKE_BUILD_TYPE=Dev', "-DCMAKE_CXX_FLAGS_DEV=$devFlags", "-DCMAKE_C_FLAGS_DEV=$devFlags",
+              '-DCMAKE_EXE_LINKER_FLAGS_DEV=/INCREMENTAL:NO', '-DCMAKE_SHARED_LINKER_FLAGS_DEV=',
+              '-DCMAKE_MODULE_LINKER_FLAGS_DEV=', '-DCMAKE_STATIC_LINKER_FLAGS_DEV=') }
+        if (Invoke-Logged "$R\runtime_configure_play.log" cmake (@('-S', $RT, '-B', $buildDir, '-G', 'Ninja') + $typeArgs + @(
                 '-DPS2X_BUILD_RECOMP=OFF', '-DPS2X_BUILD_ANALYZER=OFF', '-DPS2X_BUILD_TEST=OFF', '-DPS2X_BUILD_STUDIO=OFF',
-                '-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF', '-DPS2X_ENABLE_RUNTIME_LOGS=OFF', '-DPS2X_ENABLE_IOP_RPC_TRACE=OFF')) {
+                '-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF', '-DPS2X_ENABLE_RUNTIME_LOGS=OFF', '-DPS2X_ENABLE_IOP_RPC_TRACE=OFF'))) {
             'PLAY CONFIGURE FAILED'; Get-Content "$R\runtime_configure_play.log" -Tail 20; exit 1
         }
     }
