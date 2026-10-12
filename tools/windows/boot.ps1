@@ -7,7 +7,7 @@
 #        Frame dumps go to game\recomp\screens.
 # Log: game\recomp\<Name>.log (stdout then stderr). "timeout" means the time limit was hit.
 # Run it from a desktop session (Claude Code on the PC): over SSH there is no desktop for the window.
-param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release, [string]$Out = 'game\recomp', [string]$Shots = '')
+param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release, [string]$Out = 'game\recomp', [string]$Shots = '', [string]$Env = '')
 $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -18,6 +18,8 @@ $Log  = "$R\$Name.log"
 $StdOut = "$Log.stdout"
 $Err  = "$Log.stderr"
 
+# -Env 'A=1;B=2' sets extra environment variables for the game (applied first, so they win).
+foreach ($pair in ($Env -split ';')) { if ($pair -match '^\s*([^=]+)=(.*)$') { Set-Item "env:$($Matches[1].Trim())" $Matches[2] } }
 # Runtime settings the SotC port documents (Docs/CONFIGURATION.md), for the pop-sotc setup:
 # GPU GS renderer on its own thread, VU1 on its own thread, compiled VU1 microcode, SIMD paths.
 # Values already set in the environment win.
