@@ -1,0 +1,201 @@
+From 46a8ac582ba1ce40f1602dc6e74bc9168cda2246 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 12 Oct 2026 04:00:40 +0100
+Subject: [PATCH] gs cpu backend: sprites keep sub-pixel positions and
+ sub-texel UVs
+
+DrawSprite truncated vertex positions to whole pixels and fst UVs to whole
+texels, and sampled at pixel centres + 0.5. Games use half-pixel positions and
+half-texel UV insets in post-processing so bilinear filtering stays inside a
+region; losing them made Prince of Persia's glow pyramid read neighbouring
+Z-buffer data (an orange/green wash over every frame). Now follows the GS rules:
+pixels ceil(x0)..ceil(x1)-1, attributes interpolated at integer pixel positions.
+Flipped sprites also keep their texture mapping.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VfPfhekt4t2ioqgw678eFZ
+---
+ ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp | 132 +++++++++++-----------
+ 1 file changed, 65 insertions(+), 67 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+index f0ad507..44be762 100644
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1162,92 +1162,90 @@ uint32_t GSCpuBackend::SampleTexture(const GSDrawState &state, float s, float t,
+ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+ {
+     const GSDrawState &state = batch.state;
+-    const GSVertex &v0 = batch.vertices[0];
+-    const GSVertex &v1 = batch.vertices[1];
+     const auto &ctx = state.context;
+ 
+-    int ofx = ctx.xyoffset.ofx >> 4;
+-    int ofy = ctx.xyoffset.ofy >> 4;
++    // GS sprite rules, in the 12.4 fixed-point space the vertices come from: pixel i is
++    // covered when x0 <= i < x1 (likewise y), and attributes are interpolated at the pixel's
++    // integer position. Games rely on the fractions: post-processing passes use half-pixel
++    // positions and half-texel UV insets so bilinear filtering does not read past a region.
++    const float ofx = static_cast<float>(ctx.xyoffset.ofx) / 16.0f;
++    const float ofy = static_cast<float>(ctx.xyoffset.ofy) / 16.0f;
++
++    const GSVertex *va = &batch.vertices[0];
++    const GSVertex *vb = &batch.vertices[1];
++    float x0f = va->x - ofx, x1f = vb->x - ofx;
++    float y0f = va->y - ofy, y1f = vb->y - ofy;
++    const u32 z1 = static_cast<u32>(vb->z);
++
++    // Texture coordinates at the two corners, in texels.
++    float u0f = 0.0f, v0f = 0.0f, u1f = 0.0f, v1f = 0.0f;
++    if (state.prim.tme)
++    {
++        if (state.prim.fst)
++        {
++            u0f = static_cast<float>(va->u) / 16.0f;
++            v0f = static_cast<float>(va->v) / 16.0f;
++            u1f = static_cast<float>(vb->u) / 16.0f;
++            v1f = static_cast<float>(vb->v) / 16.0f;
++        }
++        else
++        {
++            const float q0 = fabsQ(va->q);
++            const float q1 = fabsQ(vb->q);
++            u0f = (va->s / q0) * static_cast<float>(state.textureWidth);
++            v0f = (va->t / q0) * static_cast<float>(state.textureHeight);
++            u1f = (vb->s / q1) * static_cast<float>(state.textureWidth);
++            v1f = (vb->t / q1) * static_cast<float>(state.textureHeight);
++        }
++    }
++    // A sprite given right-to-left (or bottom-to-top) keeps its texture mapping.
++    if (x0f > x1f)
++    {
++        std::swap(x0f, x1f);
++        std::swap(u0f, u1f);
++    }
++    if (y0f > y1f)
++    {
++        std::swap(y0f, y1f);
++        std::swap(v0f, v1f);
++    }
+ 
+-    int x0 = static_cast<int>(v0.x) - ofx;
+-    int y0 = static_cast<int>(v0.y) - ofy;
+-    int x1 = static_cast<int>(v1.x) - ofx;
+-    int y1 = static_cast<int>(v1.y) - ofy;
+-    u32 z1 = static_cast<u32>(v1.z);
+-
+-    if (x0 > x1)
+-        std::swap(x0, x1);
+-    if (y0 > y1)
+-        std::swap(y0, y1);
+-
+-    const int unclippedX0 = x0;
+-    const int unclippedY0 = y0;
+-    const int spanX = std::max(1, x1 - x0);
+-    const int spanY = std::max(1, y1 - y0);
+-    const int unclippedX1 = unclippedX0 + spanX - 1;
+-    const int unclippedY1 = unclippedY0 + spanY - 1;
+-
+-    // If the sprite rectangle is fully outside scissor, nothing should render.
+-    if (unclippedX1 < ctx.scissor.x0 || unclippedX0 > ctx.scissor.x1 ||
+-        unclippedY1 < ctx.scissor.y0 || unclippedY0 > ctx.scissor.y1)
++    const int px0 = static_cast<int>(std::ceil(x0f));
++    const int py0 = static_cast<int>(std::ceil(y0f));
++    const int px1 = static_cast<int>(std::ceil(x1f)) - 1;
++    const int py1 = static_cast<int>(std::ceil(y1f)) - 1;
++    if (px1 < px0 || py1 < py0)
++        return;
++    if (px1 < ctx.scissor.x0 || px0 > ctx.scissor.x1 || py1 < ctx.scissor.y0 || py0 > ctx.scissor.y1)
+         return;
+ 
+-    const int drawX0 = clampInt(unclippedX0, ctx.scissor.x0, ctx.scissor.x1);
+-    const int drawY0 = clampInt(unclippedY0, ctx.scissor.y0, ctx.scissor.y1);
+-    const int drawX1 = clampInt(unclippedX1, ctx.scissor.x0, ctx.scissor.x1);
+-    const int drawY1 = clampInt(unclippedY1, ctx.scissor.y0, ctx.scissor.y1);
+-
+-    const uint64_t alphaReg = ctx.alpha;
+-    const uint8_t alphaMode = static_cast<uint8_t>(alphaReg & 0xFFu);
+-    const uint8_t alphaFix = static_cast<uint8_t>((alphaReg >> 32) & 0xFFu);
++    const int drawX0 = clampInt(px0, ctx.scissor.x0, ctx.scissor.x1);
++    const int drawY0 = clampInt(py0, ctx.scissor.y0, ctx.scissor.y1);
++    const int drawX1 = clampInt(px1, ctx.scissor.x0, ctx.scissor.x1);
++    const int drawY1 = clampInt(py1, ctx.scissor.y0, ctx.scissor.y1);
+ 
+-    uint8_t r = v1.r, g = v1.g, b = v1.b, a = v1.a;
++    uint8_t r = vb->r, g = vb->g, b = vb->b, a = vb->a;
+ 
+     if (state.prim.tme)
+     {
+         const auto &tex = ctx.tex0;
+         const int texW = state.textureWidth;
+         const int texH = state.textureHeight;
+-
+-        float u0f, v0f, u1f, v1f;
+-        if (state.prim.fst)
+-        {
+-            u0f = static_cast<float>(v0.u >> 4);
+-            v0f = static_cast<float>(v0.v >> 4);
+-            u1f = static_cast<float>(v1.u >> 4);
+-            v1f = static_cast<float>(v1.v >> 4);
+-        }
+-        else
+-        {
+-            const float q0 = fabsQ(v0.q);
+-            const float q1 = fabsQ(v1.q);
+-            u0f = (v0.s / q0) * static_cast<float>(texW);
+-            v0f = (v0.t / q0) * static_cast<float>(texH);
+-            u1f = (v1.s / q1) * static_cast<float>(texW);
+-            v1f = (v1.t / q1) * static_cast<float>(texH);
+-        }
+-
+-        float spriteW = static_cast<float>(spanX);
+-        float spriteH = static_cast<float>(spanY);
+-        if (spriteW < 1.0f)
+-            spriteW = 1.0f;
+-        if (spriteH < 1.0f)
+-            spriteH = 1.0f;
++        const float du = (x1f > x0f) ? (u1f - u0f) / (x1f - x0f) : 0.0f;
++        const float dv = (y1f > y0f) ? (v1f - v0f) / (y1f - y0f) : 0.0f;
+ 
+         for (int y = drawY0; y <= drawY1; ++y)
+         {
+-            float ty = (static_cast<float>(y - unclippedY0) + 0.5f) / spriteH;
+-            float texVf = v0f + (v1f - v0f) * ty;
++            const float texVf = v0f + (static_cast<float>(y) - y0f) * dv;
+ 
+             for (int x = drawX0; x <= drawX1; ++x)
+             {
+-                float tx = (static_cast<float>(x - unclippedX0) + 0.5f) / spriteW;
+-                float texUf = u0f + (u1f - u0f) * tx;
++                const float texUf = u0f + (static_cast<float>(x) - x0f) * du;
+                 uint32_t texel = 0xFFFF00FFu;
+                 if (state.prim.fst)
+                 {
+-                    const int fixedU = static_cast<int>((texUf * 16.0f) + 0.5f);
+-                    const int fixedV = static_cast<int>((texVf * 16.0f) + 0.5f);
++                    const int fixedU = static_cast<int>(std::lround(texUf * 16.0f));
++                    const int fixedV = static_cast<int>(std::lround(texVf * 16.0f));
+                     const uint16_t sampleU = static_cast<uint16_t>(clampInt(fixedU, 0, 0xFFFF));
+                     const uint16_t sampleV = static_cast<uint16_t>(clampInt(fixedV, 0, 0xFFFF));
+                     texel = SampleTexture(state, 0.0f, 0.0f, 1.0f, sampleU, sampleV);
+@@ -1263,7 +1261,7 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+                 uint8_t ta = static_cast<uint8_t>((texel >> 24) & 0xFF);
+ 
+                 const TextureCombineResult color = combineTexture(tex, r, g, b, a, tr, tg, tb, ta);
+-                WritePixel(state, x, y, z1, color.r, color.g, color.b, color.a, v1.fog);
++                WritePixel(state, x, y, z1, color.r, color.g, color.b, color.a, vb->fog);
+             }
+         }
+     }
+@@ -1271,7 +1269,7 @@ void GSCpuBackend::DrawSprite(const GSPrimitiveBatch &batch)
+     {
+         for (int y = drawY0; y <= drawY1; ++y)
+             for (int x = drawX0; x <= drawX1; ++x)
+-                WritePixel(state, x, y, z1, r, g, b, a, v1.fog);
++                WritePixel(state, x, y, z1, r, g, b, a, vb->fog);
+     }
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+

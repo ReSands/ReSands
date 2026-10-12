@@ -567,6 +567,134 @@ namespace
         }
     }
 
+    // Pass-by-pass capture (POP_PASSDUMP_AT=<seconds>): from then, for the next 60 GIF packets
+    // that draw a textured primitive reading framebuffer memory (TBP below 12000) or target the
+    // half-res buffer (FBP 280), save the target buffer after the packet as
+    // screens/pass_NNN_fbpF.png (PSMCT32, FBW from FRAME). Shows which post-process pass does what.
+    struct PassInfo
+    {
+        bool interesting = false;
+        uint32_t fbp = 0, fbw = 10;
+        std::string desc;
+    };
+    PassInfo classifyPacket(const uint8_t *data, uint32_t size)
+    {
+        static uint64_t frame[2] = {0, 0}, tex0[2] = {0, 0}, alpha[2] = {0, 0}, scissor[2] = {0, 0};
+        PassInfo info;
+        uint32_t off = 0;
+        while (off + 16u <= size)
+        {
+            uint64_t tag, regs;
+            std::memcpy(&tag, data + off, 8);
+            std::memcpy(&regs, data + off + 8, 8);
+            off += 16u;
+            const uint32_t nloop = tag & 0x7FFFu, flg = (tag >> 58) & 3u;
+            uint32_t nreg = (tag >> 60) & 0xFu;
+            if (nreg == 0)
+                nreg = 16;
+            auto notePrim = [&](uint32_t prim)
+            {
+                const uint32_t c = (prim >> 9) & 1u;
+                const uint32_t tbp = tex0[c] & 0x3FFF, fbp = frame[c] & 0x1FF;
+                const bool tme = (prim >> 4) & 1u;
+                if ((tme && tbp < 12000u) || fbp == 280u)
+                {
+                    info.interesting = true;
+                    info.fbp = fbp;
+                    info.fbw = (frame[c] >> 16) & 0x3F;
+                    char d[160];
+                    std::snprintf(d, sizeof(d), "prim=%03x fbp=%u fbmsk=%08x tme=%u tbp=%u tw=%u th=%u tfx=%u tcc=%u alpha=%llx scissor=%llx",
+                                  prim, fbp, static_cast<unsigned>(frame[c] >> 32), tme ? 1u : 0u, tbp,
+                                  static_cast<unsigned>((tex0[c] >> 26) & 0xF), static_cast<unsigned>((tex0[c] >> 30) & 0xF),
+                                  static_cast<unsigned>((tex0[c] >> 35) & 3), static_cast<unsigned>((tex0[c] >> 34) & 1),
+                                  static_cast<unsigned long long>(alpha[c]), static_cast<unsigned long long>(scissor[c]));
+                    info.desc = d;
+                }
+            };
+            if ((tag >> 46) & 1u)
+                notePrim((tag >> 47) & 0x7FFu);
+            if (flg == 0)
+            {
+                for (uint32_t l = 0; l < nloop && off + 16u <= size; ++l)
+                    for (uint32_t r = 0; r < nreg && off + 16u <= size; ++r, off += 16u)
+                    {
+                        if (((regs >> (r * 4)) & 0xF) != 0xE)
+                            continue;
+                        uint64_t lo, hi;
+                        std::memcpy(&lo, data + off, 8);
+                        std::memcpy(&hi, data + off + 8, 8);
+                        const uint32_t addr = hi & 0xFF;
+                        if (addr == 0x4C || addr == 0x4D) frame[addr - 0x4C] = lo;
+                        if (addr == 0x06 || addr == 0x07) tex0[addr - 0x06] = lo;
+                        if (addr == 0x42 || addr == 0x43) alpha[addr - 0x42] = lo;
+                        if (addr == 0x40 || addr == 0x41) scissor[addr - 0x40] = lo;
+                        if (addr == 0x00) notePrim(static_cast<uint32_t>(lo & 0x7FF));
+                    }
+            }
+            else if (flg == 2)
+                off += nloop * 16u;
+            else
+                off += ((nloop * nreg + 1u) & ~1u) * 8u;
+        }
+        return info;
+    }
+    void dumpFbp(uint32_t fbp, uint32_t fbw, int w, int h, const std::string &path)
+    {
+        const uint8_t *vram = g_runtime->memory().getGSVRAM();
+        std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                const uint32_t a = GSPSMCT32::addrPSMCT32(fbp * 32u, fbw ? fbw : 1u, x, y) % PS2_GS_VRAM_SIZE;
+                uint8_t *o = &px[(static_cast<size_t>(y) * w + x) * 4];
+                o[0] = vram[a];
+                o[1] = vram[a + 1];
+                o[2] = vram[a + 2];
+                o[3] = 255;
+            }
+        Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        ExportImage(img, path.c_str());
+    }
+    void maybePassDump(const uint8_t *data, uint32_t size)
+    {
+        static const char *env = std::getenv("POP_PASSDUMP_AT");
+        if (!env)
+            return;
+        static auto start = std::chrono::steady_clock::now();
+        static int dumped = 0;
+        if (dumped >= 60)
+            return;
+        const PassInfo info = classifyPacket(data, size); // always, to track FRAME/TEX0/ALPHA state
+        if (!info.interesting || std::chrono::steady_clock::now() - start < std::chrono::seconds(std::atoi(env)))
+            return;
+        ++dumped;
+        if (dumped == 1)
+        {
+            dumpFbp(0, 10, 640, 448, "../../recomp/screens/pass_000_before_fbp0.png");
+            dumpFbp(140, 10, 640, 448, "../../recomp/screens/pass_000_before_fbp140.png");
+        }
+        // The callers process the packet first; see the arbiter hook.
+        char path[128];
+        std::snprintf(path, sizeof(path), "../../recomp/screens/pass_%03d_fbp%u.png", dumped, info.fbp);
+        dumpFbp(info.fbp, info.fbw, 640, 448, path); // whole buffer: 280 also holds smaller levels
+        std::cerr << "[pop:pass] " << path << " " << info.desc << std::endl;
+        static int raws = 0;
+        if (info.fbp != 280u && raws < 2)
+        {
+            ++raws;
+            for (uint32_t q = 0; q + 16u <= size && q < 16u * 32u; q += 16u)
+            {
+                uint64_t lo, hi;
+                std::memcpy(&lo, data + q, 8);
+                std::memcpy(&hi, data + q + 8, 8);
+                char line[80];
+                std::snprintf(line, sizeof(line), "[pop:passraw] %04x: %016llx %016llx", q,
+                              static_cast<unsigned long long>(hi), static_cast<unsigned long long>(lo));
+                std::cerr << line << std::endl;
+            }
+        }
+    }
+
     void countGifPacket(const uint8_t *data, uint32_t size)
     {
         decodeGifSample(data, size);
@@ -1210,6 +1338,7 @@ namespace
                                                         if (!kForceZtstAlways)
                                                         {
                                                             rt->gs().processGIFPacket(data, size);
+                                                            maybePassDump(data, size);
                                                             return;
                                                         }
                                                         std::vector<uint8_t> copy(data, data + size);
