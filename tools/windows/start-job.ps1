@@ -45,7 +45,9 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
             -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$Jobs\job.ps1`"" `
             -WorkingDirectory $Root
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries
+# Priority 4 = normal. The default (7) runs the task below normal priority, which Windows may
+# also power-throttle, so timings would not match an interactive run.
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries -Priority 4
 Register-ScheduledTask -TaskName $Task -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $Task
 "started $Script $Arguments; log: $Log"
