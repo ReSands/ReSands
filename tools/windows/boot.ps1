@@ -20,7 +20,11 @@ $Err  = "$Log.stderr"
 
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
 $env:POP_INPUT = $PadInput
-$env:POP_ASYNC_GS = $(if ($Play -and -not $NoAsyncGs) { '1' } else { '0' })
+# The override's async GS needs its GIF tap, which would bypass a runtime's own GS pipeline
+# (the SotC fork has one), so only the original setup (game\recomp) uses it.
+$async = $Play -and -not $NoAsyncGs -and ($Out -eq 'game\recomp')
+$env:POP_ASYNC_GS = $(if ($async) { '1' } else { '0' })
+$env:POP_GIF_TAP  = $(if ($async) { '1' } else { '0' })
 $p = Start-Process -FilePath $Exe -ArgumentList '.\SLUS_207.43' -WorkingDirectory "$Root\game\ps2\disc" `
         -RedirectStandardOutput $StdOut -RedirectStandardError $Err -PassThru -NoNewWindow
 $result = 'exited'

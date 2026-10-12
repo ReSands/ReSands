@@ -1467,7 +1467,11 @@ namespace
 
     void applyPopOverrides(PS2Runtime &runtime)
     {
-        if (kRenderStats)
+        // The GIF tap replaces the runtime's GIF -> GS hand-off. Runtimes that route packets
+        // through their own pipeline (the SotC fork's async VIF/GS) would be bypassed, so the
+        // tap (and with it the GIF sampler, pass dumps and POP_ASYNC_GS) is opt-in: POP_GIF_TAP=1.
+        const char *tapEnv = std::getenv("POP_GIF_TAP");
+        if (kRenderStats && tapEnv && std::atoi(tapEnv) != 0)
         {
             PS2Runtime *rt = &runtime;
             g_runtime = rt;
