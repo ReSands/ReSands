@@ -30,6 +30,7 @@
 #include <vector>
 
 void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
+namespace pop_hdtex { void runSelfTest(); } // pop_hdtextures.cpp: PC textures
 
 namespace
 {
@@ -1680,6 +1681,7 @@ namespace
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
+        pop_hdtex::runSelfTest();
         runtime.replaceFunction(0x00118918u, newlibRand);
         runtime.replaceFunction(0x004A4D00u, vu1IdleWait);
         g_origTextureLoad = runtime.lookupFunction(0x004B4E80u);
