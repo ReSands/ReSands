@@ -18,6 +18,15 @@ $Log  = "$R\$Name.log"
 $StdOut = "$Log.stdout"
 $Err  = "$Log.stderr"
 
+# Runtime settings the SotC port documents (Docs/CONFIGURATION.md), for the pop-sotc setup:
+# GPU GS renderer on its own thread, VU1 on its own thread, compiled VU1 microcode, SIMD paths.
+# Values already set in the environment win.
+if ($Out -ne 'game\recomp') {
+    $sotc = [ordered]@{ PS2X_GS_GPU = '1'; PS2X_GS_THREAD = '1'; PS2X_GS_DIRECT_PRESENT = '1'; PS2X_GS_COMPACT_QUEUE = '1';
+                        PS2X_GS_QUEUE_CHUNKS = '8'; PS2X_VIF_SIMD_UNPACK = '1'; PS2X_VU1_SIMD_CLIP = '1'; PS2X_MTVU = '1';
+                        PS2X_VU1_RECOMP = '1' }
+    foreach ($k in $sotc.Keys) { if (-not [Environment]::GetEnvironmentVariable($k)) { Set-Item "env:$k" $sotc[$k] } }
+}
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
 $env:POP_INPUT = $PadInput
 # The override's async GS needs its GIF tap, which would bypass a runtime's own GS pipeline
