@@ -964,6 +964,40 @@ namespace
         }
     }
 
+    // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
+    // the pad in analog mode, which PoP does not, and PoP does not walk with the D-pad. While an
+    // arrow key is held, this sets the whole pad state (stick plus the runtime's button keys,
+    // so jumping while moving works) through the same override as scripted input.
+    void keyboardStick()
+    {
+        static bool active = false;
+        if (!IsWindowReady())
+            return;
+        int x = 0, y = 0;
+        x += IsKeyDown(KEY_RIGHT) ? 1 : 0;
+        x -= IsKeyDown(KEY_LEFT) ? 1 : 0;
+        y += IsKeyDown(KEY_DOWN) ? 1 : 0;
+        y -= IsKeyDown(KEY_UP) ? 1 : 0;
+        if (x == 0 && y == 0)
+        {
+            if (active)
+                ps2_stubs::clearPadOverrideState();
+            active = false;
+            return;
+        }
+        static const std::pair<int, uint16_t> kKeys[] = {
+            {KEY_RIGHT_SHIFT, 1u << 0}, {KEY_LEFT_CONTROL, 1u << 1}, {KEY_RIGHT_CONTROL, 1u << 2}, {KEY_ENTER, 1u << 3},
+            {KEY_ONE, 1u << 8}, {KEY_THREE, 1u << 9}, {KEY_Q, 1u << 10}, {KEY_E, 1u << 11},
+            {KEY_V, 1u << 12}, {KEY_C, 1u << 13}, {KEY_X, 1u << 14}, {KEY_Z, 1u << 15}};
+        uint16_t pressed = 0;
+        for (const auto &[key, mask] : kKeys)
+            if (IsKeyDown(key))
+                pressed |= mask;
+        auto axis = [](int v) { return static_cast<uint8_t>(v < 0 ? 0x00 : v > 0 ? 0xFF : 0x80); };
+        ps2_stubs::setPadOverrideState(static_cast<uint16_t>(0xFFFFu & ~pressed), axis(x), axis(y), 0x80, 0x80);
+        active = true;
+    }
+
     // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,lup@120:4" presses each
     // button (or pushes the left stick: lup/ldown/lleft/lright) at that many seconds after boot,
     // for 0.8 s or the given :seconds. Between inputs the real keyboard / gamepad is used.
@@ -1022,6 +1056,8 @@ namespace
             if (!presses.empty())
                 std::cerr << "[pop:input] " << presses.size() << " scripted inputs" << std::endl;
         }
+        if (!held)
+            keyboardStick();
         if (next >= presses.size())
             return;
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
