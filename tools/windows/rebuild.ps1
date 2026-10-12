@@ -192,10 +192,10 @@ if ($Vu1) {
     Stage 'Compile captured VU1 microcode'
     & $Git -C $RT checkout -q --detach (& $Git -C $RecompSrc rev-parse HEAD)
     if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=ON', '-DBUILD_TESTING=OFF')) { 'VU1 CONFIGURE FAILED'; exit 1 }
-    if (Invoke-Logged "$R\vu1_tool_build.log" cmake @('--build', $buildDir, '--target', 'vu1_recomp')) { 'VU1 TOOL BUILD FAILED'; Select-String -Path "$R\vu1_tool_build.log.out" -Pattern 'error' | Select-Object -First 10; exit 1 }
+    if (Invoke-Logged "$R\vu1_tool_build.log" cmake @('--build', $buildDir, '--target', 'vu1_recomp')) { 'VU1 TOOL BUILD FAILED'; Select-String -Path "$R\vu1_tool_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
     $tool = Get-ChildItem $buildDir -Recurse -Filter vu1_recomp.exe | Select-Object -First 1
-    if (Invoke-Logged "$R\vu1_recomp.log" $tool.FullName @($Vu1, "$RT\ps2xRuntime\src\vu1_generated")) { 'VU1 RECOMP FAILED'; Get-Content "$R\vu1_recomp.log.err" -Tail 10; exit 1 }
-    Get-Content "$R\vu1_recomp.log.out" -Tail 12
+    if (Invoke-Logged "$R\vu1_recomp.log" $tool.FullName @($Vu1, "$RT\ps2xRuntime\src\vu1_generated")) { 'VU1 RECOMP FAILED'; Get-Content "$R\vu1_recomp.log" -Tail 10; exit 1 }
+    Get-Content "$R\vu1_recomp.log" -Tail 3
     "images: $((Get-ChildItem "$Vu1\vu1_*.bin").Count), generated files: $((Get-ChildItem "$RT\ps2xRuntime\src\vu1_generated\*.cpp").Count)"
     if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF')) { 'VU1 RECONFIGURE FAILED'; exit 1 }
 }
