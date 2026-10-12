@@ -184,7 +184,7 @@ Remote workflow: enable Windows OpenSSH Server (Settings > Optional Features); S
 
 Status 12 Oct 2026: steps 2-5 largely done. The game reaches gameplay on Mac and PC, but at 2-3.5 fps, with no movies and no sound. Next, roughly in order of value:
 
-- **Speed.** GPU GS renderer (D3D12/Vulkan; this is also step 6's hook for texture replacement and DLSS). A faster VU1 path: the interpreter is cycle-accurate and costs ~1/3 of the game thread; options are a non-cycle-accurate mode or recompiling the game's VU1 microprograms. On the PC, try clang-cl or Release/LTCG (MSVC Dev build is ~1.8x slower than clang on the Mac).
+- **Speed.** GPU GS renderer (D3D12/Vulkan; this is also step 6's hook for texture replacement and DLSS). A faster VU1 path: the interpreter is cycle-accurate and costs ~1/3 of the game thread; options are a non-cycle-accurate mode or recompiling the game's VU1 microprograms. On the PC, try clang-cl (MSVC Dev build is ~1.8x slower than clang on the Mac); a Release/LTCG link did not finish within 90 minutes on the 5800X (12 Oct).
 - **Movies.** PoP-specific HLE of the game's movie player (libipu-based; .INT files in MOVIEPS2.BIG), decoding with the runtime's FFmpeg MPEG-2 path instead of emulating the IPU.
 - **Sound.** SPU2 emulation for the IOP (the game's own UbiSound driver already runs), or HLE of the sound RPC.
 - **Correctness sweep.** Other PS2Recomp C++ stand-ins may be wrong like libvu0 was. libm `sin/cos/atan/floor/ceil/fabs` were checked by the self-test and are correct (float ABI); the internal `__kernel_*`/`__ieee754_rem_pio2f` stand-ins are simplified but only matter if called directly. Extend `[pop:vu0test]`-style checks before trusting other stubs.
