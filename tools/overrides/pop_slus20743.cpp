@@ -917,6 +917,39 @@ namespace
         const float c = std::cos(0.5f), sn = std::sin(0.5f);
         const float Rz[16] = {c, sn, 0, 0, -sn, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         report("RotMatrixZ(0.5) (either sign convention shown)", got, Rz, 16);
+
+        // libm (float ABI: argument in $f12, result in $f0), whatever currently backs them.
+        struct MathCase
+        {
+            const char *name;
+            uint32_t addr;
+            float (*ref)(float);
+        };
+        const MathCase cases[] = {
+            {"sin", 0x001340C0u, [](float x) { return std::sin(x); }},
+            {"cos", 0x00133D00u, [](float x) { return std::cos(x); }},
+            {"atan", 0x001335C0u, [](float x) { return std::atan(x); }},
+            {"floor", 0x00133E80u, [](float x) { return std::floor(x); }},
+            {"ceil", 0x00133AC0u, [](float x) { return std::ceil(x); }},
+            {"fabs", 0x00133E40u, [](float x) { return std::fabs(x); }},
+        };
+        const float args[] = {0.3f, -1.7f, 2.5f, 7.0f, -12.25f, 100.0f};
+        for (const MathCase &mc : cases)
+        {
+            float gotv[6], wantv[6];
+            for (int i = 0; i < 6; ++i)
+            {
+                R5900Context saved = *ctx;
+                std::memcpy(&ctx->f[12], &args[i], sizeof(float));
+                SET_GPR_U32(ctx, 31, 0x00100008u);
+                ctx->pc = mc.addr;
+                runtime->lookupFunction(mc.addr)(rdram, ctx, runtime);
+                std::memcpy(&gotv[i], &ctx->f[0], sizeof(float));
+                *ctx = saved;
+                wantv[i] = mc.ref(args[i]);
+            }
+            report(mc.name, gotv, wantv, 6);
+        }
     }
 
     // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,lup@120:4" presses each
