@@ -182,6 +182,13 @@ Remote workflow: enable Windows OpenSSH Server (Settings > Optional Features); S
 6. Build the renderer; add texture replacement (PCSX2-compatible hashing).
 7. Later: DLSS.
 
+Status 12 Oct 2026: steps 2-5 largely done. The game reaches gameplay on Mac and PC, but at 2-3.5 fps, with no movies and no sound. Next, roughly in order of value:
+
+- **Speed.** GPU GS renderer (D3D12/Vulkan; this is also step 6's hook for texture replacement and DLSS). A faster VU1 path: the interpreter is cycle-accurate and costs ~1/3 of the game thread; options are a non-cycle-accurate mode or recompiling the game's VU1 microprograms. On the PC, try clang-cl or Release/LTCG (MSVC Dev build is ~1.8x slower than clang on the Mac).
+- **Movies.** PoP-specific HLE of the game's movie player (libipu-based; .INT files in MOVIEPS2.BIG), decoding with the runtime's FFmpeg MPEG-2 path instead of emulating the IPU.
+- **Sound.** SPU2 emulation for the IOP (the game's own UbiSound driver already runs), or HLE of the sound RPC.
+- **Correctness sweep.** Other PS2Recomp C++ stand-ins may be wrong like libvu0 was (libm `sin/cos/atan/floor`, `__kernel_*`, `rand`): consider compiling the game's own copies, with self-tests like `[pop:vu0test]`.
+
 ## Open questions
 
 - ~~Does the US ELF contain debug symbols?~~ No. `SLUS_207.43` (v1.01, SHA-1 `a5bc95777d458e1dc36a9bd3d3cb7d3523d06c7d`) is stripped: no symtab, no `.mdebug`, one `main` section at `0x100000`, entry `0x100008`. About 48 source filenames survive in assert strings (`AIengine.c`, `BIGfat.c`, `OBJload.c`, `RPS2.cpp`, …), plus Sony lib strings (`sceGs…`, `sceCd…`).
