@@ -7,7 +7,7 @@
 #        Frame dumps go to game\recomp\screens.
 # Log: game\recomp\<Name>.log (stdout then stderr). "timeout" means the time limit was hit.
 # Run it from a desktop session (Claude Code on the PC): over SSH there is no desktop for the window.
-param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release, [string]$Out = 'game\recomp')
+param([int]$Seconds = 90, [string]$Name = 'boot', [string]$PadInput = '', [switch]$Play, [switch]$NoAsyncGs, [switch]$Release, [string]$Out = 'game\recomp', [string]$Shots = '')
 $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -28,6 +28,13 @@ if ($Out -ne 'game\recomp') {
     foreach ($k in $sotc.Keys) { if (-not [Environment]::GetEnvironmentVariable($k)) { Set-Item "env:$k" $sotc[$k] } }
 }
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
+# -Shots '1800,3600': the SotC runtime's own window screenshots at those vsync counts (~60/s),
+# saved to <Out>\screens (our override's frame dumper does not see the GPU renderer's output).
+if ($Shots) {
+    New-Item -ItemType Directory -Force -Path "$R\screens" | Out-Null
+    $env:PS2X_SCREENSHOT_FIELDS = $Shots
+    $env:PS2X_SCREENSHOT_DIR = "$R\screens"
+}
 $env:POP_INPUT = $PadInput
 # The override's async GS needs its GIF tap, which would bypass a runtime's own GS pipeline
 # (the SotC fork has one), so only the original setup (game\recomp) uses it.
