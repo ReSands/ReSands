@@ -4,7 +4,9 @@
 # Usage: tools\windows\rebuild.ps1          full pipeline
 #        tools\windows\rebuild.ps1 -Fast    overrides/runtime only (skips Ghidra and the recompile)
 #        tools\windows\rebuild.ps1 -Setup   one-time: runtime worktree + CMake configure, then full
-param([switch]$Fast, [switch]$Setup)
+#        add -Play to (also) build the log-free play build in build-win-play (configured on first
+#        use; PS2Recomp's verbose runtime logging costs about a third of the frame rate)
+param([switch]$Fast, [switch]$Setup, [switch]$Play)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -163,7 +165,23 @@ Stage 'Sync game overrides'
 # Overrides must be in the executable's sources, not the runtime library (upstream #264).
 & $Python -I "$Root\tools\sync_generated.py" "$Root\tools\overrides" "$RT\ps2xRuntime\src\runner" '*.cpp'
 
-Stage 'Build runtime'
-if (Invoke-Logged "$R\runtime_build.log" cmake @('--build', "$RT\build-win") -TimeoutMinutes 90) { 'BUILD FAILED'; Select-String -Path "$R\runtime_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
+$buildDir = "$RT\build-win"
+if ($Play) {
+    $buildDir = "$RT\build-win-play"
+    if (-not (Test-Path "$buildDir\build.ninja")) {
+        Stage 'Configure play build'
+        $devFlags = '/O2 /Ob2 /DNDEBUG'
+        if (Invoke-Logged "$R\runtime_configure_play.log" cmake @('-S', $RT, '-B', $buildDir, '-G', 'Ninja',
+                '-DCMAKE_BUILD_TYPE=Dev', "-DCMAKE_CXX_FLAGS_DEV=$devFlags", "-DCMAKE_C_FLAGS_DEV=$devFlags",
+                '-DCMAKE_EXE_LINKER_FLAGS_DEV=/INCREMENTAL:NO', '-DCMAKE_SHARED_LINKER_FLAGS_DEV=',
+                '-DCMAKE_MODULE_LINKER_FLAGS_DEV=', '-DCMAKE_STATIC_LINKER_FLAGS_DEV=',
+                '-DPS2X_BUILD_RECOMP=OFF', '-DPS2X_BUILD_ANALYZER=OFF', '-DPS2X_BUILD_TEST=OFF', '-DPS2X_BUILD_STUDIO=OFF',
+                '-DPS2X_ENABLE_AGRESSIVE_LOGS=OFF', '-DPS2X_ENABLE_RUNTIME_LOGS=OFF', '-DPS2X_ENABLE_IOP_RPC_TRACE=OFF')) {
+            'PLAY CONFIGURE FAILED'; Get-Content "$R\runtime_configure_play.log" -Tail 20; exit 1
+        }
+    }
+}
+Stage "Build runtime ($(Split-Path $buildDir -Leaf))"
+if (Invoke-Logged "$R\runtime_build.log" cmake @('--build', $buildDir) -TimeoutMinutes 90) { 'BUILD FAILED'; Select-String -Path "$R\runtime_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
 "build ok, errors=$((Select-String -Path "$R\runtime_build.log" -Pattern ': error').Count)"
 Stage 'Done'

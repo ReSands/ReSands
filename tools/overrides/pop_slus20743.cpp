@@ -1194,6 +1194,25 @@ namespace
         checkSpawnerFrame(rdram, ctx, "rand", a0, a1, a2, a3);
     }
 
+    // Frame-rate counter: wraps the display driver's end-of-frame flip (FUN_004B5200, slot 7)
+    // and prints frames per second every 5 s.
+    PS2Runtime::RecompiledFunction g_origFlip = nullptr;
+    void countedFlip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static uint64_t frames = 0;
+        static auto last = std::chrono::steady_clock::now();
+        ++frames;
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double>(now - last).count();
+        if (dt >= 5.0)
+        {
+            std::cerr << "[pop:fps] " << (frames / dt) << std::endl;
+            frames = 0;
+            last = now;
+        }
+        g_origFlip(rdram, ctx, runtime);
+    }
+
     void cdReadWithCompletion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_origCdRead(rdram, ctx, runtime);
@@ -1398,6 +1417,9 @@ namespace
                 runtime.replaceFunction(0x00118918u, watchedRand);
             }
         }
+        g_origFlip = runtime.lookupFunction(0x004B5200u);
+        if (g_origFlip)
+            runtime.replaceFunction(0x004B5200u, countedFlip);
         g_cdSearchFile = runtime.lookupFunction(kSceCdLayerSearchFile);
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
