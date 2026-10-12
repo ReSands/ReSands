@@ -17,6 +17,9 @@ In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) versi
 - Personal use only. The game and its source belong to Ubisoft. Original source code is not available to us.
 - Work from a legitimately owned disc (US NTSC release, serial SLUS-20743) and a legitimately owned GOG copy.
 - Never commit or redistribute the ISO, ELF, game data, texture packs or recompiled game output. Keep them out of any git repo (use `.gitignore`). Only our own tooling and glue code may be shared.
+- The PS2 disc is the base: the recomp must run from it alone, so movies come from emulating the IPU (adapt PCSX2's GPL-3.0-or-later implementation) and the game's own player runs. Assets from other versions the user owns (GameCube, Xbox, PC) are optional enhancements on top: the "ultimate version" goal (12 Oct 2026, see "Cross-version assets"). This revises the earlier "PS2 disc only" rule.
+- Unreleased prototypes may be used locally for research and reference (user decision, 12 Oct 2026). Like all game material, they stay under `game/` and never reach git.
+- Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
 ## Inputs
@@ -32,6 +35,7 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - `game/ps2/`: the downloaded `.7z`; `iso/` (the ISO); `disc/` (extracted disc contents, incl. `SLUS_207.43` and `DATA/PRINCE.BF`).
 - `game/gog/installers/`: GOG offline installer (`setup_…_181_gog_v2_(92028).exe` + `-1.bin`) and the 28547→92028 patch. Install output, if extracted on the Mac, goes in `game/gog/install/`.
 - `game/ghidra/`: Ghidra project `PoP_SLUS20743` for the PS2 ELF, plus headless logs.
+- Planned: `game/gc/`, `game/xbox/` (other retail versions), `game/proto/` (prototypes).
 
 ## Mac tool setup (done 11 Oct 2026)
 
@@ -166,11 +170,26 @@ Windows PC: building the runtime (MSVC), running and testing the game, any D3D12
 
 Remote workflow: enable Windows OpenSSH Server (Settings > Optional Features); SSH from the Mac; run Claude Code on the Windows PC for the build/test loop; VS Code Remote-SSH for editing. Windowed games do not show over SSH, so use Moonlight + Sunshine or Parsec to actually see/play the game (Windows Remote Desktop is less suited to games). Use Tailscale or another VPN for access from outside the LAN; do not expose the SSH port to the internet.
 
+## Cross-version assets ("ultimate version", started 12 Oct 2026)
+
+Goal: combine the best assets of each 2003 version (PS2, GameCube, Xbox, PC) into the recomp, inventing nothing new. Versions beyond the PS2 disc are optional; the game must still run without them.
+
+- All versions are Jade bigfiles: PS2 `DATA/PRINCE.BF` (227 MB) and PC `prince.bf` (411 MB) both start `BIG\0` version 0x25. Their first FAT table (3,308 entries from 0x44) has identical asset keys in identical order, at different offsets. So assets very likely share keys across platforms, and matching them is a key lookup, not guesswork. Not yet checked: the rest of the FAT, and the GameCube/Xbox files.
+- Asset data is converted per platform (PS2 palettised/swizzled textures for the GS, DXT on PC/Xbox, CMPR on GameCube), so each format needs a decoder.
+- Higher-resolution textures cannot go through the game's own loading: GS VRAM is 4 MB. Replace them in the renderer at draw time, keyed by the PS2 texture (same hook as the HD texture packs).
+- (unverified) The Xbox version is generally considered the best-looking console version. The PC bigfile being 1.8x the PS2 one suggests larger assets. Compare before assuming.
+- Movies: the PC's Bink movies (640x346) could become an optional source next to the IPU path, if they look better.
+- Symbol check for each new disc: `.map` files on the GameCube disc, symbol strings in `main.dol`, debug sections or a PDB in the Xbox `default.xbe`, an unstripped ELF in any prototype. Names found can be carried to the PS2 ELF with Ghidra Version Tracking.
+
 ## Renderer and DLSS notes
 
 - Render path: translate GS draw calls into modern GPU calls (D3D12 or Vulkan). This is where texture replacement hooks in and where DLSS would attach.
 - DLSS needs depth and motion vectors. The PS2 has no motion vectors; they would have to be derived from the game's own transforms. Check exactly what DLSS 5 requires when we get there (not researched).
 - Path tracing on the recomp would be a further step after DLSS; RTX Remix is the shortcut for it on the PC build.
+- Reference design: TheMoonPeople/Chronicle (Dark Cloud decomp + native SDL3/Vulkan port, https://github.com/TheMoonPeople/Chronicle). It emulates no PS2 hardware: every function that touches GS/VU/VIF/DMA/SPU2/IOP is replaced natively. Read before designing these parts:
+  - `docs/PC_PORT_PLAN.md`: replacing the VU1 path with native mesh drawing from the game's own model data (gives real 3D scenes, needed for DLSS motion vectors and for RTX Remix on the recomp); a native audio mixer that replaces the IOP sound driver instead of emulating the SPU2.
+  - `docs/DECOUPLING_PLAN.md`: fixed logic tick with interpolated presentation (each tick records a display list; frames are rendered between the last two). Blueprint for frame rates above 30 fps and for resolution independence.
+  - Caveat: Dark Cloud has full decompiled source, no threads, no movies and no streaming audio. For PoP this would be a hybrid: the recompiled game plus native replacements at the hardware boundary, each function found in Ghidra first. Open question: does PoP's engine hand VU1 clean object-space meshes and separate matrices?
 
 ## Suggested order of work
 
