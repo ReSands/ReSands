@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 
+void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
+
 namespace
 {
     void drainAsyncGs(); // async GS experiment: wait for queued GIF packets (defined below)
@@ -1178,7 +1180,8 @@ namespace
 
     // Movies (*.INT: Ubisoft logo, PoP logo, intro, cutscenes) need the IPU MPEG decoder,
     // which PS2Recomp does not emulate: the movie manager stays busy forever. Until there is
-    // a decoder, report movie files as missing so the game skips them.
+    // a decoder, report movie files as missing so the game skips them. pop_movies.cpp plays
+    // the Bink version of a movie instead when another version's files are present.
     constexpr bool kSkipMovies = true;
     PS2Runtime::RecompiledFunction g_cdSearchFile = nullptr;
     void cdSearchFileSkippingMovies(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1555,6 +1558,7 @@ namespace
         g_cdSearchFile = runtime.lookupFunction(kSceCdLayerSearchFile);
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
+        installPopMovies(runtime);
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);

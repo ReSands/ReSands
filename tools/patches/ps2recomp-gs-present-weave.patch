@@ -1,0 +1,17 @@
+diff --git a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+index 44be762..a96fd20 100644
+--- a/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_cpu_backend.cpp
+@@ -1860,7 +1860,11 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
+     PresentationFrame result{};
+     const GSPmodeState pmode = decodePmode(request.pmode);
+     const GSSmode2State smode2 = decodeSMode2(request.smode2);
+-    const bool fieldMode = smode2.interlaced && !smode2.frameMode;
++    // Interlaced field mode: show the whole frame buffer (weave), like the SotC runtime's
++    // presenter. Games that draw full-height frames (PoP) otherwise get scanlines and a
++    // one-line bob every vsync. PS2X_FIELD_BOB=1 restores the per-field presentation.
++    static const bool fieldBob = [] { const char *v = std::getenv("PS2X_FIELD_BOB"); return v && *v == '1'; }();
++    const bool fieldMode = fieldBob && smode2.interlaced && !smode2.frameMode;
+     const bool oddField = (request.vsyncTick & 1ull) != 0ull;
+     const GSFrameReg displayFrame1 = decodeDisplayFrame(request.dispfb1);
+     const GSFrameReg displayFrame2 = decodeDisplayFrame(request.dispfb2);
