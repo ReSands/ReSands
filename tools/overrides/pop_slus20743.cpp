@@ -978,6 +978,19 @@ namespace
         SET_GPR_U32(ctx, 2, static_cast<uint32_t>(*state >> 32) & 0x7FFFFFFFu);
     }
 
+    // FUN_004A4D00: "while (bc2t) ;", the wait for VU1 to go idle before the next VIF1 kick
+    // (0x4A2C80, after its DMA/VIF1 waits and before the GIF one). On the EE, the COP2 branch
+    // condition is VU1 running. PS2Recomp translates bc2t as VU0's status flag register bit 0
+    // (the Z flag), so once VU0 maths leaves Z set the loop never ends (froze the first in-game
+    // cutscene after CINE_010). It is the game's only bc2t. VU1 is idle here as far as the
+    // game can tell (the runtimes run VU1 work in order), so return at once.
+    void vu1IdleWait(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        (void)rdram;
+        (void)ctx;
+        (void)runtime;
+    }
+
     // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
     // the pad in analog mode, which PoP does not, and PoP does not walk with the D-pad. While an
     // arrow key is held, this sets the whole pad state (stick plus the runtime's button keys,
@@ -1610,6 +1623,7 @@ namespace
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
         runtime.replaceFunction(0x00118918u, newlibRand);
+        runtime.replaceFunction(0x004A4D00u, vu1IdleWait);
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);
