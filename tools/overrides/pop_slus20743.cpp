@@ -991,6 +991,27 @@ namespace
         (void)runtime;
     }
 
+    // Debug (POP_TEXLOG=1): PS2_Texture_Load (0x4B4E80) arguments, to find where the engine's
+    // texture entry (TEX_tdst_Data, a1) and file description (a2) keep the asset key.
+    PS2Runtime::RecompiledFunction g_origTextureLoad = nullptr;
+    void logTextureLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static int logged = 0;
+        if (logged < 12)
+        {
+            ++logged;
+            const uint32_t data = getRegU32(ctx, 5), desc = getRegU32(ctx, 6), index = getRegU32(ctx, 7);
+            std::fprintf(stderr, "[pop:tex] load index=%u data=0x%x desc=0x%x\n  data:", index, data, desc);
+            for (uint32_t i = 0; data && i < 24; ++i)
+                std::fprintf(stderr, " %08x", guestU32(rdram, data + i * 4));
+            std::fprintf(stderr, "\n  desc:");
+            for (uint32_t i = 0; desc && i < 36; ++i)
+                std::fprintf(stderr, " %08x", guestU32(rdram, desc + i * 4));
+            std::fprintf(stderr, "\n");
+        }
+        g_origTextureLoad(rdram, ctx, runtime);
+    }
+
     // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
     // the pad in analog mode, which PoP does not, and PoP does not walk with the D-pad. While an
     // arrow key is held, this sets the whole pad state (stick plus the runtime's button keys,
@@ -1624,6 +1645,12 @@ namespace
         installPopMovies(runtime);
         runtime.replaceFunction(0x00118918u, newlibRand);
         runtime.replaceFunction(0x004A4D00u, vu1IdleWait);
+        if (const char *v = std::getenv("POP_TEXLOG"); v && *v == '1')
+        {
+            g_origTextureLoad = runtime.lookupFunction(0x004B4E80u);
+            if (g_origTextureLoad)
+                runtime.replaceFunction(0x004B4E80u, logTextureLoad);
+        }
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
         g_origCdRead = runtime.lookupFunction(kSceCdRead);
