@@ -68,6 +68,12 @@ if (( ! FAST )); then
     grep 'ExportPS2Functions.java> Exported [0-9]' game/ghidra/headless_export.log | sed 's/.*> //'
     # Ghidra reports the path with the casing it was launched through; keep one spelling.
     sed -i '' "s|/Users/jon/projects/POP_Decomp|$ROOT|g" $R/config.toml
+    # Recompile the game's own libvu0 instead of PS2Recomp's C++ stand-ins: several of those
+    # are wrong (InnerProduct and Normalize include w), and the real code is ground truth.
+    # The recompiler also stubs by name (its built-in runtime call list), so rename them too.
+    sed -i '' '/^  "sceVu0[A-Za-z0-9]*@0x[0-9A-F]*",$/d' $R/config.toml
+    sed -i '' 's/[[:<:]]sceVu0/pop_sceVu0/g; s/[[:<:]]_sceVu0/pop__sceVu0/g' $R/functions.csv $R/config.toml
+    echo "libvu0: $(grep -c '^pop_sceVu0' $R/functions.csv || true) functions renamed, $(grep -c '"sceVu0' $R/config.toml || true) stubs left"
 
     stage "Recompile"
     rm -rf $R/output

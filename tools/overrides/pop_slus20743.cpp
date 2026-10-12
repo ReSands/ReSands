@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -364,6 +365,23 @@ namespace
                           static_cast<unsigned>(t & 0x3FFF), static_cast<unsigned>((t >> 14) & 0x3F), static_cast<unsigned>((t >> 20) & 0x3F),
                           static_cast<unsigned>((t >> 26) & 0xF), static_cast<unsigned>((t >> 30) & 0xF), static_cast<unsigned>((t >> 37) & 0x3FFF));
             ++combos[key];
+            // Raw dump of the first two 3D triangle-strip packets (window 0), to read the VU1 output.
+            static int stripDumps = 0;
+            if ((prim & 7u) == 4u && windowsDone == 0 && stripDumps < 2)
+            {
+                ++stripDumps;
+                std::cerr << "[pop:raw3d] packet size=" << size << " prim=" << hex(prim) << std::endl;
+                for (uint32_t q = 0; q + 16u <= size && q < 16u * 40u; q += 16u)
+                {
+                    uint64_t lo, hi;
+                    std::memcpy(&lo, data + q, 8);
+                    std::memcpy(&hi, data + q + 8, 8);
+                    char line[80];
+                    std::snprintf(line, sizeof(line), "[pop:raw3d] %04x: %016llx %016llx", q,
+                                  static_cast<unsigned long long>(hi), static_cast<unsigned long long>(lo));
+                    std::cerr << line << std::endl;
+                }
+            }
             if ((prim & 7u) == 6u && ((prim >> 4) & 1u) && ((tex0[c] >> 26) & 0xF) == 9u)
             {
                 bigTex0 = tex0[c];
@@ -458,6 +476,21 @@ namespace
             std::cerr << std::endl;
             for (const auto &[k, n] : combos)
                 std::cerr << "[pop:gif] prims " << n << "x: " << k << std::endl;
+            if (windowsDone == 0)
+            {
+                // VU1 code + data, mid-scene, for offline analysis of the 3D transform.
+                if (FILE *f = std::fopen("../../recomp/screens/vu1data_3d.bin", "wb"))
+                {
+                    std::fwrite(g_runtime->memory().getVU1Data(), 1, PS2_VU1_DATA_SIZE, f);
+                    std::fclose(f);
+                }
+                if (FILE *f = std::fopen("../../recomp/screens/vu1code_3d.bin", "wb"))
+                {
+                    std::fwrite(g_runtime->memory().getVU1Code(), 1, PS2_VU1_CODE_SIZE, f);
+                    std::fclose(f);
+                }
+                std::cerr << "[pop:gif] dumped VU1 code/data" << std::endl;
+            }
             if (bigTex0 != 0)
             {
                 // VRAM at the end of the window, with the 512-wide texture's TEX0, for tools/gsvram.py.
@@ -614,6 +647,144 @@ namespace
     // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,down@100" presses
     // each button for 0.3 s at that many seconds after boot. Between presses the real keyboard /
     // gamepad is used.
+    // VU0 macro self-test (once, at the first watched call): run the game's own recompiled
+    // libvu0 routines on known inputs and compare with a C++ reference. Matrices are 4 rows of
+    // 4 floats; libvu0 treats vectors as rows: ApplyMatrix(v0, m, v1) gives v0 = v1 * m,
+    // MulMatrix(m0, m1, m2) gives m0 = m2 * m1 (m1 applied first).
+    constexpr bool kVu0SelfTest = true;
+    void callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t fn,
+                   uint32_t a0, uint32_t a1, uint32_t a2, float f12 = 0.0f)
+    {
+        R5900Context saved = *ctx;
+        std::memcpy(&ctx->f[12], &f12, sizeof(f12));
+        SET_GPR_U32(ctx, 4, a0);
+        SET_GPR_U32(ctx, 5, a1);
+        SET_GPR_U32(ctx, 6, a2);
+        SET_GPR_U32(ctx, 31, 0x00100008u);
+        ctx->pc = fn;
+        runtime->lookupFunction(fn)(rdram, ctx, runtime);
+        *ctx = saved;
+    }
+    void maybeVu0SelfTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static bool done = false;
+        if (!kVu0SelfTest || done)
+            return;
+        done = true;
+        const uint32_t buf = runtime->guestMalloc(0x200, 16);
+        auto put = [&](uint32_t addr, const float *v, int n) { std::memcpy(rdram + addr, v, n * 4); };
+        auto get = [&](uint32_t addr, float *v, int n) { std::memcpy(v, rdram + addr, n * 4); };
+        const uint32_t mA = buf, mB = buf + 0x40, mOut = buf + 0x80, vIn = buf + 0xC0, vOut = buf + 0xD0;
+        const float A[16] = {1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 10, 0, 1, -2, 3, 1};
+        const float B[16] = {2, 0, 1, 0, 0, 3, 0, 0, 1, 0, 2, 0, -1, 4, 0.5f, 1};
+        const float V[4] = {1, 2, 3, 1};
+        put(mA, A, 16);
+        put(mB, B, 16);
+        put(vIn, V, 4);
+        auto rowTimes = [](const float *v, const float *m, float *out)
+        {
+            for (int j = 0; j < 4; ++j)
+                out[j] = v[0] * m[0 * 4 + j] + v[1] * m[1 * 4 + j] + v[2] * m[2 * 4 + j] + v[3] * m[3 * 4 + j];
+        };
+        auto report = [](const char *name, const float *got, const float *want, int n)
+        {
+            bool ok = true;
+            for (int i = 0; i < n; ++i)
+                ok = ok && std::fabs(got[i] - want[i]) < 1e-3f;
+            std::cerr << "[pop:vu0test] " << name << (ok ? " OK" : " WRONG") << " got";
+            for (int i = 0; i < n; ++i)
+                std::cerr << " " << got[i];
+            if (!ok)
+            {
+                std::cerr << " want";
+                for (int i = 0; i < n; ++i)
+                    std::cerr << " " << want[i];
+            }
+            std::cerr << std::endl;
+        };
+        float got[16], want[16];
+        callGuest(rdram, ctx, runtime, 0x004CAF00u, vOut, mA, vIn); // sceVu0ApplyMatrix
+        get(vOut, got, 4);
+        rowTimes(V, A, want);
+        report("ApplyMatrix", got, want, 4);
+        // MulMatrix(m0, m1, m2) is m0 = m1 x m2 in Sony's column-vector convention, which with
+        // rows as stored here means the rows of m2 transformed by m1. (PS2Recomp's C++ stub had
+        // this backwards.)
+        callGuest(rdram, ctx, runtime, 0x004CAF30u, mOut, mA, mB); // sceVu0MulMatrix
+        get(mOut, got, 16);
+        for (int r = 0; r < 4; ++r)
+            rowTimes(B + r * 4, A, want + r * 4);
+        report("MulMatrix(out,A,B) = A x B (column vectors)", got, want, 16);
+        callGuest(rdram, ctx, runtime, 0x004CB000u, mOut, mA, 0); // sceVu0TransposeMatrix
+        get(mOut, got, 16);
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                want[r * 4 + c] = A[c * 4 + r];
+        report("TransposeMatrix", got, want, 16);
+        callGuest(rdram, ctx, runtime, 0x004CB228u, mOut, 0, 0); // sceVu0UnitMatrix
+        get(mOut, got, 16);
+        for (int i = 0; i < 16; ++i)
+            want[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+        report("UnitMatrix", got, want, 16);
+
+        // InversMatrix(out, R): libvu0 assumes a rotation + translation, so test with RotZ + T.
+        {
+            const float cz = std::cos(0.7f), sz = std::sin(0.7f);
+            const float RT[16] = {cz, sz, 0, 0, -sz, cz, 0, 0, 0, 0, 1, 0, 5, -3, 2, 1};
+            put(mA, RT, 16);
+            callGuest(rdram, ctx, runtime, 0x004CB048u, mOut, mA, 0);
+            get(mOut, got, 16);
+            float prod[16];
+            for (int r = 0; r < 4; ++r)
+                rowTimes(RT + r * 4, got, prod + r * 4);
+            for (int i = 0; i < 16; ++i)
+                want[i] = (i % 5 == 0) ? 1.0f : 0.0f;
+            report("InversMatrix (RT*inv)", prod, want, 16);
+            put(mA, A, 16);
+        }
+
+        // Normalize(v0, v1): xyz scaled to unit length.
+        const float N[4] = {3, 4, 12, 7};
+        put(vIn, N, 4);
+        callGuest(rdram, ctx, runtime, 0x004CAFC0u, vOut, vIn, 0);
+        get(vOut, got, 4);
+        want[0] = 3 / 13.0f; want[1] = 4 / 13.0f; want[2] = 12 / 13.0f; want[3] = got[3];
+        report("Normalize xyz", got, want, 3);
+
+        // DivVector(v0, v1, q): v1 / q.
+        put(vIn, N, 4);
+        callGuest(rdram, ctx, runtime, 0x004CB0B8u, vOut, vIn, 0, 4.0f);
+        get(vOut, got, 4);
+        for (int i = 0; i < 4; ++i)
+            want[i] = N[i] / 4.0f;
+        report("DivVector /4", got, want, 4);
+
+        // InnerProduct(v0, v1) -> $f0.
+        {
+            R5900Context saved = *ctx;
+            put(vIn, N, 4);
+            put(vOut, V, 4);
+            SET_GPR_U32(ctx, 4, vIn);
+            SET_GPR_U32(ctx, 5, vOut);
+            SET_GPR_U32(ctx, 31, 0x00100008u);
+            ctx->pc = 0x004CAF98u;
+            runtime->lookupFunction(0x004CAF98u)(rdram, ctx, runtime);
+            float f0;
+            std::memcpy(&f0, &ctx->f[0], sizeof(f0));
+            *ctx = saved;
+            want[0] = 3 * 1 + 4 * 2 + 12 * 3;
+            report("InnerProduct xyz", &f0, want, 1);
+        }
+
+        // RotMatrixZ(m0, m1, rz): m1 followed by a rotation of rz about Z (row vectors).
+        callGuest(rdram, ctx, runtime, 0x004CB228u, mB, 0, 0); // unit matrix into mB
+        callGuest(rdram, ctx, runtime, 0x004CB2C8u, mOut, mB, 0, 0.5f);
+        get(mOut, got, 16);
+        const float c = std::cos(0.5f), sn = std::sin(0.5f);
+        const float Rz[16] = {c, sn, 0, 0, -sn, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+        report("RotMatrixZ(0.5) (either sign convention shown)", got, Rz, 16);
+    }
+
     void maybeScriptedInput()
     {
         struct Press
@@ -673,6 +844,7 @@ namespace
     template <size_t I>
     void watchedCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        maybeVu0SelfTest(rdram, ctx, runtime);
         maybeDumpFrame(runtime);
         maybeSampleRenderPath(runtime);
         maybeScriptedInput();
