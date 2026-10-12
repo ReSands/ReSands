@@ -215,8 +215,20 @@ public class PoPMarkDataRanges extends GhidraScript {
     // function owns, preceded by zero padding, where the code before the padding ended with
     // jr $ra, j or an unconditional b (possibly followed by its delay slot). 0x41CD00 is one.
     private void createAfterPaddingFunctions() throws Exception {
-        int created = 0, failed = 0;
+        int created = 0, failed = 0, rejected = 0, trimmed = 0;
         MemoryBlock text = currentProgram.getMemory().getBlock(".text");
+        // Re-runs: trim thunks from an earlier version of this pass (see trimToEntryRange).
+        FunctionIterator fit = currentProgram.getFunctionManager().getFunctions(
+            new AddressSet(text.getStart(), text.getEnd()), true);
+        List<Function> all = new ArrayList<>();
+        while (fit.hasNext()) {
+            all.add(fit.next());
+        }
+        for (Function f : all) {
+            if (trimToEntryRange(f)) {
+                trimmed++;
+            }
+        }
         long start = text.getStart().getOffset() + 8, end = text.getEnd().getOffset() - 3;
         for (long a = start; a <= end; a += 8) {
             Address addr = toAddr(a);
@@ -233,22 +245,77 @@ public class PoPMarkDataRanges extends GhidraScript {
             if (getInstructionAt(addr) == null) {
                 disassemble(addr);
             }
-            if (createFunction(addr, null) != null) {
-                created++;
-            } else {
+            Function f = createFunction(addr, null);
+            if (f != null && trimToEntryRange(f)) {
+                trimmed++;
+            }
+            if (f == null) {
                 failed++;
+            } else if (!allValidEe(f)) {
+                // Jump tables and VU/DMA packets also sit after functions: undo.
+                currentProgram.getFunctionManager().removeFunction(addr);
+                clearListing(f.getBody());
+                rejected++;
+            } else {
+                created++;
             }
         }
-        println("After-padding functions: " + created + " created, " + failed + " failed");
+        println("After-padding functions: " + created + " created, " + rejected + " rejected as data, "
+            + failed + " failed, " + trimmed + " far-spanning bodies trimmed");
     }
 
     private long word(long a) throws Exception {
         return getInt(toAddr(a)) & 0xFFFFFFFFL;
     }
 
-    // jr $ra, j target, or b (beq $zero,$zero).
+    // Small thunks that jump into a distant shared tail get that tail added to their body,
+    // and the export then emits everything from the entry to the tail (0x16AD80: 16 bytes of
+    // code, 96 KB of C++, five copies, a 25-minute link). Keep only the range holding the
+    // entry; the jump then leaves the function, which the runtime dispatches by address.
+    private boolean trimToEntryRange(Function f) throws Exception {
+        ghidra.program.model.address.AddressSetView body = f.getBody();
+        long span = body.getMaxAddress().getOffset() - body.getMinAddress().getOffset() + 1;
+        if (body.getNumAddressRanges() < 2 || span <= 16384 || span <= 4 * body.getNumAddresses()) {
+            return false;
+        }
+        ghidra.program.model.address.AddressRange first = body.getRangeContaining(f.getEntryPoint());
+        f.setBody(new AddressSet(first.getMinAddress(), first.getMaxAddress()));
+        println("Trimmed " + f.getName() + " body to " + first);
+        return true;
+    }
+
+    // jr $ra, or j target. (Not b: 0x10000000 is also a common DMA tag.)
     private static boolean endsFlow(long insn) {
-        return insn == 0x03E00008L || (insn >>> 26) == 2 || (insn >>> 16) == 0x1000L;
+        return insn == 0x03E00008L || (insn >>> 26) == 2;
+    }
+
+    // Rejects bodies with a SPECIAL-class word whose function field the R5900 treats as
+    // reserved (what the recompiler refuses). Checks every word of the body, including bytes
+    // Ghidra left undecoded. Only for functions this pass creates.
+    // The export may size a function up to the next one, so check to there (max 4 KB).
+    private boolean allValidEe(Function f) throws Exception {
+        long start = f.getEntryPoint().getOffset();
+        long end = f.getBody().getMaxAddress().getOffset() + 1;
+        Function next = getFunctionAfter(f.getEntryPoint());
+        if (next != null) {
+            end = Math.max(end, next.getEntryPoint().getOffset());
+        }
+        end = Math.min(end, start + 4096);
+        {
+            for (long a = start; a < end; a += 4) {
+                long insn = word(a);
+                if ((insn >>> 26) != 0) {
+                    continue;
+                }
+                int funct = (int) (insn & 0x3F);
+                if (funct == 0x01 || funct == 0x05 || funct == 0x0E || funct == 0x15
+                    || (funct >= 0x1C && funct <= 0x1F) || funct == 0x35 || funct == 0x37
+                    || funct == 0x39 || funct == 0x3D) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     // addiu $sp,$sp,-N in the first two instructions, or a leaf that returns

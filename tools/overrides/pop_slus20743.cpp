@@ -761,6 +761,49 @@ namespace
         g_cdSearchFile(rdram, ctx, runtime);
     }
 
+    // DEBUG (boot 54+): FUN_004547C0 (particle spawner, frame 0x180, $ra saved at sp+0xB0)
+    // returns to a float. Watch its saved $ra slot across its calls to the vec3 helper
+    // FUN_00495D60 and rand(), and report the first call that changes it.
+    constexpr bool kWatchParticleFrame = true;
+    PS2Runtime::RecompiledFunction g_origSpawner = nullptr, g_origVecMadd = nullptr, g_origRand = nullptr;
+    uint32_t g_spawnerRaSlot = 0, g_spawnerRa = 0;
+    void checkSpawnerFrame(uint8_t *rdram, R5900Context *ctx, const char *who, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+    {
+        if (!g_spawnerRaSlot)
+            return;
+        const uint32_t now = guestU32(rdram, g_spawnerRaSlot);
+        if (now == g_spawnerRa)
+            return;
+        std::cerr << "[pop:watch] spawner saved $ra at " << hex(g_spawnerRaSlot) << " changed " << hex(g_spawnerRa)
+                  << " -> " << hex(now) << " after " << who << "(a0=" << hex(a0) << " a1=" << hex(a1) << " a2=" << hex(a2)
+                  << " a3=" << hex(a3) << ") called from " << hex(getRegU32(ctx, 31)) << std::endl;
+        g_spawnerRa = now;
+    }
+    void watchedSpawner(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t outerSlot = g_spawnerRaSlot, outerRa = g_spawnerRa;
+        g_spawnerRaSlot = getRegU32(ctx, 29) - 0x180u + 0xB0u;
+        g_spawnerRa = getRegU32(ctx, 31);
+        std::cerr << "[pop:watch] spawner enter sp=" << hex(getRegU32(ctx, 29)) << " ra=" << hex(g_spawnerRa)
+                  << " a0=" << hex(getRegU32(ctx, 4)) << " a1=" << hex(getRegU32(ctx, 5)) << " a2=" << hex(getRegU32(ctx, 6))
+                  << " a3=" << hex(getRegU32(ctx, 7)) << " t0=" << hex(getRegU32(ctx, 8)) << std::endl;
+        g_origSpawner(rdram, ctx, runtime);
+        g_spawnerRaSlot = outerSlot;
+        g_spawnerRa = outerRa;
+    }
+    void watchedVecMadd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5), a2 = getRegU32(ctx, 6), a3 = getRegU32(ctx, 7);
+        g_origVecMadd(rdram, ctx, runtime);
+        checkSpawnerFrame(rdram, ctx, "vecMadd", a0, a1, a2, a3);
+    }
+    void watchedRand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t a0 = getRegU32(ctx, 4), a1 = getRegU32(ctx, 5), a2 = getRegU32(ctx, 6), a3 = getRegU32(ctx, 7);
+        g_origRand(rdram, ctx, runtime);
+        checkSpawnerFrame(rdram, ctx, "rand", a0, a1, a2, a3);
+    }
+
     void cdReadWithCompletion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_origCdRead(rdram, ctx, runtime);
@@ -952,6 +995,18 @@ namespace
         runtime.replaceFunction(0x00108b80u, endOfHeap);
 
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdLayerSearchFile, "sceCdSearchFile");
+        if (kWatchParticleFrame)
+        {
+            g_origSpawner = runtime.lookupFunction(0x004547C0u);
+            g_origVecMadd = runtime.lookupFunction(0x00495D60u);
+            g_origRand = runtime.lookupFunction(0x00118918u);
+            if (g_origSpawner && g_origVecMadd && g_origRand)
+            {
+                runtime.replaceFunction(0x004547C0u, watchedSpawner);
+                runtime.replaceFunction(0x00495D60u, watchedVecMadd);
+                runtime.replaceFunction(0x00118918u, watchedRand);
+            }
+        }
         g_cdSearchFile = runtime.lookupFunction(kSceCdLayerSearchFile);
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
