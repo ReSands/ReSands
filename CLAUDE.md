@@ -35,7 +35,7 @@ All game material lives under `game/`, which is git-ignored. Never move game fil
 - `game/ps2/`: the downloaded `.7z`; `iso/` (the ISO); `disc/` (extracted disc contents, incl. `SLUS_207.43` and `DATA/PRINCE.BF`).
 - `game/gog/installers/`: GOG offline installer (`setup_…_181_gog_v2_(92028).exe` + `-1.bin`) and the 28547→92028 patch. Install output, if extracted on the Mac, goes in `game/gog/install/`.
 - `game/ghidra/`: Ghidra project `PoP_SLUS20743` for the PS2 ELF, plus headless logs.
-- `game/gc/` (GameCube: `iso/`, `disc/`, `analysis/`), `game/proto/` (PS2 prototype). Planned: `game/xbox/`.
+- `game/gc/` (GameCube), `game/xbox/` (Xbox), each with `iso/`, `disc/`, `analysis/`; `game/proto/` (PS2 prototype).
 
 ## Mac tool setup (done 11 Oct 2026)
 
@@ -180,6 +180,9 @@ Goal: combine the best assets of each 2003 version (PS2, GameCube, Xbox, PC) int
 - (unverified) The Xbox version is generally considered the best-looking console version. The PC bigfile being 1.8x the PS2 one suggests larger assets. Compare before assuming.
 - Movies: the PC's Bink movies (640x346) could become an optional source next to the IPU path, if they look better.
 - GameCube (12 Oct 2026): US Rev 1, `GPTE41`, NKit image in `game/gc/iso/`, files extracted to `game/gc/disc/` with `game/gc/analysis/gcm.py <iso> <outdir>` (reads the GCM file table directly). No `.map` file, and `main.dol` (4.0 MB) has no symbols (47 source filenames in strings). Movies are **Bink**, like the PC; the `VIS_*.int` files are byte-identical to the PC ones. It has extra `CINE_901`–`905` movies and its own `pop1.dol` (the bonus original Prince of Persia). `prince.bf` (241 MB) is a Jade BIG v0x25 too, with 1,602-entry FAT tables; 1,598 of its first table's keys are in the PS2 file.
+- Xbox (12 Oct 2026): XISO in `game/xbox/iso/`, files in `game/xbox/disc/` via `game/xbox/analysis/xiso.py <iso> <outdir>`. `default.xbe` built 20 Oct 2003 from `e:\builds\v167\xbox\...` (the PC exe is the later v181a), XDK 1.0.5558 libraries (D3D8, DSOUND, WMADEC, XONLINE, Bink). **No symbols**: no PDB, 7 RTTI names, only DARE sound-engine source paths. Bonus `POP1/` and `POP2/` (Prince of Persia 1 and 2, own XBEs).
+- Movies compared (`cine_010`, 95 s, all 640x346 Bink at 29.97 fps): **Xbox best**, 6.6 Mbit/s with 20 audio tracks = 5 languages x 5.1 surround (2+1+1+2 channels); GameCube 4.5 and PC 3.9 Mbit/s, 5 stereo tracks; PS2 uses its own format (IPU). Xbox also has `ATTRACT.int` (640x480), per-language logo/intro/loading movies, and the making-of documentary (`CINE_90x0-2`, the same files as the GameCube's `CINE_901-905`, three language variants).
+- Bigfiles (`game/xbox/analysis/bigcmp.py`; file count at 0x08, then (offset, key) pairs from 0x44, each entry starts with a u32 size): PS2, Xbox and PC all have the same 3,308 keys. GameCube packs differently (1,602 keys, 1,598 shared). The prototype has 874, all in retail. Totals: PS2 195 MB, GameCube 209, Xbox 332, PC 377. The growth is in ~280 large world packs (keys `ff0…`, PS2 ~2 MB, Xbox ~3.5, PC ~4.3, stored in 128 KB compressed blocks): PC > Xbox > GameCube ≈ PS2. Most other keys are the same size everywhere. Sizes are compressed, so real texture resolution needs decoding.
 - Symbol check for each new disc: `.map` files on the GameCube disc, symbol strings in `main.dol`, debug sections or a PDB in the Xbox `default.xbe`, an unstripped ELF in any prototype. Names found can be carried to the PS2 ELF with Ghidra Version Tracking.
 
 ## PS2 prototype, 19 Aug 2003 (examined 12 Oct 2026)
