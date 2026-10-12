@@ -725,8 +725,12 @@ namespace
     }
     // GS rasterizer self-test (once, 35 s in): draw a red untextured sprite into FBP 0 with
     // depth/alpha tests off through the normal GIF path, then read the pixel back from VRAM.
+    // Off: it drew a visible red square once per run and overwrote GS drawing state.
+    constexpr bool kGsSelfTest = false;
     void maybeGsSelfTest(PS2Runtime *runtime)
     {
+        if (!kGsSelfTest)
+            return;
         drainAsyncGs();
         static auto when = std::chrono::steady_clock::now() + std::chrono::seconds(35);
         static bool done = false;
@@ -991,25 +995,58 @@ namespace
         (void)runtime;
     }
 
-    // Debug (POP_TEXLOG=1): PS2_Texture_Load (0x4B4E80) arguments, to find where the engine's
-    // texture entry (TEX_tdst_Data, a1) and file description (a2) keep the asset key.
-    PS2Runtime::RecompiledFunction g_origTextureLoad = nullptr;
-    void logTextureLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    // ---- Texture identity: which asset (bigfile key) is in GS memory at which address ----
+    // PS2_Texture_Load(display, TEX_tdst_Data *data, TEX_tdst_File_Desc *desc, index) 0x4B4E80
+    // registers texture `index` with the GS texture cache; the first word of `data` is the
+    // texture's bigfile key. CJadeTextureManager::LoadTexture(manager, index, ...) 0x4B3840
+    // uploads it when needed; the manager (a0, normally 0x70000050 in scratchpad) starts with a
+    // pointer to 0x50-byte slots, and slot +0x18 is the GS block address the draws use as TEX0.TBP0
+    // (+4/+6 width/height, +0x1C bits per pixel). For high-res texture replacement.
+    struct GsTexture
     {
+        uint32_t key = 0;
+        uint16_t width = 0, height = 0;
+        uint8_t bpp = 0;
+    };
+    std::unordered_map<uint32_t, uint32_t> g_textureKeys;   // texture index -> bigfile key
+    std::unordered_map<uint32_t, GsTexture> g_gsTextures;  // GS block address -> texture
+    PS2Runtime::RecompiledFunction g_origTextureLoad = nullptr, g_origLoadTexture = nullptr;
+    bool textureLog()
+    {
+        static const bool on = [] { const char *v = std::getenv("POP_TEXLOG"); return v && *v == '1'; }();
+        return on;
+    }
+
+    void textureLoadMapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t data = getRegU32(ctx, 5), index = getRegU32(ctx, 7);
+        if (data)
+            g_textureKeys[index] = guestU32(rdram, data);
+        g_origTextureLoad(rdram, ctx, runtime);
+    }
+
+    void loadTextureMapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t manager = getRegU32(ctx, 4), index = getRegU32(ctx, 5); // before the call reuses them
+        g_origLoadTexture(rdram, ctx, runtime);
+        const auto key = g_textureKeys.find(index);
+        if (key == g_textureKeys.end())
+            return;
+        const uint32_t slot = guestU32(rdram, manager) + index * 0x50u; // manager +0: slot array
+        const uint32_t tbp = guestU32(rdram, slot + 0x18u) & 0x3FFFu;
+        GsTexture &t = g_gsTextures[tbp];
+        const bool changed = t.key != key->second;
+        t.key = key->second;
+        t.width = static_cast<uint16_t>(guestU32(rdram, slot + 4u));
+        t.height = static_cast<uint16_t>(guestU32(rdram, slot + 4u) >> 16);
+        t.bpp = static_cast<uint8_t>(guestU32(rdram, slot + 0x1Cu));
         static int logged = 0;
-        if (logged < 12)
+        if (textureLog() && changed && logged < 400)
         {
             ++logged;
-            const uint32_t data = getRegU32(ctx, 5), desc = getRegU32(ctx, 6), index = getRegU32(ctx, 7);
-            std::fprintf(stderr, "[pop:tex] load index=%u data=0x%x desc=0x%x\n  data:", index, data, desc);
-            for (uint32_t i = 0; data && i < 24; ++i)
-                std::fprintf(stderr, " %08x", guestU32(rdram, data + i * 4));
-            std::fprintf(stderr, "\n  desc:");
-            for (uint32_t i = 0; desc && i < 36; ++i)
-                std::fprintf(stderr, " %08x", guestU32(rdram, desc + i * 4));
-            std::fprintf(stderr, "\n");
+            std::fprintf(stderr, "[pop:tex] tbp=0x%04x key=%08x %ux%u %ubpp index=%u\n", tbp, t.key, t.width, t.height,
+                         t.bpp, index);
         }
-        g_origTextureLoad(rdram, ctx, runtime);
     }
 
     // Arrow keys as the left stick. The runtime only maps WASD to the stick once the game puts
@@ -1645,11 +1682,12 @@ namespace
         installPopMovies(runtime);
         runtime.replaceFunction(0x00118918u, newlibRand);
         runtime.replaceFunction(0x004A4D00u, vu1IdleWait);
-        if (const char *v = std::getenv("POP_TEXLOG"); v && *v == '1')
+        g_origTextureLoad = runtime.lookupFunction(0x004B4E80u);
+        g_origLoadTexture = runtime.lookupFunction(0x004B3840u);
+        if (g_origTextureLoad && g_origLoadTexture)
         {
-            g_origTextureLoad = runtime.lookupFunction(0x004B4E80u);
-            if (g_origTextureLoad)
-                runtime.replaceFunction(0x004B4E80u, logTextureLoad);
+            runtime.replaceFunction(0x004B4E80u, textureLoadMapped);
+            runtime.replaceFunction(0x004B3840u, loadTextureMapped);
         }
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdDiskReady, "sceCdDiskReady");
 
