@@ -10,7 +10,7 @@
 #        -RecompSrc / -Out select another PS2Recomp checkout and output folder, e.g.
 #        -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc (the pop-sotc setup)
 param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release,
-      [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp')
+      [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp', [string]$Vu1 = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -184,6 +184,20 @@ if ($Play) {
             'PLAY CONFIGURE FAILED'; Get-Content "$R\runtime_configure_play.log" -Tail 20; exit 1
         }
     }
+}
+# -Vu1 <dir>: compile the VU1 microcode captured in <dir> (PS2X_VU1_CAPTURE, see boot.ps1 -Env) to C++
+# with the runtime's vu1_recomp tool, into src\vu1_generated (the runner builds it if present; needs a
+# PS2Recomp with that CMake hook, e.g. pop-sotc 77706cd+).
+if ($Vu1) {
+    Stage 'Compile captured VU1 microcode'
+    & $Git -C $RT checkout -q --detach (& $Git -C $RecompSrc rev-parse HEAD)
+    if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=ON', '-DBUILD_TESTING=OFF')) { 'VU1 CONFIGURE FAILED'; exit 1 }
+    if (Invoke-Logged "$R\vu1_tool_build.log" cmake @('--build', $buildDir, '--target', 'vu1_recomp')) { 'VU1 TOOL BUILD FAILED'; Select-String -Path "$R\vu1_tool_build.log.out" -Pattern 'error' | Select-Object -First 10; exit 1 }
+    $tool = Get-ChildItem $buildDir -Recurse -Filter vu1_recomp.exe | Select-Object -First 1
+    if (Invoke-Logged "$R\vu1_recomp.log" $tool.FullName @($Vu1, "$RT\ps2xRuntime\src\vu1_generated")) { 'VU1 RECOMP FAILED'; Get-Content "$R\vu1_recomp.log.err" -Tail 10; exit 1 }
+    Get-Content "$R\vu1_recomp.log.out" -Tail 12
+    "images: $((Get-ChildItem "$Vu1\vu1_*.bin").Count), generated files: $((Get-ChildItem "$RT\ps2xRuntime\src\vu1_generated\*.cpp").Count)"
+    if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF')) { 'VU1 RECONFIGURE FAILED'; exit 1 }
 }
 Stage "Build runtime ($(Split-Path $buildDir -Leaf))"
 if (Invoke-Logged "$R\runtime_build.log" cmake @('--build', $buildDir) -TimeoutMinutes 90) { 'BUILD FAILED'; Select-String -Path "$R\runtime_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
