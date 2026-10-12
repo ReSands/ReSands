@@ -291,7 +291,7 @@ namespace
     // Driven from the instrumented kernel calls, which run constantly. ExportImage is
     // CPU-only, so this is safe off the render thread.
     constexpr bool kFrameDump = true;
-    constexpr int kFrameDumpSeconds = 10, kFrameDumpMax = 30;
+    constexpr int kFrameDumpSeconds = 15, kFrameDumpMax = 40;
     void maybeDumpFrame(PS2Runtime *runtime)
     {
         static int dumped = 0;
@@ -772,9 +772,6 @@ namespace ps2_stubs
 
 namespace
 {
-    // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,down@100" presses
-    // each button for 0.3 s at that many seconds after boot. Between presses the real keyboard /
-    // gamepad is used.
     // VU0 macro self-test (once, at the first watched call): run the game's own recompiled
     // libvu0 routines on known inputs and compare with a C++ reference. Matrices are 4 rows of
     // 4 floats; libvu0 treats vectors as rows: ApplyMatrix(v0, m, v1) gives v0 = v1 * m,
@@ -913,12 +910,16 @@ namespace
         report("RotMatrixZ(0.5) (either sign convention shown)", got, Rz, 16);
     }
 
+    // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,lup@120:4" presses each
+    // button (or pushes the left stick: lup/ldown/lleft/lright) at that many seconds after boot,
+    // for 0.8 s or the given :seconds. Between inputs the real keyboard / gamepad is used.
     void maybeScriptedInput()
     {
         struct Press
         {
-            double at;
+            double at, hold;
             uint16_t mask;
+            uint8_t lx, ly;
             std::string name;
         };
         static std::vector<Press> presses;
@@ -935,6 +936,8 @@ namespace
                 {"up", 1u << 4}, {"right", 1u << 5}, {"down", 1u << 6}, {"left", 1u << 7},
                 {"l2", 1u << 8}, {"r2", 1u << 9}, {"l1", 1u << 10}, {"r1", 1u << 11},
                 {"triangle", 1u << 12}, {"circle", 1u << 13}, {"cross", 1u << 14}, {"square", 1u << 15}};
+            static const std::unordered_map<std::string, std::pair<uint8_t, uint8_t>> kSticks = {
+                {"lup", {0x80, 0x00}}, {"ldown", {0x80, 0xFF}}, {"lleft", {0x00, 0x80}}, {"lright", {0xFF, 0x80}}};
             std::string spec = env ? env : "";
             size_t pos = 0;
             while (pos < spec.size())
@@ -943,13 +946,27 @@ namespace
                 if (comma == std::string::npos)
                     comma = spec.size();
                 const std::string item = spec.substr(pos, comma - pos);
-                const size_t at = item.find('@');
-                if (at != std::string::npos && kButtons.count(item.substr(0, at)))
-                    presses.push_back({std::atof(item.c_str() + at + 1), kButtons.at(item.substr(0, at)), item.substr(0, at)});
                 pos = comma + 1;
+                const size_t at = item.find('@');
+                if (at == std::string::npos)
+                    continue;
+                const std::string name = item.substr(0, at);
+                const size_t colon = item.find(':', at);
+                Press press{std::atof(item.c_str() + at + 1), colon == std::string::npos ? 0.8 : std::atof(item.c_str() + colon + 1),
+                            0, 0x80, 0x80, name};
+                if (kButtons.count(name))
+                    press.mask = kButtons.at(name);
+                else if (kSticks.count(name))
+                {
+                    press.lx = kSticks.at(name).first;
+                    press.ly = kSticks.at(name).second;
+                }
+                else
+                    continue;
+                presses.push_back(press);
             }
             if (!presses.empty())
-                std::cerr << "[pop:input] " << presses.size() << " scripted presses" << std::endl;
+                std::cerr << "[pop:input] " << presses.size() << " scripted inputs" << std::endl;
         }
         if (next >= presses.size())
             return;
@@ -957,11 +974,11 @@ namespace
         const Press &p = presses[next];
         if (!held && t >= p.at)
         {
-            ps2_stubs::setPadOverrideState(static_cast<uint16_t>(0xFFFFu & ~p.mask), 0x80, 0x80, 0x80, 0x80);
+            ps2_stubs::setPadOverrideState(static_cast<uint16_t>(0xFFFFu & ~p.mask), p.lx, p.ly, 0x80, 0x80);
             held = true;
-            std::cerr << "[pop:input] press " << p.name << " at " << t << " s" << std::endl;
+            std::cerr << "[pop:input] " << p.name << " at " << t << " s for " << p.hold << " s" << std::endl;
         }
-        else if (held && t >= p.at + 0.8)
+        else if (held && t >= p.at + p.hold)
         {
             ps2_stubs::clearPadOverrideState();
             held = false;
