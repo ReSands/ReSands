@@ -1524,7 +1524,8 @@ namespace
                 // Sound engine IOP link (SND_fn_iIOPCommandRPC): ready flag 0x6A4340 (set when
                 // command 0 replies 1), reply buffer 0x6A4300, RPC client 0x680CC0 (UbiSound).
                 auto w = [&](uint32_t a) { return guestU32(rdram, a); };
-                std::fprintf(stderr, "[pop:snd] flags on=%02x off=%02x\n", rdram[0x674980u], rdram[0x6749C0u]);
+                std::fprintf(stderr, "[pop:snd] flags on=%02x off=%02x manager(0x6A1D60)=%08x\n", rdram[0x674980u], rdram[0x6749C0u],
+                             guestU32(rdram, 0x006A1D60u));
                 // One-shot dump of the sound project read buffer (SND_fn_bInitDataLoadSnd reads
                 // 0x4373C bytes of sound/gamesnd.sp1 from offset 0x800 to 0xA77180), to compare
                 // with the file on the disc.
@@ -1839,7 +1840,7 @@ namespace
     }
     // Steps of SND_fn_bInitDataLoadSnd that fail without a message of their own.
     constexpr SndCounted kSndSteps[] = {
-        {0x00171780u, "check 0x6A1E7C"}, {0x0017A480u, "InitDataLoadSnd_Map"},
+        {0x00173A40u, "thunk -> FUN_00171780 (needs *0x6A1D60)"}, {0x0018C340u, "FUN_0018c340 (manager config)"}, {0x0017A480u, "InitDataLoadSnd_Map"},
         {0x00176840u, "InitDataLoadSnd_Bank"}, {0x001732C0u, "PostInitEngineConf"},
         {0x003FD300u, "language switch"}, {0x00183800u, "SetCurrentLanguage"}, {0x00183F80u, "set language string"},
         {0x00199D80u, "ReadFileSnd"}, {0x00199DC0u, "SeekFileSnd"},
