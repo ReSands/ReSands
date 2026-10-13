@@ -15,6 +15,7 @@
 #endif
 
 bool popMovieActive(); // pop_movies.cpp
+namespace { void reportRpcCalls(); bool g_sndLog = false; }
 
 #include "raylib.h"
 
@@ -1478,6 +1479,7 @@ namespace
     // presentation aspect per frame: 4:3 while either is on screen, 16:9 otherwise.
     bool g_widescreen = false;
     bool g_loadingScreenDrawn = false;
+    uint64_t g_loadingDrawFrames = 0, g_loadingGapFrames = 0; // frames with / without a draw while loading
     void loadingScreenDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_loadingScreenDrawn = true;
@@ -1489,6 +1491,14 @@ namespace
         if (g_widescreen)
             ps2_host_display::setAspect(g_loadingScreenDrawn || popMovieActive() ? 4.0f / 3.0f : 16.0f / 9.0f);
 #endif
+        // Loading-screen frames with a draw call, and frames without one right after them (if the
+        // screen is not redrawn every frame, the aspect would flicker).
+        static bool previous = false;
+        if (g_loadingScreenDrawn)
+            ++g_loadingDrawFrames;
+        else if (previous)
+            ++g_loadingGapFrames;
+        previous = g_loadingScreenDrawn;
         g_loadingScreenDrawn = false;
     }
 
@@ -1505,6 +1515,12 @@ namespace
         if (dt >= 5.0)
         {
             std::cerr << "[pop:fps] " << (frames / dt) << std::endl;
+            if (g_loadingDrawFrames || g_loadingGapFrames)
+                std::fprintf(stderr, "[pop:loading] frames drawn %llu, gaps after a drawn frame %llu\n",
+                             static_cast<unsigned long long>(g_loadingDrawFrames), static_cast<unsigned long long>(g_loadingGapFrames));
+            g_loadingDrawFrames = g_loadingGapFrames = 0;
+            if (g_sndLog)
+                reportRpcCalls();
             frames = 0;
             last = now;
         }
@@ -1709,12 +1725,13 @@ namespace
         const auto it = g_rpcClientSid.find(client);
         const uint32_t sid = it != g_rpcClientSid.end() ? it->second : 0xFFFFFFFFu;
         ++g_rpcCalls[(static_cast<uint64_t>(sid) << 32) | fno];
-        static auto last = std::chrono::steady_clock::now();
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last > std::chrono::seconds(5))
+        callOriginal(0x0010BD40u, rdram, ctx, runtime);
+    }
+    // Printed from the frame hook every 5 s, so silence means no calls at all.
+    void reportRpcCalls()
+    {
         {
-            last = now;
-            std::string line = "[pop:rpc] calls";
+            std::string line = "[pop:rpc] calls (sid/fno:count)";
             for (const auto &[key, count] : g_rpcCalls)
             {
                 char b[64];
@@ -1725,7 +1742,6 @@ namespace
             std::fprintf(stderr, "%s\n", line.c_str());
             g_rpcCalls.clear();
         }
-        callOriginal(0x0010BD40u, rdram, ctx, runtime);
     }
 
     void applyPopOverrides(PS2Runtime &runtime)
@@ -1749,6 +1765,7 @@ namespace
         }
         if (const char *v = std::getenv("POP_SNDLOG"); v && *v == '1')
         {
+            g_sndLog = true;
             runtime.replaceFunction(0x00112980u, loggedSd<0x00112980u>);
             runtime.replaceFunction(0x00112AC0u, loggedSd<0x00112AC0u>);
             runtime.replaceFunction(0x0010BB70u, loggedBindRpc);
