@@ -760,6 +760,12 @@ namespace
     }
 }
 
+// True while one of our Bink movies is loaded (the presenter shows those at 4:3).
+bool popMovieActive()
+{
+    return g_movie != nullptr;
+}
+
 void installPopMovies(PS2Runtime &runtime)
 {
     const char *env = std::getenv("POP_MOVIES");

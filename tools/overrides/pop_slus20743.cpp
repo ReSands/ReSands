@@ -14,6 +14,8 @@
 #define POP_HAS_DISPLAY_OPTIONS 1
 #endif
 
+bool popMovieActive(); // pop_movies.cpp
+
 #include "raylib.h"
 
 #include <algorithm>
@@ -1471,6 +1473,25 @@ namespace
             g_asyncGs->drain();
     }
 
+    // With the widescreen patch compiled in, the 3D view, HUD and menus are drawn for 16:9, but
+    // the loading screen (drawn by FUN_004C9C80) and movies are still drawn for 4:3. Pick the
+    // presentation aspect per frame: 4:3 while either is on screen, 16:9 otherwise.
+    bool g_widescreen = false;
+    bool g_loadingScreenDrawn = false;
+    void loadingScreenDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_loadingScreenDrawn = true;
+        callOriginal(0x004C9C80u, rdram, ctx, runtime);
+    }
+    void presentAspectForFrame()
+    {
+#ifdef POP_HAS_DISPLAY_OPTIONS
+        if (g_widescreen)
+            ps2_host_display::setAspect(g_loadingScreenDrawn || popMovieActive() ? 4.0f / 3.0f : 16.0f / 9.0f);
+#endif
+        g_loadingScreenDrawn = false;
+    }
+
     // Frame-rate counter: wraps the display driver's end-of-frame flip (FUN_004B5200, slot 7)
     // and prints frames per second every 5 s.
     PS2Runtime::RecompiledFunction g_origFlip = nullptr;
@@ -1495,6 +1516,7 @@ namespace
             const uint32_t one = 1u;
             std::memcpy(rdram + 0x0066D044u, &one, sizeof(one));
         }
+        presentAspectForFrame();
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
     }
@@ -1667,9 +1689,48 @@ namespace
             std::fprintf(stderr, "[pop:snd]   -> %x\n", getRegU32(ctx, 2));
     }
 
+    // POP_SNDLOG=1 also logs SIF RPC binds (client -> server id) and counts calls per
+    // (server, function), summarised every 5 s, to see what reaches the IOP's sound driver.
+    std::unordered_map<uint32_t, uint32_t> g_rpcClientSid;
+    std::unordered_map<uint64_t, uint64_t> g_rpcCalls;
+    void loggedBindRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t client = getRegU32(ctx, 4), sid = getRegU32(ctx, 5), ra = getRegU32(ctx, 31);
+        g_rpcClientSid[client] = sid;
+        callOriginal(0x0010BB70u, rdram, ctx, runtime);
+        static int budget = 40;
+        if (budget-- > 0)
+            std::fprintf(stderr, "[pop:rpc] bind client %x -> sid %x from %x = %d\n", client, sid, ra,
+                         ctx->pc == ra ? static_cast<int32_t>(getRegU32(ctx, 2)) : -999);
+    }
+    void loggedCallRpc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t client = getRegU32(ctx, 4), fno = getRegU32(ctx, 5);
+        const auto it = g_rpcClientSid.find(client);
+        const uint32_t sid = it != g_rpcClientSid.end() ? it->second : 0xFFFFFFFFu;
+        ++g_rpcCalls[(static_cast<uint64_t>(sid) << 32) | fno];
+        static auto last = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last > std::chrono::seconds(5))
+        {
+            last = now;
+            std::string line = "[pop:rpc] calls";
+            for (const auto &[key, count] : g_rpcCalls)
+            {
+                char b[64];
+                std::snprintf(b, sizeof(b), " %x/%x:%llu", static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key),
+                              static_cast<unsigned long long>(count));
+                line += b;
+            }
+            std::fprintf(stderr, "%s\n", line.c_str());
+            g_rpcCalls.clear();
+        }
+        callOriginal(0x0010BD40u, rdram, ctx, runtime);
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
-        for (const uint32_t addr : {0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
+        for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x004C9C80u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
             g_originals[addr] = runtime.lookupFunction(addr);
         // The PCSX2 widescreen patch (rebuild -Pnach 'Widescreen 16:9') renders a 16:9 view into
         // the same 640-wide frame and expects the display to stretch it, as PCSX2's
@@ -1679,7 +1740,9 @@ namespace
         {
 #ifdef POP_HAS_DISPLAY_OPTIONS
             ps2_host_display::setAspect(16.0f / 9.0f);
-            std::fprintf(stderr, "[pop] widescreen patch compiled in: presenting at 16:9\n");
+            g_widescreen = true;
+            runtime.replaceFunction(0x004C9C80u, loadingScreenDraw);
+            std::fprintf(stderr, "[pop] widescreen patch compiled in: presenting at 16:9 (4:3 for movies and the loading screen)\n");
 #else
             std::fprintf(stderr, "[pop] widescreen patch compiled in, but this runtime cannot present at 16:9\n");
 #endif
@@ -1688,6 +1751,8 @@ namespace
         {
             runtime.replaceFunction(0x00112980u, loggedSd<0x00112980u>);
             runtime.replaceFunction(0x00112AC0u, loggedSd<0x00112AC0u>);
+            runtime.replaceFunction(0x0010BB70u, loggedBindRpc);
+            runtime.replaceFunction(0x0010BD40u, loggedCallRpc);
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
