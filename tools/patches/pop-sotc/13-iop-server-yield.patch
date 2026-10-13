@@ -1,0 +1,35 @@
+From ffa4af6229d797e096c938b47c4e409d26ab54e2 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:43:47 +0100
+Subject: [PATCH] IOP: an RPC server that yields while runnable is handed to
+ the scheduler (other threads and timers run) instead of being resumed at once
+ for the whole call budget
+
+Prince of Persia's UbiSound driver yields in its RPC server until its timer-driven update thread starts an IOP->SPU2 transfer; resuming the server immediately starved that thread and the IOP timers, so no sample bank ever reached the SPU2 and the game hung once the sound engine initialised.
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index dde4b33..89e92e1 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -570,7 +570,14 @@ namespace ps2x::iop::detail
+                     blocked = true;
+                     break;
+                 }
+-                thread->cpu.yielded = false;
++                // A server that yields while still runnable (RotateThreadReadyQueue, DelayThread 0)
++                // is waiting for another thread. Running it again at once starved every other IOP
++                // thread and the timers (serviced in runCycles) for the whole call budget: Prince
++                // of Persia's UbiSound driver yields until its timer-driven update thread starts a
++                // transfer, so sample banks never reached the SPU2. Let the scheduler run it.
++                kernel.endTimeslice(*thread, kCallReturnSentinel);
++                blocked = true;
++                break;
+             }
+             kernel.setCurrentThread(previous);
+ 
+-- 
+2.54.0 (Apple Git-157)
+
