@@ -1864,6 +1864,19 @@ namespace
         ((g_originals[kSndSteps[I].addr] = runtime.lookupFunction(kSndSteps[I].addr)), ...);
         (runtime.replaceFunction(kSndSteps[I].addr, sndStep<I>), ...);
     }
+    // POP_SNDLOG=1: every sceSifAllocIopHeap (the sound engine reserves its IOP sample
+    // memory with it; a 0 result switches the whole engine off).
+    void loggedAllocIopHeap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t size = getRegU32(ctx, 4), ra = getRegU32(ctx, 31);
+        callOriginal(0x0010FBC8u, rdram, ctx, runtime);
+        static int logged = 0;
+        static uint64_t total = 0;
+        total += size;
+        if (logged++ < 80)
+            std::fprintf(stderr, "[pop:snd] sceSifAllocIopHeap(%#x) -> %#x from %x (total requested %#llx)\n", size, getRegU32(ctx, 2), ra,
+                         static_cast<unsigned long long>(total));
+    }
     void reportSndCounts()
     {
         std::string line = "[pop:snd] RPS2 calls:";
@@ -1897,6 +1910,8 @@ namespace
             runtime.replaceFunction(0x00199C80u, sndOpen);
             runtime.replaceFunction(0x00183FC0u, sndLanguage);
             installSndSteps(runtime, std::make_index_sequence<std::size(kSndSteps)>{});
+            g_originals[0x0010FBC8u] = runtime.lookupFunction(0x0010FBC8u);
+            runtime.replaceFunction(0x0010FBC8u, loggedAllocIopHeap);
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
