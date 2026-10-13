@@ -234,6 +234,14 @@ Hidden Palace dump, under `game/proto/` (`archive/` the .7z, `extract/` the .bin
 - Names PS2Recomp would replace with its own stubs (its `ps2_call_list.h` and the exporter's runtime handler list) get a `pop_` prefix (230, e.g. `pop_memcpy`, `pop_sceIpuInit`), so the recompile does not change. Checked: same 301 stubs; 6 extra `untracked_stubs` (entry-point hints only); generated code identical apart from names (73,657 files). Ghidra backup from before: `game/ghidra/backup_20261012_pre_proto_names/`.
 - Names and anything derived from the prototype stay under `game/`. Function names in our public code comments are a judgement call; never copy prototype code or data into git.
 
+## Other Jade prototypes (checked 13 Oct 2026)
+
+- PoP: The Two Thrones, Sep 29, 2005 PS2 preview (`game/proto-t2t/`, `SLES_537.77`): **stripped** (no symtab), no map file. No names to gain.
+- Beyond Good & Evil, Aug 14, 2003 PS2 preview (`game/proto-bge/`, `SLUS_207.63`, disc label "Preview 8-20-03"): **unstripped**, CodeWarrior like ours: 7,486 named functions, `.relmain`, `.mwcats`, tiny `.debug`/`.line` (no useful types). But it adds almost nothing for SoT: `tools/proto_names.py` with it as the prototype matches 560 retail functions, 542 already named by the SoT prototype (533 identical names), and the 18 others are tiny duplicates (likely false). Only 1,869 function names are shared between the two prototypes (932 with the same size); the 5,617 BG&E-only names are mostly its own game code (AI 1,378, characters, vehicles) plus its sound (SND/SFX/ps2SND ~520) and graphics (GSP/GST/TEX/MAT ~370) layers, which Montreal's fork of Jade had already changed. Output: `game/proto-bge/analysis/bge_names.tsv`. Not applied.
+- BG&E Sep 9, 2003 "Review" build (`game/proto-bge/sep09/`): also unstripped (7,628 functions); 577 retail SoT matches, 20 not named by the SoT prototype (2 not in Aug 14 either). Same conclusion. BG&E Sep 15, 2003 "V1.00 9-17-03" (`game/proto-bge/sep15/`): stripped.
+- PoP: Warrior Within, Oct 25, 2004 "Review" build (`game/proto-ww/`, `SLUS_210.22`): **stripped**, no map file.
+- So the Aug 2003 SoT prototype stays our only useful symbol source. Ubisoft's 2003 preview/review discs were often unstripped (SoT Aug 19, BG&E Aug 14 and Sep 9); release candidates and the 2004-05 PoP builds were not.
+
 ## Renderer and DLSS notes
 
 - Render path: translate GS draw calls into modern GPU calls (D3D12 or Vulkan). This is where texture replacement hooks in and where DLSS would attach.
@@ -243,6 +251,25 @@ Hidden Palace dump, under `game/proto/` (`archive/` the .7z, `extract/` the .bin
   - `docs/PC_PORT_PLAN.md`: replacing the VU1 path with native mesh drawing from the game's own model data (gives real 3D scenes, needed for DLSS motion vectors and for RTX Remix on the recomp); a native audio mixer that replaces the IOP sound driver instead of emulating the SPU2.
   - `docs/DECOUPLING_PLAN.md`: fixed logic tick with interpolated presentation (each tick records a display list; frames are rendered between the last two). Blueprint for frame rates above 30 fps and for resolution independence.
   - Caveat: Dark Cloud has full decompiled source, no threads, no movies and no streaming audio. For PoP this would be a hybrid: the recompiled game plus native replacements at the hardware boundary, each function found in Ghidra first. Open question: does PoP's engine hand VU1 clean object-space meshes and separate matrices?
+
+## Plan (decided 13 Oct 2026)
+
+Ultimate goal: route **D**, a native renderer that draws the game's own 3D models (as Ace Combat 5 and Chronicle do), added gradually on top of the emulated GS (hybrid: whatever is not native yet stays emulated). Only D gives real DLSS (depth, motion vectors, jitter) and RTX Remix/path tracing on the recomp; routes A-C (SotC renderer, PCSX2 GS, paraLLEl-GS) all work on projected 2D triangles. Native Jade drawing would also be reusable for BG&E, Warrior Within, Two Thrones, King Kong and Rabbids. Not guaranteed: the probe (step 7) decides go/no-go; fallback is PCSX2's GS for 4K/texture packs plus RTX Remix on the PC version.
+
+Order (cheap fixes first, user's call):
+1. Housekeeping: commit notes, sync the PC (from 9acc916, plus `proto_names.tsv`).
+2. Report our PS2Recomp bugs upstream (rand, bc2t, LoadImage x8, LQ/SQ alignment, COP0 Count, VU0 macro memory, libvu0 stand-ins).
+3. Tobiichi-Port's sound fix (IOP clock tied to EE time).
+4. Hor+ widescreen from the PCSX2 widescreen patch for SLUS-20743, as an override.
+5. Loading-screen medallion drift: check VU0 matrix code against NBA Street's VU fix list.
+6. Small wishes (camera invert default in boot.ps1, etc.).
+7. D probe (days): where world geometry and matrices reach VU1 (prototype names: VU1 drivers, GDI/GEO classes), compared with how PC `POP.EXE` draws the same assets in D3D9 and its bigfile mesh format. Go/no-go.
+8. D stage 2: static world drawn natively, compared with the GS output; PC textures by asset key; camera hook.
+9. D stage 3: characters (GPU skinning with the game's bone matrices).
+10. Sound proper (SPU2 or native mixer) if step 3 did not fix it; IPU for PS2-disc movies.
+11. D stage 4: effects, particles; decoupled timing (fixed tick, interpolated frames); DLSS; RTX.
+
+Deferred (would be built twice once D exists): FSR/high-refresh presentation, texture replacement in the SotC shaders, swapping the emulated GS (decide after stage 2 whether SotC at native resolution is good enough for the emulated layer).
 
 ## Suggested order of work
 
