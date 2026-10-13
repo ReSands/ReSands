@@ -1289,6 +1289,21 @@ namespace
         ps2__InitSys_0x111c68(rdram, ctx, runtime);
     }
 
+    // fn_lGetEffectRequiredSize(type) 0x191940: SPU2 reverb work-area size per reverb type, a
+    // switch through the jump table at 0x647CC0 whose case blocks (0x191968-0x1919BC) Ghidra left
+    // outside any function, so the recompile has no entry for them ([guest-branch:missing-target]
+    // at 0x191970; the game stopped as soon as the sound engine initialised). Values are the case
+    // blocks' constants, by table index. TODO: a Ghidra pass that gives jump-table targets entry
+    // points (12 such tables in the ELF).
+    void effectRequiredSize(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        (void)rdram;
+        (void)runtime;
+        static constexpr uint32_t kSizes[10] = {0x80u, 0x26C0u, 0x1F40u, 0x4840u, 0x6FE0u, 0xADE0u, 0xF6C0u, 0x18040u, 0x18040u, 0x3C00u};
+        const uint32_t type = getRegU32(ctx, 4);
+        SET_GPR_U32(ctx, 2, type < 10u ? kSizes[type] : 0u);
+    }
+
     void endOfHeap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
@@ -1973,6 +1988,7 @@ namespace
         }
         runtime.replaceFunction(0x00111c68u, initSysWithRuntimeHeapMoved);
         runtime.replaceFunction(0x00108b80u, endOfHeap);
+        runtime.replaceFunction(0x00191940u, effectRequiredSize);
 
         ps2_game_overrides::bindAddressHandler(runtime, kSceCdLayerSearchFile, "sceCdSearchFile");
         if (kWatchParticleFrame)
