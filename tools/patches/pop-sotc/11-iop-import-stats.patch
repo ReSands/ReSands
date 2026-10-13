@@ -1,0 +1,63 @@
+From 51a2204445e412629310471a96c7fee38e096d5c Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:38:05 +0100
+Subject: [PATCH] IOP: PS2X_IOP_IMPORT_STATS=1 prints import calls per
+ library/ordinal every 2 emulated seconds, marking unimplemented ones
+
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 17f1198..dde4b33 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -20,6 +20,8 @@
+ #include "iop_emulator_const.h"
+ 
+ #include <algorithm>
++#include <cstdio>
++#include <cstdlib>
+ #include <cctype>
+ #include <map>
+ #include <optional>
+@@ -257,6 +259,28 @@ namespace ps2x::iop::detail
+             Missing,
+         };
+ 
++        // PS2X_IOP_IMPORT_STATS=1: import calls per library/ordinal every 2 emulated seconds, with
++        // the ones this emulator does not implement marked (they return with v0 unchanged).
++        std::map<std::string, std::pair<uint64_t, bool>> importStats;
++        uint64_t importStatsNext = 0;
++        void noteImportCall(const IopImportCall &call, ImportDisposition disposition)
++        {
++            static const bool on = [] { const char *v = std::getenv("PS2X_IOP_IMPORT_STATS"); return v && *v == '1'; }();
++            if (!on)
++                return;
++            auto &entry = importStats[call.library + "#" + std::to_string(call.ordinal)];
++            ++entry.first;
++            entry.second = entry.second || disposition == ImportDisposition::Missing;
++            if (totalCycles < importStatsNext)
++                return;
++            importStatsNext = totalCycles + 2u * kIopClockHz;
++            std::string line = "[iop:imports]";
++            for (const auto &[key, value] : importStats)
++                line += " " + key + (value.second ? "(MISSING)" : "") + "=" + std::to_string(value.first);
++            std::fprintf(stderr, "%s\n", line.c_str());
++            importStats.clear();
++        }
++
+         ImportDisposition dispatchImport(const IopImportCall &call, CpuState &cpu)
+         {
+             const uint32_t a0 = cpu.gpr[4];
+@@ -422,6 +446,7 @@ namespace ps2x::iop::detail
+             if (const auto import = imports.decode(cpu.pc))
+             {
+                 const ImportDisposition disposition = dispatchImport(*import, cpu);
++                noteImportCall(*import, disposition);
+                 ++totalInstructions;
+                 ++totalCycles;
+                 if (disposition == ImportDisposition::JumpToGuest)
+-- 
+2.54.0 (Apple Git-157)
+
