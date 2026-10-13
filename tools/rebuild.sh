@@ -91,6 +91,12 @@ if (( ! FAST )); then
     sed -i '' '/^  "sceVu0[A-Za-z0-9]*@0x[0-9A-F]*",$/d' $R/config.toml
     sed -i '' 's/[[:<:]]sceVu0/pop_sceVu0/g; s/[[:<:]]_sceVu0/pop__sceVu0/g' $R/functions.csv $R/config.toml
     echo "libvu0: $(grep -c '^pop_sceVu0' $R/functions.csv || true) functions renamed, $(grep -c '"sceVu0' $R/config.toml || true) stubs left"
+    # Same for the EE side of the remote sound library: PS2Recomp's sceSdRemote stand-ins only
+    # pretend (no RPC reaches the IOP), so the game's sdr_driver never initialised the SPU2 and
+    # the game was silent. Recompiled, the real calls go to the driver on the emulated IOP.
+    sed -i '' -E '/^  "sceSd(Remote|RemoteInit|TransToIOP)@0x[0-9A-F]*",$/d' $R/config.toml
+    sed -i '' -E 's/[[:<:]]sceSd(Remote|RemoteInit|TransToIOP)[[:>:]]/pop_sceSd\1/g' $R/functions.csv $R/config.toml
+    echo "libsd remote: $(grep -c '^pop_sceSd' $R/functions.csv || true) functions renamed"
 
     if [[ -n ${POP_PNACH:-} ]]; then
         stage "PCSX2 patches"

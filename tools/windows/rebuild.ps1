@@ -161,6 +161,14 @@ if (-not $Fast) {
     (Get-Content "$R\functions.csv") | ForEach-Object { $_ -replace '\b_sceVu0', 'pop__sceVu0' -replace '\bsceVu0', 'pop_sceVu0' } |
         Set-Content -Encoding ascii "$R\functions.csv"
     "libvu0: $((Select-String -Path "$R\functions.csv" -Pattern '^pop_+sceVu0').Count) functions renamed"
+    # Same for the EE side of the remote sound library: PS2Recomp's sceSdRemote stand-ins only
+    # pretend (no RPC reaches the IOP), so the game's sdr_driver never initialised the SPU2 and
+    # the game was silent. Recompiled, the real calls go to the driver on the emulated IOP.
+    $sd = '\bsceSd(Remote|RemoteInit|TransToIOP)\b'
+    (Get-Content "$R\config.toml") | Where-Object { $_ -notmatch '^  "sceSd(Remote|RemoteInit|TransToIOP)@0x[0-9A-F]*",$' } |
+        ForEach-Object { $_ -replace $sd, 'pop_sceSd$1' } | Set-Content -Encoding ascii "$R\config.toml"
+    (Get-Content "$R\functions.csv") | ForEach-Object { $_ -replace $sd, 'pop_sceSd$1' } | Set-Content -Encoding ascii "$R\functions.csv"
+    "libsd remote: $((Select-String -Path "$R\functions.csv" -Pattern '^pop_sceSd').Count) functions renamed"
 
     if ($Pnach) {
         Stage 'PCSX2 patches'
