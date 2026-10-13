@@ -1,0 +1,96 @@
+From 24978bf1e9b0638bd806de68da120b66c0cd45ef Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 18:51:59 +0100
+Subject: [PATCH] SPU2: AVOL/BVOL reset to maximum (as PCSX2 InpVol/ExtVol);
+ core 1 mixes AutoDMA input (MMIX Inp gates, AVOL) and core 0's output (Ext
+ gates, BVOL) separately; PS2X_SPU2_STATS logs shared register writes
+
+Prince of Persia streams music/ambience/speech by AutoDMA on core 0 and never writes core 0's AVOL, so with AVOL reset to 0 the stream was mixed at volume 0 (silent).
+---
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 26 +++++++++++++++++++----
+ ps2xIOP/src/emulator/devices/iop_spu2.h   |  3 ++-
+ 2 files changed, 24 insertions(+), 5 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index 3e69b27..3000ece 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -143,6 +143,14 @@ namespace ps2x::iop::detail
+         m_audioFrames = 0u;
+         for (auto &input : m_admaInput)
+             input.clear();
++        // Input volumes start at maximum (PCSX2 V_Core::Init: InpVol and ExtVol = Max); games
++        // that never write AVOL/BVOL (Prince of Persia's core 0 AutoDMA stream) rely on it.
++        for (uint32_t core = 0u; core < kCores; ++core)
++        {
++            const uint32_t shared = kSharedBase + core * 0x28u;
++            for (uint32_t r : {8u, 10u, 0xCu, 0xEu})
++                reg(shared + r) = 0x7FFFu;
++        }
+     }
+ 
+     uint16_t IopSpu2::read16(uint32_t physicalAddress, uint64_t cycle)
+@@ -202,6 +210,12 @@ namespace ps2x::iop::detail
+         reg(offset) = value;
+         if (offset >= kSharedBase)
+         {
++            static int sharedLogged = 0;
++            if (g_spu2Stats.on && sharedLogged < 200)
++            {
++                ++sharedLogged;
++                std::fprintf(stderr, "[spu2] shared reg %03x = %04x\n", offset, value);
++            }
+             for (uint32_t sharedCore = 0u; sharedCore < kCores; ++sharedCore)
+             {
+                 const uint32_t shared = kSharedBase + sharedCore * 0x28u;
+@@ -371,8 +385,8 @@ namespace ps2x::iop::detail
+         {
+             const auto input0 = popAdma(0u);
+             const auto input1 = popAdma(1u);
+-            const auto core0 = mixCore(0u, input0);
+-            const auto output = mixCore(1u, {core0[0] + input1[0], core0[1] + input1[1]});
++            const auto core0 = mixCore(0u, input0, {0, 0});
++            const auto output = mixCore(1u, input1, core0);
+             if (g_spu2Stats.on)
+             {
+                 g_spu2Stats.peak[0] = std::max(g_spu2Stats.peak[0], std::abs(core0[0]) + std::abs(core0[1]));
+@@ -409,7 +423,7 @@ namespace ps2x::iop::detail
+         m_audioFrames = 0u;
+     }
+ 
+-    std::array<int32_t, 2> IopSpu2::mixCore(uint32_t core, const std::array<int32_t, 2> &external)
++    std::array<int32_t, 2> IopSpu2::mixCore(uint32_t core, const std::array<int32_t, 2> &adma, const std::array<int32_t, 2> &coreInput)
+     {
+         const uint32_t base = core * kCoreStride;
+         const uint32_t leftMask = reg(base + 0x188u) | (static_cast<uint32_t>(reg(base + 0x18Au)) << 16u);
+@@ -434,8 +448,12 @@ namespace ps2x::iop::detail
+         {
+             if (!(mixer & (0x800u >> channel)))
+                 output[channel] = 0;
++            // MMIX dry gates (as PCSX2): InpL/R 0x80/0x40 = sound data input (AutoDMA) at AVOL,
++            // ExtL/R 0x8/0x4 = external input (core 0's output, for core 1) at BVOL.
+             if (mixer & (0x80u >> channel))
+-                output[channel] += scale(external[channel], static_cast<int16_t>(reg(shared + 8u + channel * 2u)));
++                output[channel] += scale(adma[channel], static_cast<int16_t>(reg(shared + 8u + channel * 2u)));
++            if (mixer & (0x8u >> channel))
++                output[channel] += scale(coreInput[channel], static_cast<int16_t>(reg(shared + 0xCu + channel * 2u)));
+             const int32_t master = volume(reg(shared + channel * 2u));
+             output[channel] = scale(saturate(output[channel]), master);
+             if (!(reg(base + 0x19Au) & 0x4000u))
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.h b/ps2xIOP/src/emulator/devices/iop_spu2.h
+index 79c6587..29221e3 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.h
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.h
+@@ -118,7 +118,8 @@ namespace ps2x::iop::detail
+         void stepAddress(uint32_t core, uint32_t voice);
+         void stepEnvelope(Voice &voice, uint16_t adsr1, uint16_t adsr2);
+         void decodeBlock(uint32_t core, uint32_t voice, uint32_t address);
+-        std::array<int32_t, 2> mixCore(uint32_t core, const std::array<int32_t, 2> &external);
++        // adma: the core's sound data input (AutoDMA, AVOL); coreInput: core 0's output into core 1 (BVOL).
++        std::array<int32_t, 2> mixCore(uint32_t core, const std::array<int32_t, 2> &adma, const std::array<int32_t, 2> &coreInput);
+         std::array<int32_t, 2> popAdma(uint32_t core);
+ 
+         std::array<uint16_t, 0x400> m_regs{};
+-- 
+2.54.0 (Apple Git-157)
+
