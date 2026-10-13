@@ -149,6 +149,12 @@ if (-not $Fast) {
         "skipped: no $protoNames"
     }
 
+    # Switch tables Ghidra did not resolve get references to their targets, so the export
+    # creates entry points for them (missing-target hangs otherwise).
+    Stage 'Jump tables'
+    Run-Ghidra "$Root\game\ghidra\headless_jumptables.log" @('-scriptPath', "$Root\tools\ghidra", '-postScript', 'PoPJumpTables.java')
+    Show-ScriptLines "$Root\game\ghidra\headless_jumptables.log" 'PoPJumpTables.java' | Select-String 'Jump tables:'
+
     Stage 'Export'
     Run-Ghidra "$Root\game\ghidra\headless_export.log" @('-readOnly', '-scriptPath', "$RecompSrc\ps2xRecomp\tools\ghidra",
         '-postScript', 'ExportPS2Functions.java', "$R\config.toml", "$R\functions.csv")

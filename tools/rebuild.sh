@@ -78,6 +78,12 @@ if (( ! FAST )); then
         echo "skipped: no $PROTO_NAMES"
     fi
 
+    # Switch tables Ghidra did not resolve get references to their targets, so the export
+    # creates entry points for them (missing-target hangs otherwise).
+    stage "Jump tables"
+    ghidra game/ghidra/headless_jumptables.log -scriptPath tools/ghidra -postScript PoPJumpTables.java
+    grep 'Jump tables:' game/ghidra/headless_jumptables.log | sed 's/.*> //; s/ (GhidraScript)//'
+
     stage "Export"
     ghidra game/ghidra/headless_export.log -readOnly \
         -scriptPath $RECOMP_SRC/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java \
