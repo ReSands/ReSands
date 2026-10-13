@@ -1776,9 +1776,17 @@ namespace
     // fills the AutoDMA stream), reported every 5 s with the RPC counts.
     struct SndCounted { uint32_t addr; const char *name; };
     constexpr SndCounted kSndCounted[] = {
-        {0x00169A80u, "UpdateRenderer"}, {0x0016A140u, "VSyncCallBack"}, {0x0016A380u, "ThreadWorker"},
-        {0x0016A840u, "UpdateBuffer"},   {0x0016A9C0u, "GetDataSample"}, {0x0016AB40u, "Play"},
-        {0x0016B380u, "LoadResBinary"},  {0x0016B2C0u, "ASyncLoadResBinary"}, {0x0016B400u, "ConvertRes"},
+        // game requests
+        {0x0015E480u, "SendSoundRequest"}, {0x0015D940u, "SendOnChannelFadeIn"}, {0x00160380u, "PushRequest"},
+        {0x0015E180u, "SynchroSound"},     {0x0015FEC0u, "IsRequestPlaying"},
+        // associations and play by type
+        {0x0015C100u, "CreateAssoPlay"},   {0x0015C680u, "CreateAsso"},      {0x0017C900u, "PlaySnd"},
+        {0x0017E000u, "PlayRandom"},       {0x0017FD00u, "PlayTheme"},       {0x00181040u, "PlaySwitch"},
+        {0x00181C40u, "PlaySxdWave"},
+        // manager and renderer
+        {0x0018A300u, "Mgr::Play"},        {0x0018A080u, "Mgr::CreateVoice"}, {0x0015F9C0u, "CreateClientBuffer"},
+        {0x0016AB40u, "RPS2::Play"},       {0x0016A840u, "UpdateBuffer"},     {0x0016A9C0u, "GetDataSample"},
+        {0x0016B380u, "LoadResBinary"},    {0x0016B2C0u, "ASyncLoadResBinary"},
     };
     std::atomic<uint64_t> g_sndCounts[std::size(kSndCounted)];
     template <size_t I>
