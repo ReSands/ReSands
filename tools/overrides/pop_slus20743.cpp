@@ -1474,6 +1474,14 @@ namespace
             frames = 0;
             last = now;
         }
+        // POP_60FPS=1: PCSX2's "60 FPS" patch for SLUS-20743 (author asasega; pcsx2_patches),
+        // a data word, so written here each frame as PCSX2 re-applies patch=1 lines.
+        static const bool fps60 = [] { const char *v = std::getenv("POP_60FPS"); return v && *v == '1'; }();
+        if (fps60)
+        {
+            const uint32_t one = 1u;
+            std::memcpy(rdram + 0x0066D044u, &one, sizeof(one));
+        }
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
     }

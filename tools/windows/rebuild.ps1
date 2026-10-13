@@ -9,8 +9,11 @@
 #        add -Release with -Play for a Release build (/GL + LTCG, long link) in build-win-play-rel
 #        -RecompSrc / -Out select another PS2Recomp checkout and output folder, e.g.
 #        -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc (the pop-sotc setup)
+#        -Pnach 'Widescreen 16:9;...' compiles in those sections of the PCSX2 patch file
+#        game\patches\SLUS-20743_7F6EB3D0.pnach (code patches only; see tools/pnach.py)
 param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release,
-      [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp', [string]$Vu1 = '')
+      [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp', [string]$Vu1 = '',
+      [string]$Pnach = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -158,6 +161,14 @@ if (-not $Fast) {
     (Get-Content "$R\functions.csv") | ForEach-Object { $_ -replace '\b_sceVu0', 'pop__sceVu0' -replace '\bsceVu0', 'pop_sceVu0' } |
         Set-Content -Encoding ascii "$R\functions.csv"
     "libvu0: $((Select-String -Path "$R\functions.csv" -Pattern '^pop_+sceVu0').Count) functions renamed"
+
+    if ($Pnach) {
+        Stage 'PCSX2 patches'
+        $patched = "$R\SLUS_207.43.pnach"
+        & $Python -I "$Root\tools\pnach.py" "$Root\game\ps2\disc\SLUS_207.43" "$Root\game\patches\SLUS-20743_7F6EB3D0.pnach" $patched "$R\functions.csv" $Pnach
+        if ($LASTEXITCODE) { 'PNACH FAILED'; exit 1 }
+        (Get-Content "$R\config.toml") -replace '^input = .*$', "input = `"$($patched -replace '\\', '/')`"" | Set-Content -Encoding ascii "$R\config.toml"
+    }
 
     Stage 'Recompile'
     if (Test-Path "$R\output") { Remove-Item -Recurse -Force "$R\output" }

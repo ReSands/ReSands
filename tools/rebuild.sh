@@ -6,6 +6,8 @@
 #                                  data ranges, names, PS2Recomp recompiler changes)
 #        tools/rebuild.sh --fast   overrides and runtime only (tools/overrides/*.cpp or
 #                                  runtime sources changed); skips Ghidra and the recompile
+#        POP_PNACH='Widescreen 16:9;...' compiles in those sections of the PCSX2 patch file
+#        game/patches/SLUS-20743_7F6EB3D0.pnach (code patches only; see tools/pnach.py)
 set -euo pipefail
 
 FAST=0
@@ -89,6 +91,13 @@ if (( ! FAST )); then
     sed -i '' '/^  "sceVu0[A-Za-z0-9]*@0x[0-9A-F]*",$/d' $R/config.toml
     sed -i '' 's/[[:<:]]sceVu0/pop_sceVu0/g; s/[[:<:]]_sceVu0/pop__sceVu0/g' $R/functions.csv $R/config.toml
     echo "libvu0: $(grep -c '^pop_sceVu0' $R/functions.csv || true) functions renamed, $(grep -c '"sceVu0' $R/config.toml || true) stubs left"
+
+    if [[ -n ${POP_PNACH:-} ]]; then
+        stage "PCSX2 patches"
+        python3 -I $ROOT/tools/pnach.py game/ps2/disc/SLUS_207.43 game/patches/SLUS-20743_7F6EB3D0.pnach \
+            $R/SLUS_207.43.pnach $R/functions.csv "$POP_PNACH" || { echo "PNACH FAILED"; exit 1; }
+        sed -i '' "s|^input = .*$|input = \"$R/SLUS_207.43.pnach\"|" $R/config.toml
+    fi
 
     stage "Recompile"
     rm -rf $R/output
