@@ -1,0 +1,103 @@
+From 129553a748b76acb23792326feb5dae0b348b0b7 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 13:20:40 +0100
+Subject: [PATCH 1/2] SPU2: PS2X_SPU2_STATS=1 prints register writes, key-ons,
+ DMA bytes, voice activity, peaks and core mix registers once per emulated
+ second
+
+---
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 37 +++++++++++++++++++++++
+ 1 file changed, 37 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index 3056b31..f57de19 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -2,12 +2,23 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <cstdio>
++#include <cstdlib>
+ #include <numbers>
+ 
+ namespace ps2x::iop::detail
+ {
+     namespace
+     {
++        // PS2X_SPU2_STATS=1: once per emulated second, print register writes, key-ons, DMA bytes,
++        // voices producing samples, per-core peaks and the core mix registers (debug).
++        struct Spu2Stats
++        {
++            bool on = [] { const char *v = std::getenv("PS2X_SPU2_STATS"); return v && *v == '1'; }();
++            uint64_t writes = 0, keyOns = 0, dmaBytes = 0, voiceSamples = 0, samples = 0;
++            int32_t peak[2]{};
++        } g_spu2Stats;
++
+         constexpr uint32_t kCoreStride = 0x400u;
+         constexpr uint32_t kSharedBase = 0x760u;
+         constexpr uint32_t kVoiceParamsEnd = 0x180u;
+@@ -185,6 +196,7 @@ namespace ps2x::iop::detail
+     {
+         advanceTo(cycle);
+         const uint32_t offset = (physicalAddress - kBase) & 0x7FEu;
++        ++g_spu2Stats.writes;
+         reg(offset) = value;
+         if (offset >= kSharedBase)
+         {
+@@ -292,6 +304,7 @@ namespace ps2x::iop::detail
+     void IopSpu2::dmaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle)
+     {
+         advanceTo(cycle);
++        g_spu2Stats.dmaBytes += bytes;
+         uint32_t address = m_transferAddress[core];
+         for (size_t i = 0; i + 2u <= bytes; i += 2u)
+         {
+@@ -326,6 +339,28 @@ namespace ps2x::iop::detail
+         {
+             const auto core0 = mixCore(0u, {});
+             const auto output = mixCore(1u, core0);
++            if (g_spu2Stats.on)
++            {
++                g_spu2Stats.peak[0] = std::max(g_spu2Stats.peak[0], std::abs(core0[0]) + std::abs(core0[1]));
++                g_spu2Stats.peak[1] = std::max(g_spu2Stats.peak[1], std::abs(output[0]) + std::abs(output[1]));
++                if (++g_spu2Stats.samples == 48000u)
++                {
++                    std::fprintf(stderr, "[spu2] writes %llu keyOn %llu dmaBytes %llu voiceSamples %llu peak core0 %d core1 %d",
++                                 (unsigned long long)g_spu2Stats.writes, (unsigned long long)g_spu2Stats.keyOns,
++                                 (unsigned long long)g_spu2Stats.dmaBytes, (unsigned long long)g_spu2Stats.voiceSamples,
++                                 g_spu2Stats.peak[0], g_spu2Stats.peak[1]);
++                    for (uint32_t c = 0u; c < kCores; ++c)
++                    {
++                        const uint32_t b = c * kCoreStride, sh = kSharedBase + c * 0x28u;
++                        std::fprintf(stderr, " | c%u attr %04x mmix %04x mvol %04x/%04x vmixl %04x%04x vmixr %04x%04x",
++                                     c, reg(b + 0x19Au), reg(b + 0x198u), reg(sh), reg(sh + 2u),
++                                     reg(b + 0x18Au), reg(b + 0x188u), reg(b + 0x192u), reg(b + 0x190u));
++                    }
++                    std::fprintf(stderr, "\n");
++                    g_spu2Stats = {};
++                    g_spu2Stats.on = true;
++                }
++            }
+             m_audioBuffer[m_audioFrames * 2u] = static_cast<int16_t>(output[0]);
+             m_audioBuffer[m_audioFrames * 2u + 1u] = static_cast<int16_t>(output[1]);
+             if (++m_audioFrames == m_audioBuffer.size() / 2u)
+@@ -377,6 +412,7 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::keyOn(uint32_t core, uint32_t index)
+     {
++        ++g_spu2Stats.keyOns;
+         Voice &voice = m_voices[core][index];
+         if (voice.startA & 7u)
+             voice.startA = ((voice.startA + 8u) & ~7u) & kAddressMask;
+@@ -418,6 +454,7 @@ namespace ps2x::iop::detail
+         }
+         if (voice.phase == kPhaseOff || voice.envelope == 0)
+             return 0;
++        ++g_spu2Stats.voiceSamples;
+         const int32_t fraction = voice.counter + kPitchStep;
+         const auto &weights = interpolationWeights()[std::min(fraction >> 4, 255)];
+         const auto &history = m_interpolation[core][index];
+-- 
+2.54.0 (Apple Git-157)
+

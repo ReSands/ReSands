@@ -1,0 +1,169 @@
+From 50e32b8dc415bf72f91870c8d3a41f534d19e8c7 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 13:21:30 +0100
+Subject: [PATCH 2/2] SPU2: AutoDMA input (core sound data input): queue ADMA
+ PCM, mix it with the MMIX input gates and AVOL, complete the DMA at playback
+ speed (was dropped; Prince of Persia streams music/ambience/speech this way)
+
+---
+ ps2xIOP/src/emulator/core/iop_memory.cpp  | 12 +++++--
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 42 ++++++++++++++++++++---
+ ps2xIOP/src/emulator/devices/iop_spu2.h   |  9 +++++
+ 3 files changed, 56 insertions(+), 7 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.cpp b/ps2xIOP/src/emulator/core/iop_memory.cpp
+index eac4108..39576a0 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -310,9 +310,11 @@ namespace ps2x::iop::detail
+         const uint32_t wordsPerBlock = std::max<uint32_t>(blockControl & 0xFFFFu, 1u);
+         const uint32_t blockCount = std::max<uint32_t>(blockControl >> 16u, 1u);
+         const uint64_t transferWords = static_cast<uint64_t>(wordsPerBlock) * blockCount;
++        // An AutoDMA transfer completes at playback speed (see IopSpu2::admaWrite).
++        const bool streaming = m_spu2 && m_spu2->autoDma(secondCore ? 1u : 0u);
+         m_dmaStart = DmaStart{
+             secondCore ? kDmaSpu1Irq : kDmaSpu0Irq,
+-            std::max<uint64_t>(transferWords * 2u, 64u),
++            streaming ? IopSpu2::admaCycles(transferWords * 4u) : std::max<uint64_t>(transferWords * 2u, 64u),
+         };
+     }
+ 
+@@ -336,8 +338,6 @@ namespace ps2x::iop::detail
+         const uint32_t core = chcrAddress == kDmaSpu1Chcr ? 1u : 0u;
+         const uint64_t cycle = m_clock ? *m_clock : 0u;
+         m_spu2->dmaStarted(core);
+-        if (m_spu2->autoDma(core))
+-            return;
+         uint32_t madr = 0u;
+         if (const auto it = m_hardware.find(chcrAddress - 8u); it != m_hardware.end())
+             madr = it->second & (RamSize - 1u);
+@@ -346,6 +346,12 @@ namespace ps2x::iop::detail
+             bcr = it->second;
+         const uint64_t words = static_cast<uint64_t>(std::max<uint32_t>(bcr & 0xFFFFu, 1u)) * std::max<uint32_t>(bcr >> 16u, 1u);
+         const size_t bytes = static_cast<size_t>(std::min<uint64_t>(words * 4u, RamSize - madr));
++        if (m_spu2->autoDma(core))
++        {
++            if ((chcr & 1u) != 0u)
++                m_spu2->admaWrite(core, m_ram.data() + madr, bytes);
++            return;
++        }
+         if ((chcr & 1u) != 0u)
+             m_spu2->dmaWrite(core, m_ram.data() + madr, bytes, cycle);
+         else
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index f57de19..3e69b27 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -141,6 +141,8 @@ namespace ps2x::iop::detail
+             core.fill(Decoder{});
+         m_interpolation = {};
+         m_audioFrames = 0u;
++        for (auto &input : m_admaInput)
++            input.clear();
+     }
+ 
+     uint16_t IopSpu2::read16(uint32_t physicalAddress, uint64_t cycle)
+@@ -314,6 +316,36 @@ namespace ps2x::iop::detail
+         m_transferAddress[core] = address;
+     }
+ 
++    void IopSpu2::admaWrite(uint32_t core, const uint8_t *source, size_t bytes)
++    {
++        g_spu2Stats.dmaBytes += bytes;
++        constexpr size_t kBlockBytes = 1024u, kHalf = kBlockBytes / 2u;
++        constexpr size_t kMaxQueued = 48000u; // 1 s; more means nothing is consuming it
++        auto &input = m_admaInput[core % kCores];
++        for (size_t block = 0u; block + kBlockBytes <= bytes; block += kBlockBytes)
++        {
++            for (size_t i = 0u; i < kHalf; i += 2u)
++            {
++                const uint8_t *left = source + block + i;
++                const uint8_t *right = left + kHalf;
++                input.push_back({static_cast<int16_t>(left[0] | (left[1] << 8)),
++                                 static_cast<int16_t>(right[0] | (right[1] << 8))});
++            }
++        }
++        while (input.size() > kMaxQueued)
++            input.pop_front();
++    }
++
++    std::array<int32_t, 2> IopSpu2::popAdma(uint32_t core)
++    {
++        auto &input = m_admaInput[core];
++        if (input.empty())
++            return {};
++        const auto frame = input.front();
++        input.pop_front();
++        return {frame[0], frame[1]};
++    }
++
+     void IopSpu2::dmaRead(uint32_t core, uint8_t *destination, size_t bytes, uint64_t cycle)
+     {
+         advanceTo(cycle);
+@@ -337,8 +369,10 @@ namespace ps2x::iop::detail
+         m_cycle += samples * kCyclesPerSample;
+         for (uint64_t sample = 0; sample < samples; ++sample)
+         {
+-            const auto core0 = mixCore(0u, {});
+-            const auto output = mixCore(1u, core0);
++            const auto input0 = popAdma(0u);
++            const auto input1 = popAdma(1u);
++            const auto core0 = mixCore(0u, input0);
++            const auto output = mixCore(1u, {core0[0] + input1[0], core0[1] + input1[1]});
+             if (g_spu2Stats.on)
+             {
+                 g_spu2Stats.peak[0] = std::max(g_spu2Stats.peak[0], std::abs(core0[0]) + std::abs(core0[1]));
+@@ -352,8 +386,8 @@ namespace ps2x::iop::detail
+                     for (uint32_t c = 0u; c < kCores; ++c)
+                     {
+                         const uint32_t b = c * kCoreStride, sh = kSharedBase + c * 0x28u;
+-                        std::fprintf(stderr, " | c%u attr %04x mmix %04x mvol %04x/%04x vmixl %04x%04x vmixr %04x%04x",
+-                                     c, reg(b + 0x19Au), reg(b + 0x198u), reg(sh), reg(sh + 2u),
++                        std::fprintf(stderr, " | c%u attr %04x mmix %04x mvol %04x/%04x avol %04x/%04x adma %zu vmixl %04x%04x vmixr %04x%04x",
++                                     c, reg(b + 0x19Au), reg(b + 0x198u), reg(sh), reg(sh + 2u), reg(sh + 8u), reg(sh + 10u), m_admaInput[c].size(),
+                                      reg(b + 0x18Au), reg(b + 0x188u), reg(b + 0x192u), reg(b + 0x190u));
+                     }
+                     std::fprintf(stderr, "\n");
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.h b/ps2xIOP/src/emulator/devices/iop_spu2.h
+index 9d5b335..79c6587 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.h
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.h
+@@ -3,6 +3,7 @@
+ #include <array>
+ #include "ps2x/state_io.h"
+ #include <cstdint>
++#include <deque>
+ #include <functional>
+ #include <span>
+ #include <vector>
+@@ -35,6 +36,12 @@ namespace ps2x::iop::detail
+         void dmaStarted(uint32_t core) noexcept;
+         void dmaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle);
+         void dmaRead(uint32_t core, uint8_t *destination, size_t bytes, uint64_t cycle);
++        // AutoDMA (ADMA): the core's sound data input. The DMA delivers PCM in 1 KB blocks
++        // (256 left samples, then 256 right, 16-bit); the core plays it at 48 kHz, mixed by the
++        // MMIX input bits and the AVOL input volume. On hardware the transfer finishes only as fast
++        // as the samples are played, so the IOP driver refills at playback speed.
++        void admaWrite(uint32_t core, const uint8_t *source, size_t bytes);
++        [[nodiscard]] static uint64_t admaCycles(size_t bytes) noexcept { return (bytes / 4u) * kCyclesPerSample; }
+ 
+         void advanceTo(uint64_t cycle);
+         void setAudioSink(std::function<void(std::span<const int16_t>)> sink) { m_audioSink = std::move(sink); }
+@@ -112,6 +119,7 @@ namespace ps2x::iop::detail
+         void stepEnvelope(Voice &voice, uint16_t adsr1, uint16_t adsr2);
+         void decodeBlock(uint32_t core, uint32_t voice, uint32_t address);
+         std::array<int32_t, 2> mixCore(uint32_t core, const std::array<int32_t, 2> &external);
++        std::array<int32_t, 2> popAdma(uint32_t core);
+ 
+         std::array<uint16_t, 0x400> m_regs{};
+         std::vector<uint16_t> m_ram;
+@@ -124,5 +132,6 @@ namespace ps2x::iop::detail
+         std::array<int16_t, 1024> m_audioBuffer{};
+         size_t m_audioFrames = 0u;
+         std::function<void(std::span<const int16_t>)> m_audioSink;
++        std::array<std::deque<std::array<int16_t, 2>>, kCores> m_admaInput{};
+     };
+ }
+-- 
+2.54.0 (Apple Git-157)
+
