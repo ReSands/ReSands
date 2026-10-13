@@ -1525,6 +1525,20 @@ namespace
                 // command 0 replies 1), reply buffer 0x6A4300, RPC client 0x680CC0 (UbiSound).
                 auto w = [&](uint32_t a) { return guestU32(rdram, a); };
                 std::fprintf(stderr, "[pop:snd] flags on=%02x off=%02x\n", rdram[0x674980u], rdram[0x6749C0u]);
+                // One-shot dump of the sound project read buffer (SND_fn_bInitDataLoadSnd reads
+                // 0x4373C bytes of sound/gamesnd.sp1 from offset 0x800 to 0xA77180), to compare
+                // with the file on the disc.
+                static bool dumped = false;
+                if (!dumped)
+                {
+                    dumped = true;
+                    if (FILE *f = std::fopen("sndbuf.bin", "wb"))
+                    {
+                        std::fwrite(rdram + 0x00A77180u, 1, 0x4373Cu, f);
+                        std::fclose(f);
+                        std::fprintf(stderr, "[pop:snd] dumped the project read buffer to sndbuf.bin\n");
+                    }
+                }
                 std::fprintf(stderr, "[pop:snd] ready=%x reply=%08x %08x %08x %08x client=%08x %08x %08x %08x %08x %08x %08x %08x\n",
                              w(0x6A4340u), w(0x6A4300u), w(0x6A4304u), w(0x6A4308u), w(0x6A430Cu),
                              w(0x680CC0u), w(0x680CC4u), w(0x680CC8u), w(0x680CCCu), w(0x680CD0u), w(0x680CD4u), w(0x680CD8u), w(0x680CDCu));
