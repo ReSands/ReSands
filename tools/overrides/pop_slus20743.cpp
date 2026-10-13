@@ -1524,6 +1524,7 @@ namespace
                 // Sound engine IOP link (SND_fn_iIOPCommandRPC): ready flag 0x6A4340 (set when
                 // command 0 replies 1), reply buffer 0x6A4300, RPC client 0x680CC0 (UbiSound).
                 auto w = [&](uint32_t a) { return guestU32(rdram, a); };
+                std::fprintf(stderr, "[pop:snd] flags on=%02x off=%02x\n", rdram[0x674980u], rdram[0x6749C0u]);
                 std::fprintf(stderr, "[pop:snd] ready=%x reply=%08x %08x %08x %08x client=%08x %08x %08x %08x %08x %08x %08x %08x\n",
                              w(0x6A4340u), w(0x6A4300u), w(0x6A4304u), w(0x6A4308u), w(0x6A430Cu),
                              w(0x680CC0u), w(0x680CC4u), w(0x680CC8u), w(0x680CCCu), w(0x680CD0u), w(0x680CD4u), w(0x680CD8u), w(0x680CDCu));
@@ -1801,6 +1802,29 @@ namespace
         ((g_originals[kSndCounted[I].addr] = runtime.lookupFunction(kSndCounted[I].addr)), ...);
         (runtime.replaceFunction(kSndCounted[I].addr, countedSnd<I>), ...);
     }
+    // POP_SNDLOG=1: DARE's error reporter (code, message) and project file open, to see why
+    // SND_fn_bInitDataLoadSnd("gamesnd") fails (the engine then switches sound off).
+    void sndError(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        std::fprintf(stderr, "[pop:snd] DARE error %d: %s (from %x)\n", static_cast<int32_t>(getRegU32(ctx, 4)),
+                     guestString(rdram, getRegU32(ctx, 5)).c_str(), getRegU32(ctx, 31));
+        callOriginal(0x00199640u, rdram, ctx, runtime);
+    }
+    void sndOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const std::string name = guestString(rdram, getRegU32(ctx, 4));
+        const uint32_t ra = getRegU32(ctx, 31);
+        callOriginal(0x00199C80u, rdram, ctx, runtime);
+        std::fprintf(stderr, "[pop:snd] open \"%s\" -> %d%s\n", name.c_str(), static_cast<int32_t>(getRegU32(ctx, 2)),
+                     ctx->pc == ra ? "" : " (thread switch)");
+    }
+    void sndLanguage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        callOriginal(0x00183FC0u, rdram, ctx, runtime);
+        static int n = 0;
+        if (n++ < 10)
+            std::fprintf(stderr, "[pop:snd] sound language = \"%s\"\n", guestString(rdram, getRegU32(ctx, 2)).c_str());
+    }
     void reportSndCounts()
     {
         std::string line = "[pop:snd] RPS2 calls:";
@@ -1828,6 +1852,11 @@ namespace
             runtime.replaceFunction(0x0010BD40u, loggedCallRpc);
             installSndTrace(runtime, std::make_index_sequence<std::size(kSndTrace)>{});
             installSndCounts(runtime, std::make_index_sequence<std::size(kSndCounted)>{});
+            for (const uint32_t addr : {0x00199640u, 0x00199C80u, 0x00183FC0u})
+                g_originals[addr] = runtime.lookupFunction(addr);
+            runtime.replaceFunction(0x00199640u, sndError);
+            runtime.replaceFunction(0x00199C80u, sndOpen);
+            runtime.replaceFunction(0x00183FC0u, sndLanguage);
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
