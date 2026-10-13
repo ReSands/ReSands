@@ -85,14 +85,23 @@ namespace
         return buf;
     }
 
+    // Recompiled originals of the functions this override calls directly, captured by address
+    // before any replaceFunction (generated names change when Ghidra names change, addresses
+    // do not; a lookup at call time would find our own wrapper where we replaced one).
+    std::unordered_map<uint32_t, PS2Runtime::RecompiledFunction> g_originals;
+    void callOriginal(uint32_t addr, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_originals.at(addr)(rdram, ctx, runtime);
+    }
+
     // Calls the recompiled original; reports v0 only if it returned normally (a guest
     // thread switch inside it leaves pc elsewhere and the call resumes later).
-    template <PS2Runtime::RecompiledFunction Original>
+    template <uint32_t Original>
     void traced(const char *what, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, const std::string &args)
     {
         const uint32_t ra = getRegU32(ctx, 31);
         std::cerr << "[pop:fs] " << what << "(" << args << ")" << std::endl;
-        Original(rdram, ctx, runtime);
+        callOriginal(Original, rdram, ctx, runtime);
         if (ctx->pc == ra)
             std::cerr << "[pop:fs] " << what << " -> " << static_cast<int32_t>(getRegU32(ctx, 2)) << std::endl;
     }
@@ -101,22 +110,22 @@ namespace
     {
         const uint32_t devPtr = getRegU32(ctx, 6);
         const uint32_t device = devPtr ? *reinterpret_cast<const uint32_t *>(getConstMemPtr(rdram, devPtr)) : 0u;
-        traced<FUN_00153940_0x153940>("mount", rdram, ctx, runtime,
+        traced<0x00153940u>("mount", rdram, ctx, runtime,
             "\"" + guestString(rdram, getRegU32(ctx, 5)) + "\", device=" + hex(device));
     }
     void traceAlias(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        traced<FUN_00153140_0x153140>("alias", rdram, ctx, runtime,
+        traced<0x00153140u>("alias", rdram, ctx, runtime,
             "\"" + guestString(rdram, getRegU32(ctx, 5)) + "\" -> \"" + guestString(rdram, getRegU32(ctx, 6)) + "\"");
     }
     void traceResolve(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        traced<FUN_00152080_0x152080>("resolve", rdram, ctx, runtime,
+        traced<0x00152080u>("resolve", rdram, ctx, runtime,
             "\"" + guestString(rdram, getRegU32(ctx, 5)) + "\"");
     }
     void traceOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        traced<FUN_00152b40_0x152b40>("open", rdram, ctx, runtime,
+        traced<0x00152B40u>("open", rdram, ctx, runtime,
             "\"" + guestString(rdram, getRegU32(ctx, 5)) + "\", mode=" + std::to_string(getRegU32(ctx, 6)));
     }
 
@@ -126,7 +135,7 @@ namespace
     {
         const uint32_t alloc = guestU32(rdram, 0x006803b0u);
         const uint32_t vtbl = guestU32(rdram, alloc);
-        traced<FUN_0014f380_0x14f380>("cdDeviceCtor", rdram, ctx, runtime,
+        traced<0x0014F380u>("cdDeviceCtor", rdram, ctx, runtime,
             "this=" + hex(getRegU32(ctx, 4)) + ", allocator=" + hex(alloc) + ", vtbl=" + hex(vtbl) +
             ", alloc fn=" + hex(guestU32(rdram, vtbl + 0xc)));
     }
@@ -235,7 +244,7 @@ namespace
         const uint32_t size = getRegU32(ctx, 4);
         const uint32_t ra = getRegU32(ctx, 31);
         heapWalkCheck(rdram, "malloc entry", ra);
-        FUN_00100ac0_0x100ac0(rdram, ctx, runtime);
+        callOriginal(0x00100AC0u, rdram, ctx, runtime);
         if (ctx->pc != ra)
             return;
         const uint32_t result = getRegU32(ctx, 2);
@@ -250,12 +259,12 @@ namespace
         const uint32_t chunkSize = ptr >= 4u ? guestU32(rdram, ptr - 4u) : 0u;
         heapWalkCheck(rdram, "free entry", getRegU32(ctx, 31));
         heapRecord('f', ptr, 0, getRegU32(ctx, 31), chunkSize);
-        FUN_001008c0_0x1008c0(rdram, ctx, runtime);
+        callOriginal(0x001008C0u, rdram, ctx, runtime);
     }
     void traceSbrk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (g_heapTraceBudget-- <= 0) { FUN_00101880_0x101880(rdram, ctx, runtime); return; }
-        traced<FUN_00101880_0x101880>("sbrk", rdram, ctx, runtime, hex(getRegU32(ctx, 4)));
+        if (g_heapTraceBudget-- <= 0) { callOriginal(0x00101880u, rdram, ctx, runtime); return; }
+        traced<0x00101880u>("sbrk", rdram, ctx, runtime, hex(getRegU32(ctx, 4)));
     }
 
     // Writes into the start of the heap (where the first chunk headers live) by the C
@@ -1253,7 +1262,7 @@ namespace
         if (g_readTraceBudget-- > 0)
             std::cerr << "[pop:rd] readFully(" << hex(getRegU32(ctx, 4)) << ", buf=" << hex(getRegU32(ctx, 5))
                       << ", size=" << hex(getRegU32(ctx, 6)) << ") from " << hex(getRegU32(ctx, 31)) << std::endl;
-        FUN_00494cc0_0x494cc0(rdram, ctx, runtime);
+        callOriginal(0x00494CC0u, rdram, ctx, runtime);
     }
     void traceStreamRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1265,9 +1274,9 @@ namespace
         const uint32_t ra = getRegU32(ctx, 31);
         const uint32_t destBefore = getRegU32(ctx, 7);
         if (g_readTraceBudget-- > 0)
-            traced<FUN_00156c00_0x156c00>("streamRead", rdram, ctx, runtime, args);
+            traced<0x00156C00u>("streamRead", rdram, ctx, runtime, args);
         else
-            FUN_00156c00_0x156c00(rdram, ctx, runtime);
+            callOriginal(0x00156C00u, rdram, ctx, runtime);
         // First bytes of large reads, to check them against PRINCE.BF on the host.
         static int bigDumps = 12;
         if (ctx->pc == ra && (destBefore == 0x00571bc0u || getRegU32(ctx, 2) >= 0x1000u) && bigDumps > 0)
@@ -1563,7 +1572,7 @@ namespace
     {
         const uint32_t src = getRegU32(ctx, 4), srcLen = getRegU32(ctx, 5), dst = getRegU32(ctx, 6), dstLenPtr = getRegU32(ctx, 7);
         const uint32_t expected = guestU32(rdram, dstLenPtr), ra = getRegU32(ctx, 31);
-        FUN_0048dfc0_0x48dfc0(rdram, ctx, runtime);
+        callOriginal(0x0048DFC0u, rdram, ctx, runtime);
         if (ctx->pc != ra)
             return;
         const uint32_t produced = guestU32(rdram, dstLenPtr);
@@ -1620,7 +1629,7 @@ namespace
                 std::cerr << std::endl;
             }
         }
-        FUN_00488280_0x488280(rdram, ctx, runtime);
+        callOriginal(0x00488280u, rdram, ctx, runtime);
         if (log && ctx->pc == ra)
             std::cerr << "[pop:bin]   -> " << hex(getRegU32(ctx, 2)) << " after:" << binState(rdram) << std::endl;
     }
@@ -1632,11 +1641,13 @@ namespace
         if (g_binCallerTrace-- > 0)
             std::cerr << "[pop:bin] FUN_00488240(" << hex(getRegU32(ctx, 4)) << ", " << hex(getRegU32(ctx, 5))
                       << ") from " << hex(getRegU32(ctx, 31)) << std::endl;
-        FUN_00488240_0x488240(rdram, ctx, runtime);
+        callOriginal(0x00488240u, rdram, ctx, runtime);
     }
 
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        for (const uint32_t addr : {0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
+            g_originals[addr] = runtime.lookupFunction(addr);
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
         std::fprintf(stderr, "[pop] compiled VU1 programs registered\n");

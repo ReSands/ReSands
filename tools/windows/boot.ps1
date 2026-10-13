@@ -48,6 +48,7 @@ $env:POP_ASYNC_GS = $(if ($async) { '1' } else { '0' })
 $env:POP_GIF_TAP  = $(if ($async) { '1' } else { '0' })
 $p = Start-Process -FilePath $Exe -ArgumentList '.\SLUS_207.43' -WorkingDirectory "$Root\game\ps2\disc" `
         -RedirectStandardOutput $StdOut -RedirectStandardError $Err -PassThru -NoNewWindow
+$null = $p.Handle  # keeps the handle so ExitCode is available after the process ends
 $result = 'exited'
 if (-not $p.WaitForExit($Seconds * 1000)) {
     Stop-Process -Id $p.Id -Force

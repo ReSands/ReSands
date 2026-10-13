@@ -58,6 +58,9 @@ function Invoke-Logged($log, $exe, [string[]]$argList, [int]$TimeoutMinutes = 30
     $quoted = $argList | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
     $p = Start-Process -FilePath $exe -ArgumentList ($quoted -join ' ') -NoNewWindow -PassThru `
             -RedirectStandardOutput "$log.out" -RedirectStandardError "$log.err"
+    # Reading the handle now makes .NET keep it, so ExitCode is available later (without
+    # this, ExitCode is empty and every failure looked like success).
+    $null = $p.Handle
     if (-not $p.WaitForExit($TimeoutMinutes * 60 * 1000)) {
         taskkill /T /F /PID $p.Id 2>&1 | Out-Null
         "TIMEOUT after $TimeoutMinutes min: $exe (see $log.out)"
@@ -232,5 +235,7 @@ if ($Vu1) {
 }
 Stage "Build runtime ($(Split-Path $buildDir -Leaf))"
 if (Invoke-Logged "$R\runtime_build.log" cmake @('--build', $buildDir) -TimeoutMinutes 90) { 'BUILD FAILED'; Select-String -Path "$R\runtime_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
-"build ok, errors=$((Select-String -Path "$R\runtime_build.log" -Pattern ': error').Count)"
+$buildErrors = (Select-String -Path "$R\runtime_build.log" -Pattern ': error').Count
+if ($buildErrors) { "BUILD FAILED ($buildErrors errors)"; Select-String -Path "$R\runtime_build.log" -Pattern ': error' | Select-Object -First 10; exit 1 }
+'build ok'
 Stage 'Done'
