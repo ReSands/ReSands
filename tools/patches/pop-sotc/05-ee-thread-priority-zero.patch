@@ -1,0 +1,37 @@
+From 76e175e0545ac1fbd33395a5d832485b2223a80b Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 13:14:37 +0100
+Subject: [PATCH] EE scheduler: accept thread priority 0 (valid on the EE
+ kernel; CreateThread/ChangeThreadPriority rejected it, so Prince of Persia's
+ sound thread never started)
+
+---
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 1365d26..993b977 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -598,7 +598,8 @@ void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_
+ int EeScheduler::createThread(const EeThreadCreateParams &params)
+ {
+     assertExecutor();
+-    if (params.priority < 1 || params.priority >= kPriorityCount)
++    // 0 is a valid (highest) EE thread priority; Prince of Persia starts its sound thread at 0.
++    if (params.priority < 0 || params.priority >= kPriorityCount)
+     {
+         return KE_ILLEGAL_PRIORITY;
+     }
+@@ -876,7 +877,7 @@ int EeScheduler::cancelWakeup(int id)
+ int EeScheduler::changePriority(int id, int priority, bool interruptSafe, int &oldPriority)
+ {
+     assertExecutor();
+-    if (priority < 1 || priority >= kPriorityCount)
++    if (priority < 0 || priority >= kPriorityCount)
+     {
+         return KE_ILLEGAL_PRIORITY;
+     }
+-- 
+2.54.0 (Apple Git-157)
+
