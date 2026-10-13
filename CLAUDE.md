@@ -242,6 +242,19 @@ Hidden Palace dump, under `game/proto/` (`archive/` the .7z, `extract/` the .bin
 - PoP: Warrior Within, Oct 25, 2004 "Review" build (`game/proto-ww/`, `SLUS_210.22`): **stripped**, no map file.
 - So the Aug 2003 SoT prototype stays our only useful symbol source. Ubisoft's 2003 preview/review discs were often unstripped (SoT Aug 19, BG&E Aug 14 and Sep 9); release candidates and the 2004-05 PoP builds were not.
 
+## Native renderer probe (step 7, started 13 Oct 2026, Mac only)
+
+Prototype ELF imported as its own Ghidra project `game/ghidra/PoP_Proto0819` (all names; decompile with PoPDecompile.java by prototype address). Graphics code lives in `Ps2Graphic_cwf.lib` / `GraphicDK_cwfn.lib` (MAPFILE.MAP objects jadedrawmanager, jademesh, jadestaticmesh, jadeskinnedmesh, vumanager, geoobjectps2, ...).
+
+Findings (PS2 side): **favourable for route D.**
+- Display list design. `CJadeDrawManager::Display3DElements` (retail 0x4BC000, called from 0x4B4A80) draws everything through `CElementList::Render` (retail 0x4B9440, 9 lists in fixed order: opaque, mirrors, Z-biased, lightmaps `CLMElementList::Render` 0x4B7B80, shadows, transparent, after-effects). Sprites, particles, water, strings and indexed elements are added to the same manager.
+- Matrices are separate. `CMatrixPool::AddMatrix` stores object-to-world matrices (64 B each, scale flag applied; view-space Z kept for sorting); `AddBoneMatrixForGAO` stores world bone matrices per game object. Camera matrices (`g_graphic_sys+0x200/0x240/0x280/0x300/0x340`) go to VU1 once per driver switch (`CVuManager::DoSetStaticEnv`, retail via `DoSetVUProgram` 0x4B7580).
+- Geometry is static, loaded raw from the bigfile. `CJMeshElement::ReadElement` (retail 0x4C9500): bbox min/max (Z up, metres), bone palette bytes, LOD blobs, then per pass one ready-made DMA packet (`ret` tag + VIF). `CJMeshElement::Display` (retail 0x4C8A80) only sends a DMA call to that packet plus the element's matrix (UNPACK V4-32 x4) and MSCNT.
+- Packet contents (decoded with `tools/jademesh_find.py` + `tools/vifdump.py`, Aviary pack ff0b5b96): static batches = V3-32 float positions, V3-16 UVs + strip-restart flag, V4-8 RGBA (baked lighting), V4-32 x3 batch bbox, MSCNT; triangle strips. Skinned batches add V3-8 bone indices (VU matrix offsets, /4 = palette index), V3-32 weights (up to 3), positions in bind space. Both convert directly to GPU vertex buffers at load time.
+- So a native path can: convert packets at load (hook ReadElement), record each frame's element list + matrices + material (hook Render/AddElement), draw with our own camera (depth, motion vectors from previous-frame matrices per element).
+
+Open: only 21 elements found in the Aviary pack (check other grammars: CJMeshElementRef, LOD > 0, non-speed-mode geo from separate keys); materials/blend state per element (MAT_tdst_MultiTexture, CJadeRenderStateManager); which draws bypass the manager (2D, after-effects, loading screen, GFX); PC POP.EXE comparison (its mesh format, whether PC meshes are higher detail); live check in the Mac build (count elements per frame vs GS draws).
+
 ## Renderer and DLSS notes
 
 - Render path: translate GS draw calls into modern GPU calls (D3D12 or Vulkan). This is where texture replacement hooks in and where DLSS would attach.
