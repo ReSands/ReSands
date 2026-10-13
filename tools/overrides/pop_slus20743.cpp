@@ -1812,11 +1812,9 @@ namespace
     }
     void sndOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const std::string name = guestString(rdram, getRegU32(ctx, 4));
-        const uint32_t ra = getRegU32(ctx, 31);
+        // Printed before the call: a blocking read inside never returns to this wrapper.
+        std::fprintf(stderr, "[pop:snd] open \"%s\"\n", guestString(rdram, getRegU32(ctx, 4)).c_str());
         callOriginal(0x00199C80u, rdram, ctx, runtime);
-        std::fprintf(stderr, "[pop:snd] open \"%s\" -> %d%s\n", name.c_str(), static_cast<int32_t>(getRegU32(ctx, 2)),
-                     ctx->pc == ra ? "" : " (thread switch)");
     }
     void sndLanguage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1824,6 +1822,25 @@ namespace
         static int n = 0;
         if (n++ < 10)
             std::fprintf(stderr, "[pop:snd] sound language = \"%s\"\n", guestString(rdram, getRegU32(ctx, 2)).c_str());
+    }
+    // Steps of SND_fn_bInitDataLoadSnd that fail without a message of their own.
+    constexpr SndCounted kSndSteps[] = {
+        {0x00171780u, "check 0x6A1E7C"}, {0x0017A480u, "InitDataLoadSnd_Map"},
+        {0x00176840u, "InitDataLoadSnd_Bank"}, {0x001732C0u, "PostInitEngineConf"},
+    };
+    template <size_t I>
+    void sndStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        char type[5] = {};
+        std::memcpy(type, getConstMemPtr(rdram, 0x006A1E34u), 4);
+        std::fprintf(stderr, "[pop:snd] step %s (project type \"%s\")\n", kSndSteps[I].name, type);
+        callOriginal(kSndSteps[I].addr, rdram, ctx, runtime);
+    }
+    template <size_t... I>
+    void installSndSteps(PS2Runtime &runtime, std::index_sequence<I...>)
+    {
+        ((g_originals[kSndSteps[I].addr] = runtime.lookupFunction(kSndSteps[I].addr)), ...);
+        (runtime.replaceFunction(kSndSteps[I].addr, sndStep<I>), ...);
     }
     void reportSndCounts()
     {
@@ -1857,6 +1874,7 @@ namespace
             runtime.replaceFunction(0x00199640u, sndError);
             runtime.replaceFunction(0x00199C80u, sndOpen);
             runtime.replaceFunction(0x00183FC0u, sndLanguage);
+            installSndSteps(runtime, std::make_index_sequence<std::size(kSndSteps)>{});
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
