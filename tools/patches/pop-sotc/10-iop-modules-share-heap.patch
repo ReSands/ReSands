@@ -1,0 +1,57 @@
+From c435fcd5ee0292d732fead1a0978328a51807d37 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:28:06 +0100
+Subject: [PATCH] IOP: modules take their memory from the IOP heap (as loadcore
+ does from sysmem); the heap starts at the module base (0x10000)
+
+The fixed module arena (0x10000-0x80000) left the heap 0x80000-0x1F0000 (1.4 MB). Prince of Persia's sound engine reserves 27 x 0xB0C0 bytes with sceSifAllocIopHeap after its modules are loaded; the 26th failed (16 KB short), so the engine switched itself off (silent game).
+---
+ ps2xIOP/src/emulator/core/iop_memory.h              | 6 +++++-
+ ps2xIOP/src/emulator/services/iop_module_loader.cpp | 7 +++++--
+ 2 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.h b/ps2xIOP/src/emulator/core/iop_memory.h
+index 5667788..551c811 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -26,7 +26,11 @@ namespace ps2x::iop::detail
+         static constexpr uint32_t Spu2End = 0x1FA00000u;
+         static constexpr uint32_t SifBase = 0x1D000000u;
+         static constexpr uint32_t SifEnd = 0x1D001000u;
+-        static constexpr uint32_t HeapBase = 0x00080000u;
++        // The heap starts where modules are loaded: relocated modules take their memory from it
++        // (as loadcore does from sysmem on the IOP), so space the modules leave free stays usable.
++        // Prince of Persia's sound engine needs ~1.2 MB of sceSifAllocIopHeap blocks after its
++        // modules are loaded; with a fixed module arena below 0x80000 it fell 16 KB short.
++        static constexpr uint32_t HeapBase = 0x00010000u;
+         static constexpr uint32_t HeapLimit = 0x001F0000u;
+ 
+         struct Allocation
+diff --git a/ps2xIOP/src/emulator/services/iop_module_loader.cpp b/ps2xIOP/src/emulator/services/iop_module_loader.cpp
+index 14fa83d..f655d9a 100644
+--- a/ps2xIOP/src/emulator/services/iop_module_loader.cpp
++++ b/ps2xIOP/src/emulator/services/iop_module_loader.cpp
+@@ -438,8 +438,9 @@ namespace ps2x::iop::detail
+         int64_t delta = 0;
+         if (relocate)
+         {
+-            base = alignUp(moduleCursor, 0x100u);
+-            if (base + span >= IopMemory::HeapBase)
++            (void)moduleCursor;
++            base = memory.allocate(span, 0x100u);
++            if (base == 0u)
+             {
+                 result.error = IopImageLoadError::ArenaExhausted;
+                 return result;
+@@ -450,6 +451,8 @@ namespace ps2x::iop::detail
+         else
+         {
+             base = minVaddr;
++            // Keep the heap away from a module loaded at its own address.
++            (void)memory.allocate(span, 16u, base);
+         }
+ 
+         if (hasLoad)
+-- 
+2.54.0 (Apple Git-157)
+
