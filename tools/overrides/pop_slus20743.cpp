@@ -15,6 +15,7 @@ namespace { void reportRpcCalls(); bool g_sndLog = false; }
 #include "raylib.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -171,6 +172,38 @@ namespace
     void kernelRingRecord(const char *name, uint32_t a0, uint32_t caller, uint32_t sp)
     {
         g_kernelRing[g_kernelRingCount++ % 150] = {name, a0, caller, sp};
+    }
+    void dumpKernelRing(const char *why)
+    {
+        const uint32_t n = std::min<uint32_t>(g_kernelRingCount, 150);
+        std::cerr << "[pop:stall] " << why << "; last " << n << " kernel calls:" << std::endl;
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const KernelEvent &e = g_kernelRing[(g_kernelRingCount - n + i) % 150];
+            std::cerr << "[pop:stall]   " << e.name << "(" << hex(e.a0) << ") from " << hex(e.caller) << " sp=" << hex(e.sp) << std::endl;
+        }
+    }
+    // POP_TRACE=1 also starts a watchdog: no PS2_Flip for 30 s (a load that never ends) dumps
+    // the kernel-call ring once, to show which call the loading thread blocked in.
+    std::atomic<int64_t> g_lastFlipMs{0};
+    int64_t steadyMs()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void startFlipWatchdog()
+    {
+        g_lastFlipMs = steadyMs();
+        std::thread([] {
+            for (;;)
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (steadyMs() - g_lastFlipMs.load() > 30000)
+                {
+                    dumpKernelRing("no PS2_Flip for 30 s");
+                    return;
+                }
+            }
+        }).detach();
     }
     constexpr uint32_t kHeapStart = 0x006E7000u;
     struct HeapEvent { char kind; uint32_t arg, result, caller, chunkSize; };
@@ -1310,13 +1343,7 @@ namespace
         if (zeros >= 3 && !dumped)
         {
             dumped = true;
-            const uint32_t n = std::min<uint32_t>(g_kernelRingCount, 150);
-            std::cerr << "[pop:stall] reader returned 0 three times; last " << n << " kernel calls:" << std::endl;
-            for (uint32_t i = 0; i < n; ++i)
-            {
-                const KernelEvent &e = g_kernelRing[(g_kernelRingCount - n + i) % 150];
-                std::cerr << "[pop:stall]   " << e.name << "(" << hex(e.a0) << ") from " << hex(e.caller) << " sp=" << hex(e.sp) << std::endl;
-            }
+            dumpKernelRing("reader returned 0 three times");
         }
     }
 
@@ -1481,6 +1508,7 @@ namespace
     PS2Runtime::RecompiledFunction g_origFlip = nullptr;
     void countedFlip(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        g_lastFlipMs = steadyMs();
         static uint64_t frames = 0;
         static auto last = std::chrono::steady_clock::now();
         ++frames;
@@ -1794,6 +1822,7 @@ namespace
         }
         if (kernelCallLog())
         {
+            startFlipWatchdog();
             runtime.replaceFunction(0x00488240u, traceBinReadCaller);
             runtime.replaceFunction(0x0048dfc0u, traceDecompress);
             runtime.replaceFunction(0x00488280u, traceBinRead);
