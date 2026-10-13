@@ -10,7 +10,7 @@
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include <ps2_recompiled_functions.h>
 
-namespace { void reportRpcCalls(); bool g_sndLog = false; }
+namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false; }
 
 #include "raylib.h"
 
@@ -1520,6 +1520,7 @@ namespace
             if (g_sndLog)
             {
                 reportRpcCalls();
+                reportSndCounts();
                 // Sound engine IOP link (SND_fn_iIOPCommandRPC): ready flag 0x6A4340 (set when
                 // command 0 replies 1), reply buffer 0x6A4300, RPC client 0x680CC0 (UbiSound).
                 auto w = [&](uint32_t a) { return guestU32(rdram, a); };
@@ -1771,6 +1772,35 @@ namespace
         (runtime.replaceFunction(kSndTrace[I], tracedSnd<kSndTrace[I]>), ...);
     }
 
+    // POP_SNDLOG=1 also counts calls of DARE's PS2 renderer (RPS2, the EE-side mixer that
+    // fills the AutoDMA stream), reported every 5 s with the RPC counts.
+    struct SndCounted { uint32_t addr; const char *name; };
+    constexpr SndCounted kSndCounted[] = {
+        {0x00169A80u, "UpdateRenderer"}, {0x0016A140u, "VSyncCallBack"}, {0x0016A380u, "ThreadWorker"},
+        {0x0016A840u, "UpdateBuffer"},   {0x0016A9C0u, "GetDataSample"}, {0x0016AB40u, "Play"},
+        {0x0016B380u, "LoadResBinary"},  {0x0016B2C0u, "ASyncLoadResBinary"}, {0x0016B400u, "ConvertRes"},
+    };
+    std::atomic<uint64_t> g_sndCounts[std::size(kSndCounted)];
+    template <size_t I>
+    void countedSnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        ++g_sndCounts[I];
+        callOriginal(kSndCounted[I].addr, rdram, ctx, runtime);
+    }
+    template <size_t... I>
+    void installSndCounts(PS2Runtime &runtime, std::index_sequence<I...>)
+    {
+        ((g_originals[kSndCounted[I].addr] = runtime.lookupFunction(kSndCounted[I].addr)), ...);
+        (runtime.replaceFunction(kSndCounted[I].addr, countedSnd<I>), ...);
+    }
+    void reportSndCounts()
+    {
+        std::string line = "[pop:snd] RPS2 calls:";
+        for (size_t i = 0; i < std::size(kSndCounted); ++i)
+            line += std::string(" ") + kSndCounted[i].name + "=" + std::to_string(g_sndCounts[i].exchange(0));
+        std::fprintf(stderr, "%s\n", line.c_str());
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
         for (const uint32_t addr : kSndTrace)
@@ -1789,6 +1819,7 @@ namespace
             runtime.replaceFunction(0x0010BB70u, loggedBindRpc);
             runtime.replaceFunction(0x0010BD40u, loggedCallRpc);
             installSndTrace(runtime, std::make_index_sequence<std::size(kSndTrace)>{});
+            installSndCounts(runtime, std::make_index_sequence<std::size(kSndCounted)>{});
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
