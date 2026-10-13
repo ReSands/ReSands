@@ -1,0 +1,52 @@
+From 4e780cc04500cbbe8d97bd5da412224d763b95d9 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:55:39 +0100
+Subject: [PATCH] IOP: after each top-level RPC server call, run the IOP for
+ 2048 cycles (timers, interrupts, ready threads)
+
+An EE that polls an RPC in a loop inside the runtime's SIF calls accounts no EE cycles, so the IOP's own threads and timers never ran between calls. Prince of Persia polls its UbiSound driver for the end of an IOP->SPU2 transfer that the driver's timer-driven update thread has to start.
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index cf59085..6cbb377 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -46,6 +46,7 @@ namespace ps2x::iop::detail
+         constexpr uint64_t kIopBatchCycles = 1024u;
+         constexpr uint64_t kServerCallMaxCycles = kIopClockHz * 2u;
+         constexpr uint32_t kServerDirectBudget = 100'000u;
++        constexpr uint64_t kServerBackgroundCycles = 2048u;
+ 
+         uint32_t physicalAddress(uint32_t address)
+         {
+@@ -262,6 +263,7 @@ namespace ps2x::iop::detail
+ 
+         // PS2X_IOP_IMPORT_STATS=1: import calls per library/ordinal every 2 emulated seconds, with
+         // the ones this emulator does not implement marked (they return with v0 unchanged).
++        bool runningServerBackground = false;
+         std::map<std::string, std::pair<uint64_t, bool>> importStats;
+         uint64_t importStatsNext = 0;
+         void noteImportCall(const IopImportCall &call, ImportDisposition disposition, const CpuState &cpu)
+@@ -616,6 +618,17 @@ namespace ps2x::iop::detail
+             const uint32_t result = thread ? thread->cpu.gpr[2] : 0u;
+             if (thread && (thread->cpu.stopped || kernel.threadFinished(id)))
+                 kernel.releaseThread(id);
++
++            // The IOP runs concurrently with the EE. An EE that polls an RPC in a loop inside the
++            // runtime's SIF calls accounts no EE cycles, so without this the IOP's own threads and
++            // timers never ran between calls (Prince of Persia polls its UbiSound driver for the
++            // end of an IOP->SPU2 transfer that the driver's timer-driven thread has to start).
++            if (!runningServerBackground && callDepth == 1u)
++            {
++                runningServerBackground = true;
++                runCycles(kServerBackgroundCycles);
++                runningServerBackground = false;
++            }
+             return result;
+         }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
