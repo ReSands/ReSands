@@ -112,4 +112,18 @@ All handled with a game override. Reporting so the runtime can cover them genera
 
 ---
 
+## 9. `sceSdRemote*` stand-ins never reach the IOP, so games using the real sound driver stay silent
+
+**Where:** `ps2xRuntime/src/lib/Kernel/Stubs/Audio.cpp`: `sceSdRemoteInit` only resets local state, `sceSdRemote` records voice/block transfers and returns plausible status values, `sceSdTransToIOP` is a TODO. None of them sends the RPC (sdr server 0x80000701) to the IOP.
+
+That suits a runtime that synthesises audio from these calls itself. But when the game's own IOP modules run on the emulated IOP (here libsd, `sdr_driver` and the game's sound driver, loaded with `sceSifLoadModuleBuffer`), the driver never receives `sceSdInit` or any command, so it never touches the SPU2.
+
+**Effect (SLUS-20743):** with the SPU2 model running at full rate (48,000 samples/s, no underruns), the output was all zeros, and the SPU2 saw **zero register writes** from boot onward.
+
+**Fix:** when the game's sdr driver is running on the emulated IOP, don't substitute these functions; let the game's EE-side client make its real RPC calls. We do this by renaming them in the export (`pop_sceSd…`) so the original code is recompiled. A runtime switch (stand-in vs real RPC) would cover both cases.
+
+Not sufficient on its own for SLUS-20743 (13 Oct 2026, still being verified): the game's sound thread is created at priority 0, which the EE scheduler of the SotC fork rejected (`priority < 1`; 0 is valid on the EE kernel), and the SPU2 model dropped AutoDMA (streamed PCM) transfers. Check whether upstream's scheduler and SPU2 have the same limits before reporting those.
+
+---
+
 Also seen, already known upstream: game overrides registered from the static library are silently dropped (#264).
