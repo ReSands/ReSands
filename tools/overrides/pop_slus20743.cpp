@@ -1827,13 +1827,20 @@ namespace
     constexpr SndCounted kSndSteps[] = {
         {0x00171780u, "check 0x6A1E7C"}, {0x0017A480u, "InitDataLoadSnd_Map"},
         {0x00176840u, "InitDataLoadSnd_Bank"}, {0x001732C0u, "PostInitEngineConf"},
+        {0x003FD300u, "language switch"}, {0x00183800u, "SetCurrentLanguage"}, {0x00183F80u, "set language string"},
+        {0x00199D80u, "ReadFileSnd"}, {0x00199DC0u, "SeekFileSnd"},
     };
     template <size_t I>
     void sndStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         char type[5] = {};
         std::memcpy(type, getConstMemPtr(rdram, 0x006A1E34u), 4);
-        std::fprintf(stderr, "[pop:snd] step %s (project type \"%s\")\n", kSndSteps[I].name, type);
+        static int logged = 0;
+        if (logged++ < 60)
+            std::fprintf(stderr, "[pop:snd] step %s (a0=%x a1=%x a2=%x \"%s\", project type \"%s\") from %x\n", kSndSteps[I].name,
+                         getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6),
+                         getRegU32(ctx, 4) > 0x100000u && getRegU32(ctx, 4) < 0x2000000u ? guestString(rdram, getRegU32(ctx, 4)).substr(0, 24).c_str() : "",
+                         type, getRegU32(ctx, 31));
         callOriginal(kSndSteps[I].addr, rdram, ctx, runtime);
     }
     template <size_t... I>
