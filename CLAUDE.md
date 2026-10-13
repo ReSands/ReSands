@@ -197,6 +197,17 @@ Goal: combine the best assets of each 2003 version (PS2, GameCube, Xbox, PC) int
 - Bigfiles (`game/xbox/analysis/bigcmp.py`; file count at 0x08, then (offset, key) pairs from 0x44, each entry starts with a u32 size): PS2, Xbox and PC all have the same 3,308 keys. GameCube packs differently (1,602 keys, 1,598 shared). The prototype has 874, all in retail. Totals: PS2 195 MB, GameCube 209, Xbox 332, PC 377. The growth is in ~280 large world packs (keys `ff0…`, PS2 ~2 MB, Xbox ~3.5, PC ~4.3, stored in 128 KB compressed blocks): PC > Xbox > GameCube ≈ PS2. Most other keys are the same size everywhere. Sizes are compressed, so real texture resolution needs decoding.
 - Symbol check for each new disc: `.map` files on the GameCube disc, symbol strings in `main.dol`, debug sections or a PDB in the Xbox `default.xbe`, an unstripped ELF in any prototype. Names found can be carried to the PS2 ELF with Ghidra Version Tracking.
 
+## Survey of other PS2 projects (13 Oct 2026)
+
+unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 with static recomps). No Prince of Persia or other Jade-engine project. 55 PS2-version static recomps have READMEs; raw data and the flag table in `game/analysis/unbaked/` (`ps2_recomps.txt`, `readmes/`). Most use PS2Recomp; hardware layers vary. Most useful references:
+- **Renderer options seen:** PCSX2's GS (NBA Street V3 as a separate "live" process fed by a ring buffer; Ridge Racer V "fukami"; Urban Reign; Killzone; up to 8x, FSR/DLSS, PCSX2 texture packs), paraLLEl-GS (Vulkan, supersampling: Def Jam, Road Trip, RE Outbreak, BT3), own GPU renderers (Test Drive EoD: D3D11 up to 6x; BT3-Recomp: Vulkan renderer with PCSX2-compatible texture-pack hashing `<TEX0Hash>-<CLUTHash>-<bits>`), native meshes (Ace Combat 5, own recompiler, Apache-2.0).
+- **Same base as ours (SotC fork):** Tobiichi-Port (God of War) adds Hor+ widescreen (from the PCSX2 patch), FSR 1 + FXAA at presentation, presenting at 120+ Hz independent of the 60 Hz logic, VU1 recompiled bit-exact, and audio time-stretch with the IOP clock tied to EE time.
+- **IPU/movies:** Test Drive EoD (`hw/` IPU: MPEG-2 macroblock decoding + colour conversion, movies play), Killzone (PCSX2 IPU), SRWZ-native (IPU/MPEG via FFmpeg), Ace Combat 5 (runtime IPU).
+- **Sound:** fukami (PCSX2 SPU2 core), RE Outbreak (own SPU2 mixer -> WASAPI), Tobiichi (IOP clock tied to EE), Road Trip (sound driver native).
+- **VU1:** Killzone packages PCSX2's microVU ("KZVU", reused by SRWZ-native via `PS2X_VU1_KZVU=1`).
+- **Correctness tools:** NBA Street's `PS2X_VERIFY` (recompiled functions vs interpreter) and its fix list (SQRT.S ft, 64-bit branches, VRSQRT/VSQRT/VDIV, CVT.W.S, VCLIP, vf0; our SotC base already has SQRT.S and 64-bit branches); SRWZ/REO compare against PCSX2 via PINE.
+- Many projects state they were built with Claude Code or other AI agents.
+
 ## Texture formats and the PC upgrade (12 Oct 2026)
 
 `tools/jadetex.py` (unpack / list / png / compare) reads textures from the PS2 and PC bigfiles; its docstring has the format details. Summary:
