@@ -9,12 +9,7 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include <ps2_recompiled_functions.h>
-#if __has_include("runtime/ps2_display_options.h")
-#include "runtime/ps2_display_options.h"
-#define POP_HAS_DISPLAY_OPTIONS 1
-#endif
 
-bool popMovieActive(); // pop_movies.cpp
 namespace { void reportRpcCalls(); bool g_sndLog = false; }
 
 #include "raylib.h"
@@ -1475,34 +1470,6 @@ namespace
             g_asyncGs->drain();
     }
 
-    // With the widescreen patch compiled in, the 3D view, HUD and menus are drawn for 16:9, but
-    // the loading screen (drawn by FUN_004C9C80) and movies are still drawn for 4:3. Pick the
-    // presentation aspect per frame: 4:3 while either is on screen, 16:9 otherwise.
-    bool g_widescreen = false;
-    bool g_loadingScreenDrawn = false;
-    uint64_t g_loadingDrawFrames = 0, g_loadingGapFrames = 0; // frames with / without a draw while loading
-    void loadingScreenDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        g_loadingScreenDrawn = true;
-        callOriginal(0x004C9C80u, rdram, ctx, runtime);
-    }
-    void presentAspectForFrame()
-    {
-#ifdef POP_HAS_DISPLAY_OPTIONS
-        if (g_widescreen)
-            ps2_host_display::setAspect(g_loadingScreenDrawn || popMovieActive() ? 4.0f / 3.0f : 16.0f / 9.0f);
-#endif
-        // Loading-screen frames with a draw call, and frames without one right after them (if the
-        // screen is not redrawn every frame, the aspect would flicker).
-        static bool previous = false;
-        if (g_loadingScreenDrawn)
-            ++g_loadingDrawFrames;
-        else if (previous)
-            ++g_loadingGapFrames;
-        previous = g_loadingScreenDrawn;
-        g_loadingScreenDrawn = false;
-    }
-
     // Frame-rate counter: wraps the display driver's end-of-frame flip (FUN_004B5200, slot 7)
     // and prints frames per second every 5 s.
     PS2Runtime::RecompiledFunction g_origFlip = nullptr;
@@ -1516,10 +1483,6 @@ namespace
         if (dt >= 5.0)
         {
             std::cerr << "[pop:fps] " << (frames / dt) << std::endl;
-            if (g_loadingDrawFrames || g_loadingGapFrames)
-                std::fprintf(stderr, "[pop:loading] frames drawn %llu, gaps after a drawn frame %llu\n",
-                             static_cast<unsigned long long>(g_loadingDrawFrames), static_cast<unsigned long long>(g_loadingGapFrames));
-            g_loadingDrawFrames = g_loadingGapFrames = 0;
             if (g_sndLog)
                 reportRpcCalls();
             frames = 0;
@@ -1533,7 +1496,6 @@ namespace
             const uint32_t one = 1u;
             std::memcpy(rdram + 0x0066D044u, &one, sizeof(one));
         }
-        presentAspectForFrame();
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
     }
@@ -1770,23 +1732,12 @@ namespace
     {
         for (const uint32_t addr : kSndTrace)
             g_originals[addr] = runtime.lookupFunction(addr);
-        for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x004C9C80u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
+        for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
             g_originals[addr] = runtime.lookupFunction(addr);
-        // The PCSX2 widescreen patch (rebuild -Pnach 'Widescreen 16:9') renders a 16:9 view into
-        // the same 640-wide frame and expects the display to stretch it, as PCSX2's
-        // gsaspectratio=16:9 does. Its menu fix adds a function entry at 0x478CBC, so that entry
-        // existing means the patch is compiled in.
+        // Widescreen is parked until the native renderer (13 Oct 2026): the PCSX2 patch also
+        // needs the presenter at 16:9 except for movies and the loading screen.
         if (runtime.hasFunction(0x00478CBCu))
-        {
-#ifdef POP_HAS_DISPLAY_OPTIONS
-            ps2_host_display::setAspect(16.0f / 9.0f);
-            g_widescreen = true;
-            runtime.replaceFunction(0x004C9C80u, loadingScreenDraw);
-            std::fprintf(stderr, "[pop] widescreen patch compiled in: presenting at 16:9 (4:3 for movies and the loading screen)\n");
-#else
-            std::fprintf(stderr, "[pop] widescreen patch compiled in, but this runtime cannot present at 16:9\n");
-#endif
-        }
+            std::fprintf(stderr, "[pop] warning: PCSX2 widescreen patch compiled in, but presenting at 4:3\n");
         if (const char *v = std::getenv("POP_SNDLOG"); v && *v == '1')
         {
             g_sndLog = true;
