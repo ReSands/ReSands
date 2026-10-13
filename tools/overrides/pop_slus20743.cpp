@@ -33,6 +33,12 @@ namespace { void reportRpcCalls(); bool g_sndLog = false; }
 #include <vector>
 
 void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
+namespace pop_drawprobe // pop_drawprobe.cpp: native renderer probe (POP_DRAWPROBE=1)
+{
+    void install(PS2Runtime &runtime);
+    void onPacket(const uint8_t *data, uint32_t size);
+    void onFrameEnd();
+}
 namespace pop_hdtex // pop_hdtextures.cpp: PC textures
 {
     struct Texture;
@@ -1498,6 +1504,7 @@ namespace
         }
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
+        pop_drawprobe::onFrameEnd();
     }
 
     void cdReadWithCompletion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1768,6 +1775,7 @@ namespace
             runtime.gifArbiter().setProcessPacketFn([rt](const uint8_t *data, uint32_t size)
                                                     {
                                                         countGifPacket(data, size);
+                                                        pop_drawprobe::onPacket(data, size);
                                                         if (g_asyncGs)
                                                         {
                                                             g_asyncGs->push(data, size);
@@ -1826,6 +1834,7 @@ namespace
         if (g_cdSearchFile)
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
+        pop_drawprobe::install(runtime);
         pop_hdtex::runSelfTest();
         runtime.replaceFunction(0x00118918u, newlibRand);
         runtime.replaceFunction(0x004A4D00u, vu1IdleWait);

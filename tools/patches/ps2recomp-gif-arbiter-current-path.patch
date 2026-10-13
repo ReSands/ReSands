@@ -1,0 +1,38 @@
+diff --git a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+index 2012083..777300b 100644
+--- a/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
++++ b/ps2xRuntime/include/runtime/gs/ps2_gif_arbiter.h
+@@ -20,6 +20,8 @@ struct GifArbiterPacket
+     std::vector<uint8_t> data;
+ };
+ 
++#define PS2X_GIF_ARBITER_CURRENT_PATH 1 // currentPath(): path of the packet being processed
++
+ class GifArbiter
+ {
+ public:
+@@ -34,10 +36,12 @@ public:
+ 
+     void drain();
+     bool empty() const { return m_queue.empty(); }
++    GifPathId currentPath() const { return m_currentPath; }
+ 
+ private:
+     ProcessPacketFn m_processFn;
+     std::vector<GifArbiterPacket> m_queue;
++    GifPathId m_currentPath = GifPathId::Path3;
+ 
+     static bool isImagePacket(const uint8_t *data, uint32_t sizeBytes);
+     static uint8_t pathPriority(GifPathId id);
+diff --git a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+index c289ba0..8587d44 100644
+--- a/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
++++ b/ps2xRuntime/src/lib/gs/ps2_gif_arbiter.cpp
+@@ -56,6 +56,7 @@ void GifArbiter::drain()
+         auto &pkt = m_queue[i];
+         if (!pkt.data.empty())
+         {
++            m_currentPath = pkt.pathId;
+             m_processFn(pkt.data.data(), static_cast<uint32_t>(pkt.data.size()));
+         }
+     }
