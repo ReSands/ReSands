@@ -9,6 +9,10 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include <ps2_recompiled_functions.h>
+#if __has_include("runtime/ps2_display_options.h")
+#include "runtime/ps2_display_options.h"
+#define POP_HAS_DISPLAY_OPTIONS 1
+#endif
 
 #include "raylib.h"
 
@@ -1644,10 +1648,47 @@ namespace
         callOriginal(0x00488240u, rdram, ctx, runtime);
     }
 
+    // POP_SNDLOG=1: log the game's remote sound-library calls (recompiled originals, not
+    // PS2Recomp's stand-ins): sceSdRemoteInit (0x112980) and sceSdRemote (0x112AC0).
+    int g_sndLogBudget = 60;
+    template <uint32_t Addr>
+    void loggedSd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = getRegU32(ctx, 31);
+        const bool log = g_sndLogBudget > 0;
+        if (log)
+        {
+            --g_sndLogBudget;
+            std::fprintf(stderr, "[pop:snd] %s(%x, %x, %x, %x) from %x\n", Addr == 0x00112980u ? "sceSdRemoteInit" : "sceSdRemote",
+                         getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6), getRegU32(ctx, 7), ra);
+        }
+        callOriginal(Addr, rdram, ctx, runtime);
+        if (log && ctx->pc == ra)
+            std::fprintf(stderr, "[pop:snd]   -> %x\n", getRegU32(ctx, 2));
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
-        for (const uint32_t addr : {0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
+        for (const uint32_t addr : {0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
             g_originals[addr] = runtime.lookupFunction(addr);
+        // The PCSX2 widescreen patch (rebuild -Pnach 'Widescreen 16:9') renders a 16:9 view into
+        // the same 640-wide frame and expects the display to stretch it, as PCSX2's
+        // gsaspectratio=16:9 does. Its menu fix adds a function entry at 0x478CBC, so that entry
+        // existing means the patch is compiled in.
+        if (runtime.hasFunction(0x00478CBCu))
+        {
+#ifdef POP_HAS_DISPLAY_OPTIONS
+            ps2_host_display::setAspect(16.0f / 9.0f);
+            std::fprintf(stderr, "[pop] widescreen patch compiled in: presenting at 16:9\n");
+#else
+            std::fprintf(stderr, "[pop] widescreen patch compiled in, but this runtime cannot present at 16:9\n");
+#endif
+        }
+        if (const char *v = std::getenv("POP_SNDLOG"); v && *v == '1')
+        {
+            runtime.replaceFunction(0x00112980u, loggedSd<0x00112980u>);
+            runtime.replaceFunction(0x00112AC0u, loggedSd<0x00112AC0u>);
+        }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
         std::fprintf(stderr, "[pop] compiled VU1 programs registered\n");
