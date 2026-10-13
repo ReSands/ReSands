@@ -33,6 +33,7 @@ namespace { void reportRpcCalls(); bool g_sndLog = false; }
 #include <iostream>
 #include <string>
 #include <unordered_map>
+#include <iterator>
 #include <utility>
 #include <vector>
 
@@ -1744,8 +1745,31 @@ namespace
         }
     }
 
+    // POP_SNDLOG=1 also traces the sound engine's start-up chain (entry args, return value),
+    // to find where it gives up before ever sending its IOP driver a command.
+    constexpr uint32_t kSndTrace[] = {0x00189D00u, 0x00169B40u, 0x00169CC0u, 0x001817C0u, 0x0015DC80u, 0x001609C0u, 0x00160A80u, 0x0017C540u, 0x00160740u};
+    template <uint32_t Addr>
+    void tracedSnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static int budget = 20;
+        const uint32_t ra = getRegU32(ctx, 31);
+        const bool log = budget-- > 0;
+        if (log)
+            std::fprintf(stderr, "[pop:sndinit] %06x(%x, %x, %x) from %x\n", Addr, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6), ra);
+        callOriginal(Addr, rdram, ctx, runtime);
+        if (log)
+            std::fprintf(stderr, "[pop:sndinit] %06x -> %x%s\n", Addr, getRegU32(ctx, 2), ctx->pc == ra ? "" : " (thread switch)");
+    }
+    template <size_t... I>
+    void installSndTrace(PS2Runtime &runtime, std::index_sequence<I...>)
+    {
+        (runtime.replaceFunction(kSndTrace[I], tracedSnd<kSndTrace[I]>), ...);
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        for (const uint32_t addr : kSndTrace)
+            g_originals[addr] = runtime.lookupFunction(addr);
         for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x004C9C80u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
             g_originals[addr] = runtime.lookupFunction(addr);
         // The PCSX2 widescreen patch (rebuild -Pnach 'Widescreen 16:9') renders a 16:9 view into
@@ -1770,6 +1794,7 @@ namespace
             runtime.replaceFunction(0x00112AC0u, loggedSd<0x00112AC0u>);
             runtime.replaceFunction(0x0010BB70u, loggedBindRpc);
             runtime.replaceFunction(0x0010BD40u, loggedCallRpc);
+            installSndTrace(runtime, std::make_index_sequence<std::size(kSndTrace)>{});
         }
 #if PS2X_HAS_VU1_PROGRAMS
         registerGeneratedVu1Programs();
