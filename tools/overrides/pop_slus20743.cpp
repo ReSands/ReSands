@@ -1518,7 +1518,15 @@ namespace
         {
             std::cerr << "[pop:fps] " << (frames / dt) << std::endl;
             if (g_sndLog)
+            {
                 reportRpcCalls();
+                // Sound engine IOP link (SND_fn_iIOPCommandRPC): ready flag 0x6A4340 (set when
+                // command 0 replies 1), reply buffer 0x6A4300, RPC client 0x680CC0 (UbiSound).
+                auto w = [&](uint32_t a) { return guestU32(rdram, a); };
+                std::fprintf(stderr, "[pop:snd] ready=%x reply=%08x %08x %08x %08x client=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+                             w(0x6A4340u), w(0x6A4300u), w(0x6A4304u), w(0x6A4308u), w(0x6A430Cu),
+                             w(0x680CC0u), w(0x680CC4u), w(0x680CC8u), w(0x680CCCu), w(0x680CD0u), w(0x680CD4u), w(0x680CD8u), w(0x680CDCu));
+            }
             frames = 0;
             last = now;
         }
