@@ -1,0 +1,47 @@
+From 8ac583d90421a190342d888efb393508ea313b53 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:59:16 +0100
+Subject: [PATCH] SPU2: AVOL (0x768) is the core external input volume (core
+ 0's output into core 1), BVOL (0x76C) the sound data (AutoDMA) volume, as
+ PCSX2; they were swapped
+
+---
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 13 +++++++------
+ 1 file changed, 7 insertions(+), 6 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index 97f7e48..3bb8d7e 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -409,8 +409,8 @@ namespace ps2x::iop::detail
+                     for (uint32_t c = 0u; c < kCores; ++c)
+                     {
+                         const uint32_t b = c * kCoreStride, sh = kSharedBase + c * 0x28u;
+-                        std::fprintf(stderr, " | c%u attr %04x mmix %04x mvol %04x/%04x avol %04x/%04x adma %zu vmixl %04x%04x vmixr %04x%04x",
+-                                     c, reg(b + 0x19Au), reg(b + 0x198u), reg(sh), reg(sh + 2u), reg(sh + 8u), reg(sh + 10u), m_admaInput[c].size(),
++                        std::fprintf(stderr, " | c%u attr %04x mmix %04x mvol %04x/%04x avol(ext) %04x/%04x bvol(adma) %04x/%04x adma %zu vmixl %04x%04x vmixr %04x%04x",
++                                     c, reg(b + 0x19Au), reg(b + 0x198u), reg(sh), reg(sh + 2u), reg(sh + 8u), reg(sh + 10u), reg(sh + 12u), reg(sh + 14u), m_admaInput[c].size(),
+                                      reg(b + 0x18Au), reg(b + 0x188u), reg(b + 0x192u), reg(b + 0x190u));
+                     }
+                     std::fprintf(stderr, "\n");
+@@ -457,12 +457,13 @@ namespace ps2x::iop::detail
+         {
+             if (!(mixer & (0x800u >> channel)))
+                 output[channel] = 0;
+-            // MMIX dry gates (as PCSX2): InpL/R 0x80/0x40 = sound data input (AutoDMA) at AVOL,
+-            // ExtL/R 0x8/0x4 = external input (core 0's output, for core 1) at BVOL.
++            // MMIX dry gates (as PCSX2): InpL/R 0x80/0x40 = sound data input (AutoDMA) at BVOL
++            // (0x76C, "Sound Data Volume"), ExtL/R 0x8/0x4 = external input (core 0's output, for
++            // core 1) at AVOL (0x768, "Core External Input Volume").
+             if (mixer & (0x80u >> channel))
+-                output[channel] += scale(adma[channel], static_cast<int16_t>(reg(shared + 8u + channel * 2u)));
++                output[channel] += scale(adma[channel], static_cast<int16_t>(reg(shared + 0xCu + channel * 2u)));
+             if (mixer & (0x8u >> channel))
+-                output[channel] += scale(coreInput[channel], static_cast<int16_t>(reg(shared + 0xCu + channel * 2u)));
++                output[channel] += scale(coreInput[channel], static_cast<int16_t>(reg(shared + 8u + channel * 2u)));
+             const int32_t master = volume(reg(shared + channel * 2u));
+             output[channel] = scale(saturate(output[channel]), master);
+             if (!(reg(base + 0x19Au) & 0x4000u))
+-- 
+2.54.0 (Apple Git-157)
+
