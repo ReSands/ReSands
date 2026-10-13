@@ -1,0 +1,63 @@
+From 2398a94bf611ab2bd8b2471cb38ad733f2595b0e Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 18:57:08 +0100
+Subject: [PATCH] SPU2 stats: raw AutoDMA input peak per core (before AVOL),
+ shared register write count, log every AVOL/BVOL write
+
+---
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index 3000ece..97f7e48 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -17,6 +17,8 @@ namespace ps2x::iop::detail
+             bool on = [] { const char *v = std::getenv("PS2X_SPU2_STATS"); return v && *v == '1'; }();
+             uint64_t writes = 0, keyOns = 0, dmaBytes = 0, voiceSamples = 0, samples = 0;
+             int32_t peak[2]{};
++            int32_t admaPeak[2]{}; // raw AutoDMA input before AVOL
++            uint64_t sharedWrites = 0;
+         } g_spu2Stats;
+ 
+         constexpr uint32_t kCoreStride = 0x400u;
+@@ -211,7 +213,8 @@ namespace ps2x::iop::detail
+         if (offset >= kSharedBase)
+         {
+             static int sharedLogged = 0;
+-            if (g_spu2Stats.on && sharedLogged < 200)
++            ++g_spu2Stats.sharedWrites;
++            if (g_spu2Stats.on && (sharedLogged < 200 || (offset >= kSharedBase + 8u && offset < kSharedBase + 0x10u) || (offset >= kSharedBase + 0x30u && offset < kSharedBase + 0x38u)))
+             {
+                 ++sharedLogged;
+                 std::fprintf(stderr, "[spu2] shared reg %03x = %04x\n", offset, value);
+@@ -385,6 +388,12 @@ namespace ps2x::iop::detail
+         {
+             const auto input0 = popAdma(0u);
+             const auto input1 = popAdma(1u);
++            if (g_spu2Stats.on)
++                for (uint32_t c = 0u; c < 2u; ++c)
++                {
++                    const auto &in = c ? input1 : input0;
++                    g_spu2Stats.admaPeak[c] = std::max(g_spu2Stats.admaPeak[c], std::max(std::abs(in[0]), std::abs(in[1])));
++                }
+             const auto core0 = mixCore(0u, input0, {0, 0});
+             const auto output = mixCore(1u, input1, core0);
+             if (g_spu2Stats.on)
+@@ -393,10 +402,10 @@ namespace ps2x::iop::detail
+                 g_spu2Stats.peak[1] = std::max(g_spu2Stats.peak[1], std::abs(output[0]) + std::abs(output[1]));
+                 if (++g_spu2Stats.samples == 48000u)
+                 {
+-                    std::fprintf(stderr, "[spu2] writes %llu keyOn %llu dmaBytes %llu voiceSamples %llu peak core0 %d core1 %d",
+-                                 (unsigned long long)g_spu2Stats.writes, (unsigned long long)g_spu2Stats.keyOns,
++                    std::fprintf(stderr, "[spu2] writes %llu (shared %llu) keyOn %llu dmaBytes %llu voiceSamples %llu adma peak %d/%d peak core0 %d core1 %d",
++                                 (unsigned long long)g_spu2Stats.writes, (unsigned long long)g_spu2Stats.sharedWrites, (unsigned long long)g_spu2Stats.keyOns,
+                                  (unsigned long long)g_spu2Stats.dmaBytes, (unsigned long long)g_spu2Stats.voiceSamples,
+-                                 g_spu2Stats.peak[0], g_spu2Stats.peak[1]);
++                                 g_spu2Stats.admaPeak[0], g_spu2Stats.admaPeak[1], g_spu2Stats.peak[0], g_spu2Stats.peak[1]);
+                     for (uint32_t c = 0u; c < kCores; ++c)
+                     {
+                         const uint32_t b = c * kCoreStride, sh = kSharedBase + c * 0x28u;
+-- 
+2.54.0 (Apple Git-157)
+
