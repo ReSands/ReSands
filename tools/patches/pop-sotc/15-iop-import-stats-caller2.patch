@@ -1,0 +1,29 @@
+From e5f8b4989cdc5b9010c8cc5275303bd605139daa Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:49:13 +0100
+Subject: [PATCH] IOP import stats: hot thread/semaphore imports also keyed by
+ the word at sp+20 (caller of small wrappers)
+
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 2131532..e24df66 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -272,8 +272,9 @@ namespace ps2x::iop::detail
+             // Hot thread/semaphore imports also by caller, to find busy loops.
+             if ((call.library == "thbase" && call.ordinal == 20u) || (call.library == "thsemap" && call.ordinal == 8u))
+             {
+-                char ra[16];
+-                std::snprintf(ra, sizeof(ra), "@%x", cpu.gpr[31]);
++                // ra, and the word at sp+20 (a caller's saved ra in small leaf wrappers).
++                char ra[40];
++                std::snprintf(ra, sizeof(ra), "@%x<%x", cpu.gpr[31], memory.read32(cpu.gpr[29] + 20u));
+                 key += ra;
+             }
+             auto &entry = importStats[key];
+-- 
+2.54.0 (Apple Git-157)
+
