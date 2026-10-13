@@ -1,0 +1,39 @@
+From e0aeb74247b89ed9eb0e81371de01acb39a312ce Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:41:14 +0100
+Subject: [PATCH] IOP timers: with PS2X_IOP_IMPORT_STATS=1, log the first 20
+ timer handler results
+
+---
+ ps2xIOP/src/emulator/imports/iop_timrman.cpp | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/imports/iop_timrman.cpp b/ps2xIOP/src/emulator/imports/iop_timrman.cpp
+index 3d80897..f747b31 100644
+--- a/ps2xIOP/src/emulator/imports/iop_timrman.cpp
++++ b/ps2xIOP/src/emulator/imports/iop_timrman.cpp
+@@ -1,4 +1,6 @@
+ #include "iop_timrman.h"
++#include <cstdio>
++#include <cstdlib>
+ 
+ #include "../core/iop_cpu.h"
+ #include "../services/iop_rpc.h"
+@@ -447,6 +449,14 @@ namespace ps2x::iop::detail
+                                                                                   callback.gp,
+                                                                                   100000u)
+                                         : 0u;
++            static const bool trace = [] { const char *v = std::getenv("PS2X_IOP_IMPORT_STATS"); return v && *v == '1'; }();
++            static int traced = 0;
++            if (trace && traced < 20)
++            {
++                ++traced;
++                std::fprintf(stderr, "[iop:timer] %s handler %#x(common %#x) -> %#x%s\n", compareDue ? "compare" : "overflow",
++                             callback.function, callback.common, result, timer.running ? "" : " (timer no longer running)");
++            }
+             if (!timer.running)
+                 continue;
+             if (result == 0u)
+-- 
+2.54.0 (Apple Git-157)
+
