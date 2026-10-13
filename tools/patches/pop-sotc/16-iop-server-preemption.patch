@@ -1,0 +1,67 @@
+From fe4f4fc340e68ae1c5ad421e84745887e170eceb Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Tue, 13 Oct 2026 19:51:09 +0100
+Subject: [PATCH] IOP: RPC servers run directly for 100k instructions, then go
+ to the scheduler (timers, interrupts, higher-priority threads run), instead
+ of up to 2M instructions with nothing else running
+
+A server still running after its budget used to be treated as finished (garbage result). Prince of Persia's UbiSound driver busy-waits on SPUDMAManager_TestTransfer in its RPC handler until its timer-driven update thread starts the IOP->SPU2 DMA.
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 25 ++++++++++++++++---------
+ 1 file changed, 16 insertions(+), 9 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index e24df66..cf59085 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -45,6 +45,7 @@ namespace ps2x::iop::detail
+         constexpr uint64_t kSifDmaBytesPerCycle = 4u;
+         constexpr uint64_t kIopBatchCycles = 1024u;
+         constexpr uint64_t kServerCallMaxCycles = kIopClockHz * 2u;
++        constexpr uint32_t kServerDirectBudget = 100'000u;
+ 
+         uint32_t physicalAddress(uint32_t address)
+         {
+@@ -569,24 +570,30 @@ namespace ps2x::iop::detail
+             IopThread *thread = kernel.beginThread(id);
+             uint32_t executed = 0u;
+             bool blocked = false;
+-            while (executed < kMaxCallInstructions)
++            // Run the server directly for a short budget (most handlers return at once). One that
++            // blocks, yields or is still running after the budget goes to the scheduler, which
++            // services timers and interrupts and lets higher-priority threads run first, as the
++            // IOP's preemptive kernel would. Running it to kMaxCallInstructions directly starved
++            // them: Prince of Persia's UbiSound driver busy-waits on SPUDMAManager_TestTransfer
++            // in its RPC handler until its timer-driven update thread starts the IOP->SPU2 DMA,
++            // so no sample bank was ever transferred and the game hung.
++            while (executed < kServerDirectBudget)
+             {
+-                executed += runCpu(thread->cpu, kMaxCallInstructions - executed);
+-                if (thread->cpu.stopped || !thread->cpu.yielded)
++                executed += runCpu(thread->cpu, kServerDirectBudget - executed);
++                if (thread->cpu.stopped)
+                     break;
+                 if (thread->state != IopThreadState::Running)
+                 {
+                     blocked = true;
+                     break;
+                 }
+-                // A server that yields while still runnable (RotateThreadReadyQueue, DelayThread 0)
+-                // is waiting for another thread. Running it again at once starved every other IOP
+-                // thread and the timers (serviced in runCycles) for the whole call budget: Prince
+-                // of Persia's UbiSound driver yields until its timer-driven update thread starts a
+-                // transfer, so sample banks never reached the SPU2. Let the scheduler run it.
++                if (thread->cpu.yielded)
++                    break;
++            }
++            if (!blocked && !thread->cpu.stopped)
++            {
+                 kernel.endTimeslice(*thread, kCallReturnSentinel);
+                 blocked = true;
+-                break;
+             }
+             kernel.setCurrentThread(previous);
+ 
+-- 
+2.54.0 (Apple Git-157)
+
