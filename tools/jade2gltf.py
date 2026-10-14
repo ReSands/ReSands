@@ -67,11 +67,75 @@ def capture_elements(pack):
             for e in range(min(count, 4096)):
                 mat = rt.r32(table + 0x1C * e + 4)
                 m = rt.r32(table + 0x1C * e + 0x18)
+                chain = 0
                 while m and m not in material:
-                    material[m] = mat
+                    material[m] = (mat, e, chain)
                     m = rt.r32(m + 0x4C)
+                    chain += 1
         for this, eo, es in cur['found']:
-            out.append((key, eo, es, material.get(this, 0)))
+            mat, entry, chain = material.get(this, (0, -1, 0))
+            out.append((key, eo, es, mat, entry, chain))
+    return out
+
+
+def parse_visual(d, p, end):
+    """Grammar of GEO_LoadPS2GaoVisu / CJMeshElementRef (speed mode). Returns (end offset, refs) or None.
+    refs: per element, list of chain entries; entry = (lods [(bits, off, size)], passes [(index, off, size)])."""
+    U = lambda q: struct.unpack_from('<I', d, q)[0]
+    if p + 4 > end: return None
+    n = U(p); p += 4
+    if not 0 < n <= 64: return None
+    refs = []
+    for _ in range(n):
+        if p + 8 > end: return None
+        p += 4; m = U(p); p += 4
+        if not 0 < m <= 16: return None
+        chain = []
+        for _ in range(m):
+            if p + 4 > end: return None
+            a = U(p); p += 4
+            if a > 8: return None
+            lods = []
+            for _ in range(a):
+                if p + 8 > end: return None
+                bits, size = U(p), U(p + 4); p += 8
+                if size > end - p: return None
+                lods.append((bits, p, size)); p += size
+            if p + 4 > end: return None
+            b = U(p); p += 4
+            if b > 8: return None
+            passes = []
+            for _ in range(b):
+                if p + 8 > end: return None
+                idx, size = U(p), U(p + 4); p += 8
+                if idx > 15 or size > end - p: return None
+                passes.append((idx, p, size)); p += size
+            chain.append((lods, passes))
+        if p + 4 > end: return None
+        p += 4
+        refs.append(chain)
+    return p, refs
+
+
+def variant3_batches(d, lo, ls):
+    """Shared geometry block of instanced meshes (LOD variant 3): per batch, raw V3-16 UVs (s, t,
+    strip flag; their UNPACK code is in each object's pass packet) directly before the V3-32
+    positions UNPACK, then the V4-32 x3 bbox and MSCNT. Returns [(positions, uvs, flags)]."""
+    out, p, end = [], lo, lo + ls
+    while p + 4 <= end:
+        w = struct.unpack_from('<I', d, p)[0]
+        cmd, num = (w >> 24) & 0x7F, (w >> 16) & 0xFF
+        if cmd in (0x68, 0x78) and num:
+            n = num
+            uv0 = p - ((6 * n + 3) // 4 * 4)
+            if uv0 < lo:
+                return out
+            pos = [struct.unpack_from('<3f', d, p + 4 + 12 * i) for i in range(n)]
+            raw = [struct.unpack_from('<3h', d, uv0 + 6 * i) for i in range(n)]
+            out.append((pos, [(a, b) for a, b, _ in raw], [c for _, _, c in raw]))
+            p += 4 + 12 * n
+            continue
+        p += 4
     return out
 
 
@@ -178,7 +242,7 @@ def game_objects(d, recs, geometry_keys):
                 mm = struct.unpack_from('<I', d, i + 4)[0]
                 break
         if geo is not None:
-            out.append((name, m, geo, mm))
+            out.append((name, m, geo, mm, o, s, m0 + 64))
     return out
 
 
@@ -189,10 +253,18 @@ def main(argv):
     elements = capture_elements(d)
     by_record = {}
     stats = {'elements': len(elements), 'drawn': 0, 'no_pass': 0, 'batches': 0, 'verts': 0, 'tris': 0, 'uvmax': 0}
-    for key, o, _size, matid in elements:
+    v3_of, n_entries = {}, {}
+    for key, o, _size, matid, entry, chain in elements:
+        n_entries[key] = max(n_entries.get(key, 0), entry + 1)
         nb, lods, passes = element_parts(d, o)
         if not passes:
-            stats['no_pass'] += 1
+            v3 = [(lo, ls) for v, lo, ls in lods if v == 3]
+            if v3:
+                # instanced mesh: shared UVs/positions here, colours per game object (see main's placement)
+                v3_of.setdefault(key, []).append((entry, chain, matid, variant3_batches(d, *v3[0])))
+                stats['instanced'] = stats.get('instanced', 0) + 1
+            else:
+                stats['no_pass'] += 1
             continue
         _idx, po, ps = passes[0]
         for b in decode_packet(d, po, ps):
@@ -293,12 +365,53 @@ def main(argv):
                 mesh_cache[(geo, mm)] = len(meshes) - 1
             return mesh_cache[(geo, mm)]
 
-        placed = [g for g in game_objects(d, recs, set(keys)) if g[1][14] > -1000]
+        def instance_mesh(name, geo, mm, go, gs, start):
+            # Per-object visual block in the game-object record (GEO_LoadPS2GaoVisu grammar): first
+            # offset whose parse gives one reference per geometry element entry.
+            refs = None
+            for st in range(start, go + gs - 4):
+                res = parse_visual(d, st, go + gs)
+                if res and len(res[1]) == n_entries.get(geo, -1):
+                    refs = res[1]
+                    break
+            prims = [{**prim, **({'material': material(mm, matid)} if material(mm, matid) is not None else {})}
+                     for prim, matid in prims_of.get(geo, [])]
+            for entry, chain, matid, batches in v3_of[geo]:
+                colours = None
+                if refs and entry < len(refs) and chain < len(refs[entry]):
+                    blobs = [(off, size) for bits, off, size in refs[entry][chain][0] if bits == 4]
+                    if blobs:
+                        colours = d[blobs[0][0]:blobs[0][0] + blobs[0][1]]
+                vbase = 0
+                for pos, uv, flags in batches:
+                    n = len(pos)
+                    col = [tuple(min(colours[4 * (vbase + i) + k] / 128.0, 1.0) for k in range(4)) if colours and 4 * (vbase + i) + 4 <= len(colours) else (1.0, 1.0, 1.0, 1.0) for i in range(n)]
+                    vbase += n
+                    tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not flags[i]]
+                    if not tris:
+                        continue
+                    lo = [min(q[a] for q in pos) for a in range(3)]
+                    hi = [max(q[a] for q in pos) for a in range(3)]
+                    prim = {'attributes': {'POSITION': add(b''.join(struct.pack('<3f', *q) for q in pos), 5126, 'VEC3', n, 34962, (lo, hi)),
+                                           'TEXCOORD_0': add(b''.join(struct.pack('<2f', a / uvscale, b / uvscale) for a, b in uv), 5126, 'VEC2', n, 34962),
+                                           'COLOR_0': add(b''.join(struct.pack('<4f', *c) for c in col), 5126, 'VEC4', n, 34962)},
+                            'indices': add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)}
+                    m = material(mm, matid)
+                    if m is not None:
+                        prim['material'] = m
+                    prims.append(prim)
+                    stats['instanced_tris'] = stats.get('instanced_tris', 0) + len(tris)
+            stats['instances'] = stats.get('instances', 0) + 1
+            stats['instances_coloured'] = stats.get('instances_coloured', 0) + (1 if refs else 0)
+            meshes.append({'name': name, 'primitives': prims})
+            return len(meshes) - 1
+
+        placed = [g for g in game_objects(d, recs, set(keys) | set(v3_of)) if g[1][14] > -1000]
         children = []
-        for name, m, geo, mm in placed:
+        for name, m, geo, mm, go, gs, start in placed:
             # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
             mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
-            nodes.append({'name': name, 'mesh': mesh_for(geo, mm), 'matrix': mat})
+            nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm), 'matrix': mat})
             children.append(len(nodes) - 1)
         nodes.append({'name': 'world (Z-up)', 'children': children, 'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
         roots = [len(nodes) - 1]
@@ -313,7 +426,8 @@ def main(argv):
             'buffers': [{'byteLength': len(buf), 'uri': 'data:application/octet-stream;base64,' + base64.b64encode(bytes(buf)).decode()}]}
     json.dump(gltf, open(out_path, 'w'))
     if place:
-        print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials")
+        print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials; "
+              f"{stats.get('instances', 0)} instanced objects ({stats.get('instances_coloured', 0)} with their colour block, {stats.get('instanced_tris', 0)} triangles)")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
