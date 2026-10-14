@@ -318,6 +318,16 @@ Open: only 21 elements found in the Aviary pack (check other grammars: CJMeshEle
 - **Level 0101_Entree look (14 Oct):** the black ring in the preview is `0102_Remparts_arbrefakefond` / `tourfakefond` (distant tree/tower silhouettes, vertex colours 0.01-0.08 by design); brown 'wings' are `BigFire_Smoke` (alpha-blended smoke). Only 5% of vertex colour values exceed 0x80, so the clamp is not why it looks dark; the opening is a night scene. Confirm against a PC screenshot (save state) before adding any brightness factor; blending/sky are material work.
 - **Local model (gemma4:26b) validated 14 Oct:** naming = weak (~1/6 right meaning); MMI fixes from the name only = 1/5; **MMI fixes from a precise one-paragraph spec, judged by the instruction test = 18/18** (`tools/llm_port/fix_mmi.py --spec`; results `game/analysis/mmifix_spec/*.cpp`, not yet wired into the recompiler). Runs entirely on the PC: `tools/windows/llm-job.ps1 -Job mmi|naming [-Spec]` via start-job.ps1; Mac button `tools/overnight-pc.command` (syncs commits, asks which job, starts it, Mac can be switched off). Details: docs/llm_jobs.md.
 
+## Renderer task order (agreed 14 Oct 2026)
+
+Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
+- A. Read everything (offline, Mac): 1 PC save-state screenshot + packs loaded (judge for A) -> 2 lighting/brightness check -> 3 materials/blend state (alpha test/blend, additive, double-sided, sky) -> 4 positions-only elements -> 5 whole levels (all packs) -> 6 coverage of all world packs -> 7 skinned mesh data.
+- B. Static world native (PC): 8 API choice + native pass in the presenter -> 9 load-time conversion in C++ (hook CJMeshElement::ReadElement) -> 10 per-frame capture (element lists, matrices, camera) -> 11 draw natively, hybrid with the GS, frame comparison.
+- C. Characters: 12 GPU skinning with the game's bone matrices.
+- D. Remove the GS: 13 particles/water/sand/shadows -> 14 post-processing shaders -> 15 2D/HUD/menus/loading screen/movie display -> 16 GS emulation off.
+- E. Later: 17 resolution/widescreen/frame rate/DLSS/RTX; 18 higher-quality assets.
+Sound (IOP/SPU2) and PS2 movies (IPU) are separate "no emulation" tracks if wanted.
+
 ## Plan (decided 13 Oct 2026)
 
 Ultimate goal: route **D**, a native renderer that draws the game's own 3D models (as Ace Combat 5 and Chronicle do), added gradually on top of the emulated GS (hybrid: whatever is not native yet stays emulated). Only D gives real DLSS (depth, motion vectors, jitter) and RTX Remix/path tracing on the recomp; routes A-C (SotC renderer, PCSX2 GS, paraLLEl-GS) all work on projected 2D triangles. Native Jade drawing would also be reusable for BG&E, Warrior Within, Two Thrones, King Kong and Rabbids. Not guaranteed: the probe (step 7) decides go/no-go; fallback is PCSX2's GS for 4K/texture packs plus RTX Remix on the PC version.
