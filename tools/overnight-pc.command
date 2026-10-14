@@ -29,11 +29,13 @@ echo "Which job should the PC run overnight?"
 echo "  1) MMI instruction fixes, with documented behaviour (judged by the instruction test)"
 echo "  2) MMI instruction fixes, from the instruction name only"
 echo "  3) Function naming suggestions"
-read -k1 "choice?Choice [1-3]: "; echo
+echo "  4) Nightly checks + bug report (instruction test, all world packs, boot test; Gemma writes docs/nightly)"
+read -k1 "choice?Choice [1-4]: "; echo
 case $choice in
     1) args='-Job mmi -Spec -Tries 5' ;;
     2) args='-Job mmi -Tries 5' ;;
     3) args='-Job naming' ;;
+    4) args='-Job nightly' ;;
     *) echo "No job started."; read -k1; exit 1 ;;
 esac
 echo "== Starting the overnight job on the PC ($args)"

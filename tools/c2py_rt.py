@@ -42,15 +42,37 @@ class Runtime:
         p[a % PAGE] = v & 0xFF
 
     def read(self, a, n):
-        return bytes(self._rb(a + i) for i in range(n))
+        a &= 0xFFFFFFFF
+        out = bytearray()
+        while n > 0:
+            page, off = divmod(a, PAGE)
+            take = min(n, PAGE - off)
+            p = self.pages.get(page)
+            out += p[off:off + take] if p else bytes(take)
+            a, n = (a + take) & 0xFFFFFFFF, n - take
+        return bytes(out)
 
     def write(self, a, data):
-        for i, b in enumerate(data):
-            self._wb(a + i, b)
+        a &= 0xFFFFFFFF
+        data = memoryview(bytes(data))
+        i = 0
+        while i < len(data):
+            page, off = divmod(a, PAGE)
+            take = min(len(data) - i, PAGE - off)
+            p = self.pages.setdefault(page, bytearray(PAGE))
+            p[off:off + take] = data[i:i + take]
+            a, i = (a + take) & 0xFFFFFFFF, i + take
 
     def r8(self, a): return self._rb(a)
     def r16(self, a): return int.from_bytes(self.read(a, 2), 'little')
-    def r32(self, a): return int.from_bytes(self.read(a, 4), 'little')
+
+    def r32(self, a):
+        a &= 0xFFFFFFFF
+        off = a % PAGE
+        if off <= PAGE - 4:
+            p = self.pages.get(a // PAGE)
+            return int.from_bytes(p[off:off + 4], 'little') if p else 0
+        return int.from_bytes(self.read(a, 4), 'little')
     def r64(self, a): return int.from_bytes(self.read(a, 8), 'little')
     def w8(self, a, v): self._wb(a, v)
     def w16(self, a, v): self.write(a, (int(v) & 0xFFFF).to_bytes(2, 'little'))

@@ -7,9 +7,11 @@
 #   mmi     tools/llm_port/fix_mmi.py: implement wrongly translated MMI instructions, judged by the
 #           instruction test; -Spec gives the model each instruction's documented behaviour.
 #           Results: game\analysis\mmifix[_spec]\<NAME>.json (+ .cpp when it passes).
+#   nightly tools/nightly/checks.py (instruction test, all world packs, boot smoke test) then
+#           tools/nightly/report.py (Gemma writes docs\nightly\<date>.md from the results).
 #   naming  tools/llm_port/name_functions.py: name/summary suggestions for anonymous functions
 #           (inputs copied to game\analysis\naming*). Results: game\analysis\naming\results.
-param([ValidateSet('mmi', 'naming')][string]$Job = 'mmi', [switch]$Spec, [int]$Tries = 3,
+param([ValidateSet('mmi', 'naming', 'nightly')][string]$Job = 'mmi', [switch]$Spec, [int]$Tries = 3,
       [string]$Model = 'gemma4:26b', [string[]]$Only = @())
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -37,6 +39,9 @@ if ($Job -eq 'mmi') {
     $argList = @('-I', "$Root\tools\llm_port\fix_mmi.py", '--model', $Model, '--tries', "$Tries")
     if ($Spec) { $argList += '--spec' }
     if ($Only) { $argList += @('--only', ($Only -join ',')) }
+} elseif ($Job -eq 'nightly') {
+    $argList = @('-I', "$Root\tools\nightly\checks.py")
+    if ($Only) { $argList += @('--only', ($Only -join ',')) }
 } else {
     $argList = @('-I', "$Root\tools\llm_port\name_functions.py", '--model', $Model)
 }
@@ -44,5 +49,8 @@ if ($Job -eq 'mmi') {
 $ErrorActionPreference = 'Continue'
 & $Python @argList 2>&1 | ForEach-Object { "$_" }
 $code = $LASTEXITCODE
+if ($Job -eq 'nightly') {
+    & $Python -I "$Root\tools\nightly\report.py" --model $Model 2>&1 | ForEach-Object { "$_" }
+}
 "$(Get-Date -Format 'yyyy-MM-dd HH:mm') job '$Job' finished (exit $code)"
 exit $code
