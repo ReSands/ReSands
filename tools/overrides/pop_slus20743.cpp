@@ -32,6 +32,7 @@ namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false
 #include <iterator>
 #include <utility>
 #include <unordered_set>
+#include <filesystem>
 #include <vector>
 
 void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
@@ -1284,7 +1285,17 @@ namespace
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static unsigned calls = 0;
-        g_capturing = g_frameCap && calls == g_frameCapAt;
+        // POP_FRAMECAP=<file>:0 = capture when the file "<file>.now" appears (checked every 15 calls)
+        bool triggered = false;
+        if (g_frameCap && g_frameCapAt == 0 && calls % 15u == 0u)
+        {
+            static const std::string trigger = std::string(std::getenv("POP_FRAMECAP")).substr(0, std::string(std::getenv("POP_FRAMECAP")).rfind(':')) + ".now";
+            std::error_code ec;
+            triggered = std::filesystem::exists(trigger, ec);
+            if (triggered)
+                std::filesystem::remove(trigger, ec);
+        }
+        g_capturing = g_frameCap && (calls == g_frameCapAt || triggered);
         if (g_capturing)
             logCamera(rdram, "capture", calls);
         const bool log = (calls++ % 15u) == 0u;
@@ -1316,10 +1327,13 @@ namespace
             // texture manager slots (manager at scratchpad 0x70000050, +0 slot array, 0x50 bytes per
             // index): "T index gsaddr(+0x18) w,h(+4) bpp(+0x1C) dataptr(+0) first 32 bytes of data"
             const uint32_t slots = guestU32(rdram, 0x70000050u);
+            std::fprintf(g_frameCap, "S slots %x keys %zu\n", slots, g_textureKeys.size());
+            for (const auto &[ix, key] : g_textureKeys)
+                std::fprintf(g_frameCap, "K %u %08x\n", ix, key);
             for (uint32_t ix = 0; slots && ix < 1024u; ++ix)
             {
                 const uint32_t sl = slots + ix * 0x50u, data = guestU32(rdram, sl);
-                if (!data)
+                if (!data && !(guestU32(rdram, sl + 0x18u) & 0x3FFFu))
                     continue;
                 std::fprintf(g_frameCap, "T %u %x %x %x %x", ix, guestU32(rdram, sl + 0x18u) & 0x3FFFu, guestU32(rdram, sl + 4u),
                              guestU32(rdram, sl + 0x1Cu), data);
