@@ -1762,6 +1762,44 @@ namespace
         }
     }
 
+    // POP_CAPTURE_ADPCM=<file>: record/replay check of the game's IMA ADPCM stream decoder
+    // (adpcm_decoder 0x186440: a0 source bytes, a1 output, a2 byte count, a3 1 = stereo,
+    // t0 state {s16 predictor, s8 index} x 2). The first 400 calls are written as records
+    // "ADPC", n, mode, state before (8 bytes), state after, input (n bytes), output (4n bytes);
+    // tools/adpcm_replay.py decodes the same input with a plain reference and compares.
+    FILE *g_adpcmCapture = nullptr;
+    void capturedAdpcm(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static int calls = 0;
+        const uint32_t src = getRegU32(ctx, 4), dst = getRegU32(ctx, 5), n = getRegU32(ctx, 6);
+        const uint32_t mode = getRegU32(ctx, 7) & 0xFFu, state = getRegU32(ctx, 8);
+        const bool record = g_adpcmCapture && calls < 400 && n > 0 && n <= 0x10000u;
+        auto bytes = [rdram](uint32_t a, uint32_t len) {
+            std::vector<uint8_t> v(len);
+            for (uint32_t i = 0; i < len; ++i)
+                v[i] = rdram[(a + i) & 0x1FFFFFFu];
+            return v;
+        };
+        std::vector<uint8_t> before, input;
+        if (record)
+        {
+            before = bytes(state, 8);
+            input = bytes(src, n);
+        }
+        callOriginal(0x00186440u, rdram, ctx, runtime);
+        if (!record)
+            return;
+        ++calls;
+        const std::vector<uint8_t> after = bytes(state, 8), output = bytes(dst, 4u * n);
+        const uint32_t head[3] = {0x43504441u, n, mode};
+        std::fwrite(head, 4, 3, g_adpcmCapture);
+        std::fwrite(before.data(), 1, 8, g_adpcmCapture);
+        std::fwrite(after.data(), 1, 8, g_adpcmCapture);
+        std::fwrite(input.data(), 1, n, g_adpcmCapture);
+        std::fwrite(output.data(), 1, output.size(), g_adpcmCapture);
+        std::fflush(g_adpcmCapture);
+    }
+
     // POP_SNDLOG=1 also logs SIF RPC binds (client -> server id) and counts calls per
     // (server, function), summarised every 5 s, to see what reaches the IOP's sound driver.
     std::unordered_map<uint32_t, uint32_t> g_rpcClientSid;
@@ -1923,8 +1961,13 @@ namespace
     {
         for (const uint32_t addr : kSndTrace)
             g_originals[addr] = runtime.lookupFunction(addr);
-        for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u})
+        for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u, 0x00186440u})
             g_originals[addr] = runtime.lookupFunction(addr);
+        if (const char *v = std::getenv("POP_CAPTURE_ADPCM"); v && *v)
+        {
+            g_adpcmCapture = std::fopen(v, "wb");
+            runtime.replaceFunction(0x00186440u, capturedAdpcm);
+        }
         // Widescreen is parked until the native renderer (13 Oct 2026): the PCSX2 patch also
         // needs the presenter at 16:9 except for movies and the loading screen.
         if (runtime.hasFunction(0x00478CBCu))
