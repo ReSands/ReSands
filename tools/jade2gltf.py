@@ -440,8 +440,22 @@ def main(argv):
                             if w:
                                 images.append({'uri': 'data:image/png;base64,' + base64.b64encode(png_bytes(w, h, rgba)).decode(), 'name': f'{tex:08x}'})
                                 textures.append({'source': len(images) - 1, 'sampler': 0})
-                                materials.append({'name': f'{tex:08x}', 'pbrMetallicRoughness': {'baseColorTexture': {'index': len(textures) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
-                                                  'alphaMode': 'MASK', 'alphaCutoff': 0.5, 'doubleSided': True})
+                                # blend state from the sub-material, checked against a frame's GS registers (482
+                                # draws): +0x14 bit 0x80 = alpha blending (ALPHA (Cs-Cd)*As+Cd), +0x1C bit 0x10 =
+                                # alpha test with AREF = (+0x28 top byte) / 2 on the PS2 alpha scale (0x80 =
+                                # opaque), i.e. the top byte on our doubled 0..255 alpha
+                                so = recs[sub][0]
+                                f14, f1c, f28 = struct.unpack_from('<I', d, so + 0x14)[0], struct.unpack_from('<I', d, so + 0x1C)[0], struct.unpack_from('<I', d, so + 0x28)[0]
+                                mat = {'name': f'{tex:08x}', 'pbrMetallicRoughness': {'baseColorTexture': {'index': len(textures) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
+                                       'doubleSided': True}
+                                if f14 & 0x80:
+                                    mat['alphaMode'] = 'BLEND'
+                                    stats['blended_materials'] = stats.get('blended_materials', 0) + 1
+                                elif f1c & 0x10:
+                                    mat['alphaMode'], mat['alphaCutoff'] = 'MASK', round((f28 >> 24) / 255.0, 4)
+                                else:
+                                    mat['alphaMode'] = 'OPAQUE'
+                                materials.append(mat)
                                 result = len(materials) - 1
                                 stats['textured'] = stats.get('textured', 0) + 1
             material_cache[(mm, idx)] = result

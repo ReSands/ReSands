@@ -69,7 +69,9 @@ def main(argv):
             uri = g['images'][g['textures'][tindex]['source']]['uri']
             decoded[tindex] = read_png(base64.b64decode(uri.split(',', 1)[1]))
         return decoded[tindex]
+    modes = []
     for mat in g.get('materials', []):
+        modes.append((mat.get('alphaMode', 'OPAQUE'), mat.get('alphaCutoff', 0.5)))
         t = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
         texs.append(image_of(t['index']) if t is not None else None)
         o = mat.get('occlusionTexture')
@@ -97,6 +99,7 @@ def main(argv):
                 col = acc(prim['attributes']['COLOR_0'])
                 uvs = acc(prim['attributes']['TEXCOORD_0'])
                 tex = texs[prim['material']] if 'material' in prim else None
+                amode = modes[prim['material']] if 'material' in prim else ('OPAQUE', 0.5)
                 lm = lms[prim['material']] if 'material' in prim and 'TEXCOORD_1' in prim['attributes'] else None
                 uvs2 = acc(prim['attributes']['TEXCOORD_1']) if lm else None
                 idx = acc(prim['indices'])
@@ -107,7 +110,7 @@ def main(argv):
                 for k in range(0, len(idx), 3):
                     a, b, c = idx[k], idx[k + 1], idx[k + 2]
                     cc = tuple((col[a][j] + col[b][j] + col[c][j]) / 3 for j in range(3))
-                    tris.append((P[a], P[b], P[c], cc, (uvs[a], uvs[b], uvs[c]), (tex, lm, (uvs2[a], uvs2[b], uvs2[c]) if lm else None)))
+                    tris.append((P[a], P[b], P[c], cc, (uvs[a], uvs[b], uvs[c]), (tex, lm, (uvs2[a], uvs2[b], uvs2[c]) if lm else None, amode)))
         for ch in node.get('children', []):
             visit(ch, m)
     for root in g['scenes'][g.get('scene', 0)]['nodes']:
@@ -155,7 +158,7 @@ def main(argv):
                 if min(q[2] for q, _ in tri) < near * 0.5:
                     continue  # degenerate after clipping
                 V.append(tuple((q[0] / q[2], q[1] / q[2], -q[2]) for q, _ in tri)
-                         + (cc, tuple(t[:2] for _, t in tri), (tex[0], tex[1], tuple(t[2:] for _, t in tri)) if tex else None))
+                         + (cc, tuple(t[:2] for _, t in tri), (tex[0], tex[1], tuple(t[2:] for _, t in tri), tex[3]) if tex else None))
         x0, x1, y1 = -1.0, 1.0, 1.0
         scale = width / 2.0
     else:
@@ -196,13 +199,16 @@ def main(argv):
                 z = w0 * az + w1 * bz + w2 * qz
                 i = py * width + px
                 if z > zbuf[i]:
-                    tex, lmimg, uv2 = texinfo if texinfo else (None, None, None)
+                    tex, lmimg, uv2, amode = texinfo if texinfo else (None, None, None, ('OPAQUE', 0.5))
                     if tex:
                         tw, th, tp = tex
                         u = w0 * uv[0][0] + w1 * uv[1][0] + w2 * uv[2][0]
                         v = w0 * uv[0][1] + w1 * uv[1][1] + w2 * uv[2][1]
                         k = 4 * ((int(v * th) % th) * tw + (int(u * tw) % tw))
-                        if tp[k + 3] < 128:
+                        alpha = tp[k + 3] / 255.0
+                        if amode[0] == 'MASK' and alpha < amode[1]:
+                            continue
+                        if amode[0] == 'BLEND' and alpha < 0.02:
                             continue
                         # baked vertex lighting only (no preview shading), as the PS2's MODULATE: tex * colour
                         lmv = 1.0
@@ -227,7 +233,11 @@ def main(argv):
                         px_col = bytes(max(0, min(255, int(b))) for b in base)
                     else:
                         px_col = bytes(colour)
-                    zbuf[i] = z
+                    if tex and amode[0] == 'BLEND' and alpha < 0.99:
+                        # GS ALPHA ((Cs-Cd)*As>>7)+Cd over what is drawn (draw order, not depth sorted)
+                        px_col = bytes(int(px_col[j] * alpha + rgb[3 * i + j] * (1 - alpha)) for j in range(3))
+                    else:
+                        zbuf[i] = z
                     rgb[3 * i:3 * i + 3] = px_col
     write_png(out, width, height, rgb)
     print(f'{len(tris)} triangles -> {out} ({width}x{height})')
