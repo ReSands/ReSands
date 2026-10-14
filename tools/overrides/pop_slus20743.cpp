@@ -1217,7 +1217,9 @@ namespace
     // kick 0x4A2C80 sends it). Records: u32 tag address, 16-byte tag, u32 data address, u32 size,
     // data. Tags: refe 0, cnt 1, next 2, ref 3, refs 4, call 5, ret 6, end 7.
     FILE *g_dmaCap = nullptr;
-    bool g_dmaCapArmed = false;
+    std::string g_dmaCapPath;
+    int g_dmaCapArmed = 0;     // kicks still to record after a capture (the frame has several kicks)
+    unsigned g_dmaCapSerial = 0;
     uint32_t g_chainStart = 0;
     PS2Runtime::RecompiledFunction g_origClosePacket = nullptr, g_origKick = nullptr;
     void closePacketCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1275,10 +1277,13 @@ namespace
     {
         // a0 = graphics system; the chain is closed inside the kick, so dump after it returns
         g_origKick(rdram, ctx, runtime);
-        if (g_dmaCapArmed && g_dmaCap && g_chainStart)
+        if (g_dmaCapArmed > 0 && g_chainStart)
         {
-            g_dmaCapArmed = false;
-            dumpChain(rdram, g_chainStart);
+            // one file per kick: <file>.<capture>.<kick>
+            const std::string path = g_dmaCapPath + "." + std::to_string(g_dmaCapSerial) + "." + std::to_string(8 - g_dmaCapArmed);
+            --g_dmaCapArmed;
+            if ((g_dmaCap = std::fopen(path.c_str(), "wb")) != nullptr)
+                dumpChain(rdram, g_chainStart);
         }
     }
 
@@ -1342,10 +1347,20 @@ namespace
                 std::fprintf(g_frameCap, "\n");
             }
             g_capturing = false;
-            g_dmaCapArmed = g_dmaCap != nullptr;
-            std::fclose(g_frameCap);
-            g_frameCap = nullptr;
-            std::fprintf(stderr, "[pop:framecap] frame captured\n");
+            if (!g_dmaCapPath.empty())
+            {
+                g_dmaCapArmed = 8;
+                ++g_dmaCapSerial;
+            }
+            std::fflush(g_frameCap);
+            std::fprintf(g_frameCap, "== end of capture %u\n", g_dmaCapSerial);
+            std::fflush(g_frameCap);
+            if (g_frameCapAt != 0)
+            {
+                std::fclose(g_frameCap);
+                g_frameCap = nullptr;
+            }
+            std::fprintf(stderr, "[pop:framecap] frame captured (%u)\n", g_dmaCapSerial);
         }
     }
 
@@ -2325,8 +2340,9 @@ namespace
             if (g_frameCap && g_origMeshRefDisplayCap)
                 runtime.replaceFunction(0x004C7B40u, meshRefDisplayCap);
             installCapProbes(runtime, std::make_index_sequence<std::size(kCapProbe)>{});
-            if (const char *dv = std::getenv("POP_DMACAP"); dv && *dv && (g_dmaCap = std::fopen(dv, "wb")) != nullptr)
+            if (const char *dv = std::getenv("POP_DMACAP"); dv && *dv)
             {
+                g_dmaCapPath = dv;
                 g_origClosePacket = runtime.lookupFunction(0x004A1800u);
                 g_origKick = runtime.lookupFunction(0x004A2C80u);
                 if (g_origClosePacket && g_origKick)
