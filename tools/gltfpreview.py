@@ -103,18 +103,54 @@ def main(argv):
     if not tris:
         print('nothing to draw')
         return
+    clip = None
+    if '--clip' in argv:
+        # The game's world -> clip matrix (row vectors, 16 floats, e.g. graphics system +0x240 from a
+        # save state); renders the 640x448 frame the game's camera sees.
+        clip = [float(x) for x in argv[argv.index('--clip') + 1].split(',')]
+        width, height = 640, 448
     cy, sy, cp, sp = math.cos(yaw), math.sin(yaw), math.cos(pitch), math.sin(pitch)
 
     def view(p):
         x = p[0] * cy - p[1] * sy
         yy = p[0] * sy + p[1] * cy
         return (x, p[2] * cp - yy * sp, p[2] * sp + yy * cp)  # screen x, screen y (up), depth (towards viewer)
-    V = [(view(a), view(b), view(c), cc, uv, tex) for a, b, c, cc, uv, tex in tris]
-    xs = [p[0] for t in V for p in t[:3]]
-    ys = [p[1] for t in V for p in t[:3]]
-    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-    scale = (width - 20) / max(x1 - x0, 1e-6)
-    height = max(64, min(4000, int((y1 - y0) * scale) + 20))
+    if clip:
+        def project(p):
+            x, y, z = p
+            cx = x * clip[0] + y * clip[4] + z * clip[8] + clip[12]
+            cyy = x * clip[1] + y * clip[5] + z * clip[9] + clip[13]
+            cw = x * clip[3] + y * clip[7] + z * clip[11] + clip[15]
+            return cx, cyy, cw
+        V = []
+        near = 0.05
+        for a, b, c, cc, uv, tex in tris:
+            poly = [(project(q), t) for q, t in ((a, uv[0]), (b, uv[1]), (c, uv[2]))]
+            # clip against the near plane w = near (Sutherland-Hodgman), interpolating UVs
+            clipped = []
+            for i in range(len(poly)):
+                (p0, t0), (p1, t1) = poly[i], poly[(i + 1) % len(poly)]
+                in0, in1 = p0[2] >= near, p1[2] >= near
+                if in0:
+                    clipped.append((p0, t0))
+                if in0 != in1:
+                    f = (near - p0[2]) / (p1[2] - p0[2])
+                    clipped.append((tuple(p0[k] + f * (p1[k] - p0[k]) for k in range(3)),
+                                tuple(t0[k] + f * (t1[k] - t0[k]) for k in range(2))))
+            for k in range(1, len(clipped) - 1):
+                tri = (clipped[0], clipped[k], clipped[k + 1])
+                if min(q[2] for q, _ in tri) < near * 0.5:
+                    continue  # degenerate after clipping
+                V.append(tuple((q[0] / q[2], q[1] / q[2], -q[2]) for q, _ in tri) + (cc, tuple(t for _, t in tri), tex))
+        x0, x1, y1 = -1.0, 1.0, 1.0
+        scale = width / 2.0
+    else:
+        V = [(view(a), view(b), view(c), cc, uv, tex) for a, b, c, cc, uv, tex in tris]
+        xs = [p[0] for t in V for p in t[:3]]
+        ys = [p[1] for t in V for p in t[:3]]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        scale = (width - 20) / max(x1 - x0, 1e-6)
+        height = max(64, min(4000, int((y1 - y0) * scale) + 20))
     zbuf = [-1e30] * (width * height)
     rgb = bytearray([24, 24, 32] * (width * height))
     light = (0.4, 0.5, 0.75)
@@ -125,7 +161,11 @@ def main(argv):
         nl = math.sqrt(nx * nx + ny * ny + nz * nz) or 1
         shade = 0.35 + 0.65 * abs(nx * light[0] + ny * light[1] + nz * light[2]) / nl
         colour = [max(0, min(255, int(255 * shade * ch))) for ch in cc]
-        pts = [((p[0] - x0) * scale + 10, (y1 - p[1]) * scale + 10, p[2]) for p in (a, b, c)]
+        if clip:
+            # GS screen y grows downwards (viewport +0x280: y scale +224)
+            pts = [((p[0] + 1) * width / 2, (1 + p[1]) * height / 2, p[2]) for p in (a, b, c)]
+        else:
+            pts = [((p[0] - x0) * scale + 10, (y1 - p[1]) * scale + 10, p[2]) for p in (a, b, c)]
         minx, maxx = max(0, int(min(p[0] for p in pts))), min(width - 1, int(max(p[0] for p in pts)) + 1)
         miny, maxy = max(0, int(min(p[1] for p in pts))), min(height - 1, int(max(p[1] for p in pts)) + 1)
         (ax, ay, az), (bx, by, bz), (qx, qy, qz) = pts
