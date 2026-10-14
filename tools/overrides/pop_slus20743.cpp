@@ -1211,6 +1211,76 @@ namespace
         ((g_capProbeOrig[I] = runtime.lookupFunction(kCapProbe[I]),
           g_capProbeOrig[I] ? (runtime.replaceFunction(kCapProbe[I], capProbe<I>), 0) : 0), ...);
     }
+    // POP_DMACAP=<file>: the frame's whole VIF1 DMA chain, taken at the kick after the
+    // POP_FRAMECAP frame (CGraphicStream::ClosePacketStream 0x4A1800 returns the chain start; the
+    // kick 0x4A2C80 sends it). Records: u32 tag address, 16-byte tag, u32 data address, u32 size,
+    // data. Tags: refe 0, cnt 1, next 2, ref 3, refs 4, call 5, ret 6, end 7.
+    FILE *g_dmaCap = nullptr;
+    bool g_dmaCapArmed = false;
+    uint32_t g_chainStart = 0;
+    PS2Runtime::RecompiledFunction g_origClosePacket = nullptr, g_origKick = nullptr;
+    void closePacketCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_origClosePacket(rdram, ctx, runtime);
+        g_chainStart = getRegU32(ctx, 2);
+    }
+    uint32_t dmaGuest(uint32_t a)
+    {
+        return (a & 0x80000000u) ? (0x70000000u | (a & 0x3FFFu)) : (a & 0x01FFFFFFu);
+    }
+    void dumpChain(uint8_t *rdram, uint32_t start)
+    {
+        uint32_t pc = start, stack[4] = {}, sp = 0;
+        size_t total = 0;
+        for (int steps = 0; steps < 400000 && total < (32u << 20); ++steps)
+        {
+            const uint32_t t = dmaGuest(pc);
+            uint32_t tag[4];
+            for (int k = 0; k < 4; ++k)
+                tag[k] = guestU32(rdram, t + 4u * k);
+            const uint32_t qwc = tag[0] & 0xFFFFu, id = (tag[0] >> 28) & 7u, addr = tag[1] & 0x7FFFFFF0u;
+            uint32_t data = pc + 16u, next = 0;
+            bool stop = false;
+            switch (id)
+            {
+            case 1: next = pc + 16u + qwc * 16u; break;                       // cnt
+            case 2: next = addr; break;                                        // next
+            case 3: case 4: data = addr; next = pc + 16u; break;               // ref, refs
+            case 0: data = addr; stop = true; break;                           // refe
+            case 5: if (sp < 4) stack[sp++] = pc + 16u + qwc * 16u; next = addr; break; // call
+            case 6: if (sp) next = stack[--sp]; else stop = true; break;      // ret
+            default: stop = true; break;                                       // end
+            }
+            const uint32_t size = qwc * 16u;
+            std::fwrite(&pc, 4, 1, g_dmaCap);
+            std::fwrite(tag, 4, 4, g_dmaCap);
+            std::fwrite(&data, 4, 1, g_dmaCap);
+            std::fwrite(&size, 4, 1, g_dmaCap);
+            for (uint32_t k = 0; k < size; k += 4)
+            {
+                const uint32_t w = guestU32(rdram, dmaGuest(data) + k);
+                std::fwrite(&w, 4, 1, g_dmaCap);
+            }
+            total += 28u + size;
+            if (stop)
+                break;
+            pc = next;
+        }
+        std::fclose(g_dmaCap);
+        g_dmaCap = nullptr;
+        std::fprintf(stderr, "[pop:dmacap] chain from %x captured, %zu bytes\n", start, total);
+    }
+    void kickCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        // a0 = graphics system; the chain is closed inside the kick, so dump after it returns
+        g_origKick(rdram, ctx, runtime);
+        if (g_dmaCapArmed && g_dmaCap && g_chainStart)
+        {
+            g_dmaCapArmed = false;
+            dumpChain(rdram, g_chainStart);
+        }
+    }
+
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static unsigned calls = 0;
@@ -1244,6 +1314,7 @@ namespace
                 std::fprintf(g_frameCap, "\n");
             }
             g_capturing = false;
+            g_dmaCapArmed = g_dmaCap != nullptr;
             std::fclose(g_frameCap);
             g_frameCap = nullptr;
             std::fprintf(stderr, "[pop:framecap] frame captured\n");
@@ -2226,6 +2297,16 @@ namespace
             if (g_frameCap && g_origMeshRefDisplayCap)
                 runtime.replaceFunction(0x004C7B40u, meshRefDisplayCap);
             installCapProbes(runtime, std::make_index_sequence<std::size(kCapProbe)>{});
+            if (const char *dv = std::getenv("POP_DMACAP"); dv && *dv && (g_dmaCap = std::fopen(dv, "wb")) != nullptr)
+            {
+                g_origClosePacket = runtime.lookupFunction(0x004A1800u);
+                g_origKick = runtime.lookupFunction(0x004A2C80u);
+                if (g_origClosePacket && g_origKick)
+                {
+                    runtime.replaceFunction(0x004A1800u, closePacketCap);
+                    runtime.replaceFunction(0x004A2C80u, kickCap);
+                }
+            }
             std::fprintf(stderr, "[pop:framecap] hooks: Display %s, Ref Display %s\n", g_origMeshDisplayCap ? "yes" : "no", g_origMeshRefDisplayCap ? "yes" : "no");
         }
         if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
