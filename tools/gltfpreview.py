@@ -12,6 +12,10 @@ import struct
 import sys
 import zlib
 
+# lightmap brightness = CLUT index / 15 (greyscale ramp); scale for the multiply (2.0 if the GS pass
+# modulates with 0x80 = 1.0, to be checked against a frame)
+LIGHTMAP_SCALE = float(__import__('os').environ.get('POP_LM_SCALE', '1.0'))
+
 
 def load(path):
     g = json.load(open(path))
@@ -56,14 +60,18 @@ def main(argv):
     pitch = math.radians(float(argv[argv.index('--pitch') + 1])) if '--pitch' in argv else math.radians(30)
     g, acc = load(src)
     tris = []  # (3 world points, colour, uvs, texture)
-    texs = []
+    texs, lms, decoded = [], [], {}
+
+    def image_of(tindex):
+        if tindex not in decoded:
+            uri = g['images'][g['textures'][tindex]['source']]['uri']
+            decoded[tindex] = read_png(base64.b64decode(uri.split(',', 1)[1]))
+        return decoded[tindex]
     for mat in g.get('materials', []):
         t = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
-        if t is None:
-            texs.append(None)
-            continue
-        uri = g['images'][g['textures'][t['index']]['source']]['uri']
-        texs.append(read_png(base64.b64decode(uri.split(',', 1)[1])))
+        texs.append(image_of(t['index']) if t is not None else None)
+        o = mat.get('occlusionTexture')
+        lms.append(image_of(o['index']) if o is not None else None)
 
     def mul(a, b):  # column-major 4x4
         return [sum(a[k * 4 + r] * b[c * 4 + k] for k in range(4)) for c in range(4) for r in range(4)]
@@ -87,6 +95,8 @@ def main(argv):
                 col = acc(prim['attributes']['COLOR_0'])
                 uvs = acc(prim['attributes']['TEXCOORD_0'])
                 tex = texs[prim['material']] if 'material' in prim else None
+                lm = lms[prim['material']] if 'material' in prim and 'TEXCOORD_1' in prim['attributes'] else None
+                uvs2 = acc(prim['attributes']['TEXCOORD_1']) if lm else None
                 idx = acc(prim['indices'])
                 P = []
                 for p in pos:
@@ -95,7 +105,7 @@ def main(argv):
                 for k in range(0, len(idx), 3):
                     a, b, c = idx[k], idx[k + 1], idx[k + 2]
                     cc = tuple((col[a][j] + col[b][j] + col[c][j]) / 3 for j in range(3))
-                    tris.append((P[a], P[b], P[c], cc, (uvs[a], uvs[b], uvs[c]), tex))
+                    tris.append((P[a], P[b], P[c], cc, (uvs[a], uvs[b], uvs[c]), (tex, lm, (uvs2[a], uvs2[b], uvs2[c]) if lm else None)))
         for ch in node.get('children', []):
             visit(ch, m)
     for root in g['scenes'][g.get('scene', 0)]['nodes']:
@@ -125,7 +135,8 @@ def main(argv):
         V = []
         near = 0.05
         for a, b, c, cc, uv, tex in tris:
-            poly = [(project(q), t) for q, t in ((a, uv[0]), (b, uv[1]), (c, uv[2]))]
+            uv2 = tex[2] if tex and tex[2] else ((0.0, 0.0),) * 3
+            poly = [(project(q), tuple(t) + tuple(t2)) for q, t, t2 in ((a, uv[0], uv2[0]), (b, uv[1], uv2[1]), (c, uv[2], uv2[2]))]
             # clip against the near plane w = near (Sutherland-Hodgman), interpolating UVs
             clipped = []
             for i in range(len(poly)):
@@ -136,12 +147,13 @@ def main(argv):
                 if in0 != in1:
                     f = (near - p0[2]) / (p1[2] - p0[2])
                     clipped.append((tuple(p0[k] + f * (p1[k] - p0[k]) for k in range(3)),
-                                tuple(t0[k] + f * (t1[k] - t0[k]) for k in range(2))))
+                                tuple(t0[k] + f * (t1[k] - t0[k]) for k in range(4))))
             for k in range(1, len(clipped) - 1):
                 tri = (clipped[0], clipped[k], clipped[k + 1])
                 if min(q[2] for q, _ in tri) < near * 0.5:
                     continue  # degenerate after clipping
-                V.append(tuple((q[0] / q[2], q[1] / q[2], -q[2]) for q, _ in tri) + (cc, tuple(t for _, t in tri), tex))
+                V.append(tuple((q[0] / q[2], q[1] / q[2], -q[2]) for q, _ in tri)
+                         + (cc, tuple(t[:2] for _, t in tri), (tex[0], tex[1], tuple(t[2:] for _, t in tri)) if tex else None))
         x0, x1, y1 = -1.0, 1.0, 1.0
         scale = width / 2.0
     else:
@@ -154,7 +166,7 @@ def main(argv):
     zbuf = [-1e30] * (width * height)
     rgb = bytearray([24, 24, 32] * (width * height))
     light = (0.4, 0.5, 0.75)
-    for a, b, c, cc, uv, tex in V:
+    for a, b, c, cc, uv, texinfo in V:
         ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
         vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
         nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
@@ -182,6 +194,7 @@ def main(argv):
                 z = w0 * az + w1 * bz + w2 * qz
                 i = py * width + px
                 if z > zbuf[i]:
+                    tex, lmimg, uv2 = texinfo if texinfo else (None, None, None)
                     if tex:
                         tw, th, tp = tex
                         u = w0 * uv[0][0] + w1 * uv[1][0] + w2 * uv[2][0]
@@ -190,7 +203,13 @@ def main(argv):
                         if tp[k + 3] < 128:
                             continue
                         # baked vertex lighting only (no preview shading), as the PS2's MODULATE: tex * colour
-                        px_col = bytes(max(0, min(255, int(tp[k + j] * cc[j]))) for j in range(3))
+                        lmv = 1.0
+                        if lmimg:
+                            lw, lh, lp = lmimg
+                            u2 = w0 * uv2[0][0] + w1 * uv2[1][0] + w2 * uv2[2][0]
+                            v2 = w0 * uv2[0][1] + w1 * uv2[1][1] + w2 * uv2[2][1]
+                            lmv = lp[4 * ((int(v2 * lh) % lh) * lw + (int(u2 * lw) % lw))] / 255.0 * LIGHTMAP_SCALE
+                        px_col = bytes(max(0, min(255, int(tp[k + j] * cc[j] * lmv))) for j in range(3))
                     else:
                         px_col = bytes(colour)
                     zbuf[i] = z

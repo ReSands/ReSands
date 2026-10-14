@@ -181,8 +181,53 @@ def pc_texture(pack, off):
     raise ValueError(f'PC pixel format {fmt}')
 
 
+def ps2_lightmap(pack, off, size):
+    """Lightmap page (texture record format 6): a PSMT4 (4-bit) texture the game uploads as a
+    PSMCT32 image (GIF A+D BITBLTBUF/TRXREG, then an IMAGE packet, inside the record) and reads
+    back with a 16-step greyscale CLUT (index i -> grey 17*i). Rebuilds the GS swizzle in a small
+    memory model (layout as ps2xRuntime; checked identical to the game's GS memory). Returns
+    (w, h, RGBA bytes) with the brightness in RGB and alpha 255."""
+    import gslm  # GS address layout (PSMT4)
+    import gsvram  # GS address layout (PSMCT32)
+    w, h = struct.unpack_from('<HH', pack, off + 12)
+    regs, q, img = {}, off, None
+    while q + 16 <= off + min(size, 0x400):
+        lo, hi = struct.unpack_from('<QQ', pack, q)
+        nloop, flg, nreg = lo & 0x7FFF, (lo >> 58) & 3, ((lo >> 60) & 0xF) or 16
+        if flg == 0 and nreg == 1 and (hi & 0xF) == 0xE and 0 < nloop < 16:
+            for k in range(nloop):
+                val, a = struct.unpack_from('<QQ', pack, q + 16 + 16 * k)
+                regs[a & 0xFF] = val
+            q += 16 + 16 * nloop
+            continue
+        if flg == 2 and 0 < nloop * 16 <= size:
+            img = pack[q + 16:q + 16 + 16 * nloop]
+            break
+        q += 16
+    if img is None:
+        raise ValueError('no IMAGE packet in lightmap record')
+    dbw = (regs.get(0x50, 0) >> 48) & 0x3F or max(1, w // 128)
+    cw = regs.get(0x52, 0) & 0xFFF or 128
+    vram = bytearray(4 << 20)
+    for i in range(len(img) // 4):
+        y, x = divmod(i, cw)
+        a = gsvram.addr(0, dbw, x, y)
+        vram[a:a + 4] = img[4 * i:4 * i + 4]
+    tbw = max(1, w // 64)
+    out = bytearray(w * h * 4)
+    for y in range(h):
+        for x in range(w):
+            n = gslm.addr4(0, tbw, x, y)
+            b = vram[n >> 1]
+            v = 17 * ((b >> 4) if n & 1 else (b & 0xF))
+            out[4 * (y * w + x):4 * (y * w + x) + 4] = bytes((v, v, v, 255))
+    return w, h, out
+
+
 def decode(pack, recs, key, kind):
-    off, _ = recs[key]
+    off, size = recs[key]
+    if kind == 'ps2' and struct.unpack_from('<H', pack, off + 8)[0] == 6:
+        return ps2_lightmap(pack, off, size)
     return ps2_texture(pack, recs, off) if kind == 'ps2' else pc_texture(pack, off)
 
 

@@ -301,10 +301,30 @@ def main(argv):
                 stats['no_pass'] += 1
             continue
         _idx, po, ps = passes[0]
-        for b in decode_packet(d, po, ps, {bits: (lo, ls) for bits, lo, ls in lods}):
+        blocks = {bits: (lo, ls) for bits, lo, ls in lods}
+        # lightmap pass (pass index 3): same positions, second UV set (block 8)
+        lm_uv = []
+        for pidx, lpo, lps in passes:
+            if pidx == 3:
+                for lb in decode_packet(d, lpo, lps, blocks):
+                    if 8 in lb:
+                        uv2 = None
+                        if 9 in lb:
+                            _, r9, n9 = lb[9]
+                            # lightmap UVs are 8x finer than texture UVs (1/32768: 0..1 across the page)
+                            uv2 = [(a / (8 * uvscale), c / (8 * uvscale)) for a, c, _f in (struct.unpack_from('<3h', r9, 6 * i) for i in range(n9))]
+                        lm_uv.append(uv2)
+        batch_no = -1
+        for b in decode_packet(d, po, ps, blocks):
             m = batch_mesh(b, uvscale)
+            if 8 in b:
+                batch_no += 1
             if not m or not m[3]:
                 continue
+            uv2 = lm_uv[batch_no] if 0 <= batch_no < len(lm_uv) else None
+            m = m + ((uv2 if uv2 and len(uv2) == len(m[0]) else None),)
+            if m[4]:
+                stats['lightmapped_batches'] = stats.get('lightmapped_batches', 0) + 1
             stats['batches'] += 1
             stats['verts'] += len(m[0])
             stats['tris'] += len(m[3])
@@ -341,14 +361,17 @@ def main(argv):
     spacing = min(spacing * 1.2 + 0.1, 50.0)
     for n_key, key in enumerate(keys):
         prims = []
-        for (pos, uv, col, tris), matid in by_record[key]:
+        for (pos, uv, col, tris, uv2), matid in by_record[key]:
             lo = [min(p[a] for p in pos) for a in range(3)]
             hi = [max(p[a] for p in pos) for a in range(3)]
             a_pos = add(b''.join(struct.pack('<3f', *p) for p in pos), 5126, 'VEC3', len(pos), 34962, (lo, hi))
             a_uv = add(b''.join(struct.pack('<2f', *t) for t in uv), 5126, 'VEC2', len(uv), 34962)
             a_col = add(b''.join(struct.pack('<4f', *c) for c in col), 5126, 'VEC4', len(col), 34962)
             a_idx = add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)
-            prims.append(({'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}, 'indices': a_idx}, matid))
+            attrs = {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}
+            if uv2:
+                attrs['TEXCOORD_1'] = add(b''.join(struct.pack('<2f', *t) for t in uv2), 5126, 'VEC2', len(uv2), 34962)
+            prims.append(({'attributes': attrs, 'indices': a_idx}, matid))
         prims_of[key] = prims
         meshes.append({'name': f'{key:08x}', 'primitives': [p for p, _ in prims]})
         if not place:
@@ -362,7 +385,39 @@ def main(argv):
         images, textures, materials = [], [], []
         material_cache, mesh_cache = {}, {}
 
-        def material(mm, idx):
+        lightmap_cache = {}
+
+        def lightmap_texture(lm):
+            # lightmap page (texture format 6) -> glTF texture index
+            if lm not in lightmap_cache:
+                lightmap_cache[lm] = None
+                try:
+                    w, h, rgba = jadetex.decode(d, recs, lm, 'ps2')
+                    images.append({'uri': 'data:image/png;base64,' + base64.b64encode(png_bytes(w, h, rgba)).decode(), 'name': f'lightmap {lm:08x}'})
+                    textures.append({'source': len(images) - 1, 'sampler': 0})
+                    lightmap_cache[lm] = len(textures) - 1
+                    stats['lightmaps'] = stats.get('lightmaps', 0) + 1
+                except Exception:  # noqa: BLE001
+                    pass
+            return lightmap_cache[lm]
+
+        def material(mm, idx, lm=None):
+            base = material_base(mm, idx)
+            if lm is None or base is None:
+                return base
+            if (mm, idx, lm) not in material_cache:
+                t = lightmap_texture(lm)
+                if t is None:
+                    material_cache[(mm, idx, lm)] = base
+                else:
+                    # lightmap as glTF occlusion on the second UV set (the game multiplies it in a
+                    # second pass)
+                    materials.append({**materials[base], 'name': materials[base]['name'] + f'+lm {lm:08x}',
+                                      'occlusionTexture': {'index': t, 'texCoord': 1}})
+                    material_cache[(mm, idx, lm)] = len(materials) - 1
+            return material_cache[(mm, idx, lm)]
+
+        def material_base(mm, idx):
             # multi-material (first word 4, count at +8, sub-material keys from +0xC) -> sub-material
             # (first word 5, texture key at +0x2C) -> PS2 texture record
             if (mm, idx) in material_cache:
@@ -389,15 +444,24 @@ def main(argv):
             material_cache[(mm, idx)] = result
             return result
 
-        def mesh_for(geo, mm):
-            if (geo, mm) not in mesh_cache:
+        def lightmap_of(go, gs):
+            # the game object's lightmap page: first referenced key that is a format-6 texture (keys
+            # follow the variable-length name, so they can sit at odd offsets)
+            for i in range(go, go + gs - 3):
+                k = struct.unpack_from('<I', d, i)[0]
+                if k in recs and jadetex.is_texture(d, recs[k][0]) and struct.unpack_from('<H', d, recs[k][0] + 8)[0] == 6:
+                    return k
+            return None
+
+        def mesh_for(geo, mm, lm=None):
+            if (geo, mm, lm) not in mesh_cache:
                 prims = []
                 for prim, matid in prims_of[geo]:
-                    m = material(mm, matid)
+                    m = material(mm, matid, lm if 'TEXCOORD_1' in prim['attributes'] else None)
                     prims.append({**prim, **({'material': m} if m is not None else {})})
                 meshes.append({'name': f'{geo:08x}/{mm:08x}', 'primitives': prims})
-                mesh_cache[(geo, mm)] = len(meshes) - 1
-            return mesh_cache[(geo, mm)]
+                mesh_cache[(geo, mm, lm)] = len(meshes) - 1
+            return mesh_cache[(geo, mm, lm)]
 
         def instance_mesh(name, geo, mm, go, gs, start):
             # Per-object visual block in the game-object record (GEO_LoadPS2GaoVisu grammar): first
@@ -462,7 +526,7 @@ def main(argv):
                 stats['world_space'] = stats.get('world_space', 0) + 1
             # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
             mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
-            nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm), 'matrix': mat})
+            nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm, lightmap_of(go, gs)), 'matrix': mat})
             children.append(len(nodes) - 1)
         nodes.append({'name': 'world (Z-up)', 'children': children, 'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
         roots = [len(nodes) - 1]
@@ -479,7 +543,8 @@ def main(argv):
     if place:
         print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials; "
               f"{stats.get('instances', 0)} instanced objects ({stats.get('instances_coloured', 0)} with their colour block, {stats.get('instanced_tris', 0)} triangles); "
-              f"{stats.get('world_space', 0)} with world-space geometry (identity matrix)")
+              f"{stats.get('world_space', 0)} with world-space geometry (identity matrix); "
+              f"{stats.get('lightmaps', 0)} lightmap pages, {stats.get('lightmapped_batches', 0)} lightmapped batches")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
