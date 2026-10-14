@@ -11,8 +11,10 @@
 #           tools/nightly/report.py (Gemma writes docs\nightly\<date>.md from the results).
 #   naming  tools/llm_port/name_functions.py: name/summary suggestions for anonymous functions
 #           (inputs copied to game\analysis\naming*). Results: game\analysis\naming\results.
+#           -V2: second configuration (thinking, context from PoPNamingContext.java) -> results_v2;
+#           -Calib: only the 60 calibration functions.
 param([ValidateSet('mmi', 'naming', 'nightly')][string]$Job = 'mmi', [switch]$Spec, [int]$Tries = 3,
-      [string]$Model = 'gemma4:26b', [string[]]$Only = @())
+      [string]$Model = 'gemma4:26b', [string[]]$Only = @(), [switch]$V2, [switch]$Calib)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
@@ -44,6 +46,8 @@ if ($Job -eq 'mmi') {
     if ($Only) { $argList += @('--only', ($Only -join ',')) }
 } else {
     $argList = @('-I', "$Root\tools\llm_port\name_functions.py", '--model', $Model)
+    if ($V2) { $argList += '--v2' }
+    if ($Calib) { $argList += '--calib' }
 }
 # Native stderr must not become a terminating error under 'Stop' (PowerShell 5.1).
 $ErrorActionPreference = 'Continue'
