@@ -1150,14 +1150,13 @@ namespace
     // CJMeshElement::Display(element, matrix index, pass) (0x4C8A80): element address, pass,
     // matrix index, the element's bbox (element +0x00, 8 floats, as in the pack's element record)
     // and its world matrix (matrix pool base at scratchpad 0x70000260, 0x40 bytes per index).
-    PS2Runtime::RecompiledFunction g_origMeshDisplayCap = nullptr;
-    void meshDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    PS2Runtime::RecompiledFunction g_origMeshDisplayCap = nullptr, g_origMeshRefDisplayCap = nullptr;
+    void captureDraw(uint8_t *rdram, R5900Context *ctx, char kind)
     {
-        if (g_capturing)
         {
             const uint32_t element = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFFu, pass = getRegU32(ctx, 6) & 0xFFu;
             const uint32_t matrix = guestU32(rdram, 0x70000260u) + index * 0x40u;
-            std::fprintf(g_frameCap, "E %x %u %u", element, pass, index);
+            std::fprintf(g_frameCap, "%c %x %u %u", kind, element, pass, index);
             for (uint32_t i = 0; i < 8; ++i)
             {
                 const uint32_t bits = guestU32(rdram, element + 4u * i);
@@ -1174,7 +1173,20 @@ namespace
             }
             std::fprintf(g_frameCap, "\n");
         }
+    }
+    void meshDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_capturing)
+            captureDraw(rdram, ctx, 'E');
         g_origMeshDisplayCap(rdram, ctx, runtime);
+    }
+    // CJMeshElementRef::Display(ref, matrix index, pass) 0x4C7B40 (instanced meshes; retail address
+    // from the prototype's layout: BuildLinkInfo..ReadElement are 0xBC0 apart in both builds).
+    void meshRefDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_capturing)
+            captureDraw(rdram, ctx, 'R');
+        g_origMeshRefDisplayCap(rdram, ctx, runtime);
     }
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -2172,6 +2184,10 @@ namespace
             g_origMeshDisplayCap = runtime.lookupFunction(0x004C8A80u);
             if (g_frameCap && g_origMeshDisplayCap)
                 runtime.replaceFunction(0x004C8A80u, meshDisplayCap);
+            g_origMeshRefDisplayCap = runtime.lookupFunction(0x004C7B40u);
+            if (g_frameCap && g_origMeshRefDisplayCap)
+                runtime.replaceFunction(0x004C7B40u, meshRefDisplayCap);
+            std::fprintf(stderr, "[pop:framecap] hooks: Display %s, Ref Display %s\n", g_origMeshDisplayCap ? "yes" : "no", g_origMeshRefDisplayCap ? "yes" : "no");
         }
         if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
         {
