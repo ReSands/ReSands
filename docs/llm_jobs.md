@@ -14,6 +14,13 @@ produces plausible nonsense (naming test, 14 Oct: ~1/3 right meaning, 0 exact). 
 | 7 | **Function naming** (running now) | Decompiles | Calibration against hidden prototype names (meaning, not exact text) | Navigation; weak | Running; verdict pending rescore |
 | 8 | **Log triage** | Long boot logs | Diff against a known-good baseline log (new warnings, new missing targets) | Spot regressions after rebuilds | Easy; mostly a script, model only to summarise |
 
+Test results (14 Oct 2026, gemma4:26b on the PC's 5070 Ti)
+- Naming (#7): 60 calibration functions: ~10 right meaning, ~13 partly, ~29 wrong, 8 empty (JSON repetition loop; fixed with num_predict 400, repeat_penalty 1.15, temperature 0.2, name salvage). ~100 functions/hour. Not trustworthy without review.
+- MMI (#1), name only (model must recall the instruction): 1 of 5 pass; it does not know these instructions (PADDUH as plain word add, PMULTUW as halfword products).
+- MMI (#1), with a one-paragraph spec per instruction: 13 of 18 first round (12 on the first attempt), 18 of 18 after making 5 specs explicit (lanes "words 0 and 2 only", sign extension spelled out as 0xFFFFFFFF/0). 8-35 s per passing instruction. Vague wording ("sign extension of q") fails consistently; the diff feedback rarely rescues a misunderstanding.
+- Lesson: the model is a reliable *spec-to-code translator* under a strict judge, not a source of knowledge. The valuable human/Claude work is writing precise specs; the model does the volume.
+- PC-only run validated: tools/windows/llm-job.ps1 via start-job.ps1 (Ollama local, MSVC + real SSE), Mac button tools/overnight-pc.command asks which job.
+
 Notes
 - The PC's GPU is only free when no build or game runs; one job at a time.
 - Each job writes one result file per item and resumes after interruption (like name_functions.py).
