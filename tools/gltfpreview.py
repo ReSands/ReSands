@@ -28,6 +28,19 @@ def load(path):
     return g, acc
 
 
+def read_png(data):
+    # Only what jade2gltf writes: 8-bit RGBA, filter 0 per row.
+    w, h = struct.unpack('>II', data[16:24])
+    p, idat = 8, b''
+    while p < len(data):
+        n = struct.unpack('>I', data[p:p + 4])[0]
+        if data[p + 4:p + 8] == b'IDAT':
+            idat += data[p + 8:p + 8 + n]
+        p += 12 + n
+    raw = zlib.decompress(idat)
+    return w, h, b''.join(raw[y * (4 * w + 1) + 1:(y + 1) * (4 * w + 1)] for y in range(h))
+
+
 def write_png(path, w, h, rgb):
     raw = b''.join(b'\x00' + bytes(rgb[y * w * 3:(y + 1) * w * 3]) for y in range(h))
     chunk = lambda t, d: struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xFFFFFFFF)
@@ -42,7 +55,15 @@ def main(argv):
     yaw = math.radians(float(argv[argv.index('--yaw') + 1])) if '--yaw' in argv else math.radians(35)
     pitch = math.radians(float(argv[argv.index('--pitch') + 1])) if '--pitch' in argv else math.radians(30)
     g, acc = load(src)
-    tris = []  # (3 world points, colour)
+    tris = []  # (3 world points, colour, uvs, texture)
+    texs = []
+    for mat in g.get('materials', []):
+        t = mat.get('pbrMetallicRoughness', {}).get('baseColorTexture')
+        if t is None:
+            texs.append(None)
+            continue
+        uri = g['images'][g['textures'][t['index']]['source']]['uri']
+        texs.append(read_png(base64.b64decode(uri.split(',', 1)[1])))
 
     def mul(a, b):  # column-major 4x4
         return [sum(a[k * 4 + r] * b[c * 4 + k] for k in range(4)) for c in range(4) for r in range(4)]
@@ -64,6 +85,8 @@ def main(argv):
             for prim in g['meshes'][node['mesh']]['primitives']:
                 pos = acc(prim['attributes']['POSITION'])
                 col = acc(prim['attributes']['COLOR_0'])
+                uvs = acc(prim['attributes']['TEXCOORD_0'])
+                tex = texs[prim['material']] if 'material' in prim else None
                 idx = acc(prim['indices'])
                 P = []
                 for p in pos:
@@ -72,7 +95,7 @@ def main(argv):
                 for k in range(0, len(idx), 3):
                     a, b, c = idx[k], idx[k + 1], idx[k + 2]
                     cc = tuple((col[a][j] + col[b][j] + col[c][j]) / 3 for j in range(3))
-                    tris.append((P[a], P[b], P[c], cc))
+                    tris.append((P[a], P[b], P[c], cc, (uvs[a], uvs[b], uvs[c]), tex))
         for ch in node.get('children', []):
             visit(ch, m)
     for root in g['scenes'][g.get('scene', 0)]['nodes']:
@@ -86,7 +109,7 @@ def main(argv):
         x = p[0] * cy - p[1] * sy
         yy = p[0] * sy + p[1] * cy
         return (x, p[2] * cp - yy * sp, p[2] * sp + yy * cp)  # screen x, screen y (up), depth (towards viewer)
-    V = [(view(a), view(b), view(c), cc) for a, b, c, cc in tris]
+    V = [(view(a), view(b), view(c), cc, uv, tex) for a, b, c, cc, uv, tex in tris]
     xs = [p[0] for t in V for p in t[:3]]
     ys = [p[1] for t in V for p in t[:3]]
     x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -95,7 +118,7 @@ def main(argv):
     zbuf = [-1e30] * (width * height)
     rgb = bytearray([24, 24, 32] * (width * height))
     light = (0.4, 0.5, 0.75)
-    for a, b, c, cc in V:
+    for a, b, c, cc, uv, tex in V:
         ux, uy, uz = b[0] - a[0], b[1] - a[1], b[2] - a[2]
         vx, vy, vz = c[0] - a[0], c[1] - a[1], c[2] - a[2]
         nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
@@ -119,8 +142,18 @@ def main(argv):
                 z = w0 * az + w1 * bz + w2 * qz
                 i = py * width + px
                 if z > zbuf[i]:
+                    if tex:
+                        tw, th, tp = tex
+                        u = w0 * uv[0][0] + w1 * uv[1][0] + w2 * uv[2][0]
+                        v = w0 * uv[0][1] + w1 * uv[1][1] + w2 * uv[2][1]
+                        k = 4 * ((int(v * th) % th) * tw + (int(u * tw) % tw))
+                        if tp[k + 3] < 128:
+                            continue
+                        px_col = bytes(max(0, min(255, int(tp[k + j] * shade * cc[j]))) for j in range(3))
+                    else:
+                        px_col = bytes(colour)
                     zbuf[i] = z
-                    rgb[3 * i:3 * i + 3] = bytes(colour)
+                    rgb[3 * i:3 * i + 3] = px_col
     write_png(out, width, height, rgb)
     print(f'{len(tris)} triangles -> {out} ({width}x{height})')
 

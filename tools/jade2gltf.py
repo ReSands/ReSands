@@ -26,25 +26,52 @@ import jadetex  # noqa: E402
 READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'game', 'analysis', 'meshport', 'py')
 
 
+def png_bytes(w, h, rgba):
+    import zlib
+    raw = b''.join(b'\0' + bytes(rgba[y * w * 4:(y + 1) * w * 4]) for y in range(h))
+    chunk = lambda t, data: struct.pack('>I', len(data)) + t + data + struct.pack('>I', zlib.crc32(t + data) & 0xFFFFFFFF)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+
+
 def capture_elements(pack):
-    """(record key, element offset, size) for every CJMeshElement the converted loader reads."""
+    """(record key, element offset, size, material index) for every CJMeshElement the converted
+    loader reads. The material index is field +4 of the geometry's 0x1C-byte element entry (table
+    at object +0x28, count +0x24), whose +0x18 heads the chain of mesh elements (+0x4C = next)."""
     rt0 = c2py_rt.Runtime()
     c2py_rt.load_funcs(rt0, READER)
     orig = rt0.funcs['ReadElement__13CJMeshElementFPPc']
+    create = rt0.funcs['GEO_p_CreateFromBuffer__FP16GRO_tdst_Struct_PPcP15WOR_tdst_World_Ui']
     out, cur = [], {}
 
     def wrap(rt, this, pp):
         a = rt.r32(pp)
         r = orig(rt, this, pp)
-        out.append((cur['key'], cur['off'] + (a - 0x01000000), rt.r32(pp) - a))
+        cur['found'].append((this, cur['off'] + (a - 0x01000000), rt.r32(pp) - a))
         return r
 
     rt0.funcs['ReadElement__13CJMeshElementFPPc'] = wrap
     for key, (off, size) in sorted(jadetex.records(pack).items()):
         if size < 8 or struct.unpack_from('<I', pack, off)[0] != 1 or not 0 < struct.unpack_from('<I', pack, off + 4)[0] < 16:
             continue
-        cur['key'], cur['off'] = key, off
-        c2py_rt.parse_record(None, pack, off, size, rt0.funcs)
+        cur['off'], cur['found'] = off, []
+        rt = c2py_rt.Runtime()
+        rt.funcs = rt0.funcs
+        rt.write(0x01000000, pack[off:off + size])
+        cell = rt.alloca(8)
+        rt.w32(cell, 0x01000000 + 8)
+        obj = create(rt, 0, cell, 0, struct.unpack_from('<I', pack, off + 4)[0])
+        material = {}
+        if obj:
+            table, count = rt.r32(obj + 0x28), rt.r32(obj + 0x24)
+            for e in range(min(count, 4096)):
+                mat = rt.r32(table + 0x1C * e + 4)
+                m = rt.r32(table + 0x1C * e + 0x18)
+                while m and m not in material:
+                    material[m] = mat
+                    m = rt.r32(m + 0x4C)
+        for this, eo, es in cur['found']:
+            out.append((key, eo, es, material.get(this, 0)))
     return out
 
 
@@ -148,9 +175,10 @@ def game_objects(d, recs, geometry_keys):
             k = struct.unpack_from('<I', d, i)[0]
             if k in geometry_keys:
                 geo = k
+                mm = struct.unpack_from('<I', d, i + 4)[0]
                 break
         if geo is not None:
-            out.append((name, m, geo))
+            out.append((name, m, geo, mm))
     return out
 
 
@@ -161,7 +189,7 @@ def main(argv):
     elements = capture_elements(d)
     by_record = {}
     stats = {'elements': len(elements), 'drawn': 0, 'no_pass': 0, 'batches': 0, 'verts': 0, 'tris': 0, 'uvmax': 0}
-    for key, o, _size in elements:
+    for key, o, _size, matid in elements:
         nb, lods, passes = element_parts(d, o)
         if not passes:
             stats['no_pass'] += 1
@@ -177,7 +205,7 @@ def main(argv):
             if 9 in b:
                 _, r, k = b[9]
                 stats['uvmax'] = max(stats['uvmax'], max(abs(x) for i in range(k) for x in struct.unpack_from('<2h', r, 6 * i)))
-            by_record.setdefault(key, []).append(m)
+            by_record.setdefault(key, []).append((m, matid))
         stats['drawn'] += 1
 
     # glTF: one mesh per record (one primitive per batch), nodes in a grid.
@@ -196,25 +224,27 @@ def main(argv):
         return len(accessors) - 1
 
     keys = sorted(by_record)
+    prims_of = {}
     place = '--place' in argv
     cols = max(1, int(math.ceil(math.sqrt(len(keys)))))
     spacing = 0.0
     for parts in by_record.values():
-        for pos, *_ in parts:
+        for (pos, *_), _mat in parts:
             for axis in range(3):
                 spacing = max(spacing, max(p[axis] for p in pos) - min(p[axis] for p in pos))
     spacing = min(spacing * 1.2 + 0.1, 50.0)
     for n_key, key in enumerate(keys):
         prims = []
-        for pos, uv, col, tris in by_record[key]:
+        for (pos, uv, col, tris), matid in by_record[key]:
             lo = [min(p[a] for p in pos) for a in range(3)]
             hi = [max(p[a] for p in pos) for a in range(3)]
             a_pos = add(b''.join(struct.pack('<3f', *p) for p in pos), 5126, 'VEC3', len(pos), 34962, (lo, hi))
             a_uv = add(b''.join(struct.pack('<2f', *t) for t in uv), 5126, 'VEC2', len(uv), 34962)
             a_col = add(b''.join(struct.pack('<4f', *c) for c in col), 5126, 'VEC4', len(col), 34962)
             a_idx = add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)
-            prims.append({'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}, 'indices': a_idx})
-        meshes.append({'name': f'{key:08x}', 'primitives': prims})
+            prims.append(({'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}, 'indices': a_idx}, matid))
+        prims_of[key] = prims
+        meshes.append({'name': f'{key:08x}', 'primitives': [p for p, _ in prims]})
         if not place:
             # PS2 data is Z-up (metres); glTF is Y-up: rotate -90 degrees about X.
             nodes.append({'name': f'{key:08x}', 'mesh': len(meshes) - 1,
@@ -222,24 +252,68 @@ def main(argv):
                           'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
     roots = list(range(len(nodes)))
     if place:
-        mesh_of = {key: i for i, key in enumerate(keys)}
-        placed = [g for g in game_objects(d, jadetex.records(d), set(keys)) if g[1][14] > -1000]
+        recs = jadetex.records(d)
+        images, textures, materials = [], [], []
+        material_cache, mesh_cache = {}, {}
+
+        def material(mm, idx):
+            # multi-material (first word 4, count at +8, sub-material keys from +0xC) -> sub-material
+            # (first word 5, texture key at +0x2C) -> PS2 texture record
+            if (mm, idx) in material_cache:
+                return material_cache[(mm, idx)]
+            result = None
+            if mm in recs:
+                mo, _ = recs[mm]
+                if struct.unpack_from('<I', d, mo)[0] == 4 and idx < struct.unpack_from('<I', d, mo + 8)[0]:
+                    sub = struct.unpack_from('<I', d, mo + 0xC + 4 * idx)[0]
+                    if sub in recs and struct.unpack_from('<I', d, recs[sub][0])[0] == 5:
+                        tex = struct.unpack_from('<I', d, recs[sub][0] + 0x2C)[0]
+                        if tex in recs and jadetex.is_texture(d, recs[tex][0]):
+                            try:
+                                w, h, rgba = jadetex.decode(d, recs, tex, 'ps2')
+                            except Exception:
+                                w = 0
+                            if w:
+                                images.append({'uri': 'data:image/png;base64,' + base64.b64encode(png_bytes(w, h, rgba)).decode(), 'name': f'{tex:08x}'})
+                                textures.append({'source': len(images) - 1, 'sampler': 0})
+                                materials.append({'name': f'{tex:08x}', 'pbrMetallicRoughness': {'baseColorTexture': {'index': len(textures) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
+                                                  'alphaMode': 'MASK', 'alphaCutoff': 0.5, 'doubleSided': True})
+                                result = len(materials) - 1
+                                stats['textured'] = stats.get('textured', 0) + 1
+            material_cache[(mm, idx)] = result
+            return result
+
+        def mesh_for(geo, mm):
+            if (geo, mm) not in mesh_cache:
+                prims = []
+                for prim, matid in prims_of[geo]:
+                    m = material(mm, matid)
+                    prims.append({**prim, **({'material': m} if m is not None else {})})
+                meshes.append({'name': f'{geo:08x}/{mm:08x}', 'primitives': prims})
+                mesh_cache[(geo, mm)] = len(meshes) - 1
+            return mesh_cache[(geo, mm)]
+
+        placed = [g for g in game_objects(d, recs, set(keys)) if g[1][14] > -1000]
         children = []
-        for name, m, geo in placed:
+        for name, m, geo, mm in placed:
             # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
             mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
-            nodes.append({'name': name, 'mesh': mesh_of[geo], 'matrix': mat})
+            nodes.append({'name': name, 'mesh': mesh_for(geo, mm), 'matrix': mat})
             children.append(len(nodes) - 1)
         nodes.append({'name': 'world (Z-up)', 'children': children, 'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
         roots = [len(nodes) - 1]
+        extra = {'images': images, 'textures': textures, 'materials': materials,
+                 'samplers': [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}]} if images else {}
         stats['placed'] = len(placed)
-    gltf = {'asset': {'version': '2.0', 'generator': 'PoP jade2gltf'},
+    if not place:
+        extra = {}
+    gltf = {**extra, 'asset': {'version': '2.0', 'generator': 'PoP jade2gltf'},
             'scene': 0, 'scenes': [{'nodes': roots}], 'nodes': nodes, 'meshes': meshes,
             'accessors': accessors, 'bufferViews': views,
             'buffers': [{'byteLength': len(buf), 'uri': 'data:application/octet-stream;base64,' + base64.b64encode(bytes(buf)).decode()}]}
     json.dump(gltf, open(out_path, 'w'))
     if place:
-        print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out)")
+        print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
