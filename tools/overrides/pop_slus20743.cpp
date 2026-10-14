@@ -31,6 +31,7 @@ namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false
 #include <unordered_map>
 #include <iterator>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 void installPopMovies(PS2Runtime &runtime); // pop_movies.cpp: Bink movies from another version
@@ -1124,6 +1125,15 @@ namespace
     PS2Runtime::RecompiledFunction g_origBigSearch = nullptr;
     void bigSearchHd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        // POP_PACKLOG=1: each world pack (key 0xFF......) the game looks up, once, with the time.
+        static const bool packLog = [] { const char *v = std::getenv("POP_PACKLOG"); return v && *v == '1'; }();
+        if (packLog && (getRegU32(ctx, 4) >> 24) == 0xFFu)
+        {
+            static std::unordered_set<uint32_t> seen;
+            static const auto t0 = std::chrono::steady_clock::now();
+            if (seen.insert(getRegU32(ctx, 4)).second)
+                std::fprintf(stderr, "[pop:pack] %.1f s %08x\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), getRegU32(ctx, 4));
+        }
         pop_hdtex::onBigfileLookup(getRegU32(ctx, 4));
         g_origBigSearch(rdram, ctx, runtime);
     }
