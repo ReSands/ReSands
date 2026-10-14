@@ -440,9 +440,26 @@ def main(argv):
             meshes.append({'name': name, 'primitives': prims})
             return len(meshes) - 1
 
+        # Static world geometry is stored in world coordinates and drawn with an identity matrix (the
+        # game object's matrix is only its pivot); local geometry uses the object's matrix. Rule,
+        # checked against a captured frame's DMA matrices (53/53 objects): world space when the
+        # vertices' centre is nearer the object's pivot than the origin.
+        centre = {}
+        for geo, parts in by_record.items():
+            pts = [q for (pos, *_), _mat in parts for q in pos[::4]]
+            if pts:
+                centre[geo] = [sum(q[k] for q in pts) / len(pts) for k in range(3)]
+        for geo, items in v3_of.items():
+            pts = [q for _e, _c, _m, batches in items for pos, _uv, _fl in batches for q in pos[::4]]
+            if pts and geo not in centre:
+                centre[geo] = [sum(q[k] for q in pts) / len(pts) for k in range(3)]
         placed = [g for g in game_objects(d, recs, set(keys) | set(v3_of)) if g[1][14] > -1000]
         children = []
         for name, m, geo, mm, go, gs, start in placed:
+            c = centre.get(geo)
+            if c and math.dist(c, m[12:15]) < math.dist(c, (0.0, 0.0, 0.0)):
+                m = [1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 1.0]
+                stats['world_space'] = stats.get('world_space', 0) + 1
             # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
             mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
             nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm), 'matrix': mat})
@@ -461,7 +478,8 @@ def main(argv):
     json.dump(gltf, open(out_path, 'w'))
     if place:
         print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials; "
-              f"{stats.get('instances', 0)} instanced objects ({stats.get('instances_coloured', 0)} with their colour block, {stats.get('instanced_tris', 0)} triangles)")
+              f"{stats.get('instances', 0)} instanced objects ({stats.get('instances_coloured', 0)} with their colour block, {stats.get('instanced_tris', 0)} triangles); "
+              f"{stats.get('world_space', 0)} with world-space geometry (identity matrix)")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
