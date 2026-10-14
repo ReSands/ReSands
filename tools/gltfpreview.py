@@ -15,6 +15,8 @@ import zlib
 # lightmap brightness = CLUT index / 15 (greyscale ramp); scale for the multiply (2.0 if the GS pass
 # modulates with 0x80 = 1.0, to be checked against a frame)
 LIGHTMAP_SCALE = float(__import__('os').environ.get('POP_LM_SCALE', '1.0'))
+# how the lightmap combines with the base texture (POP_LM_MODE: mul, mul2, lerp, lerpvc, add)
+LM_MODE = __import__('os').environ.get('POP_LM_MODE', 'lerpvc')  # best match to the game frame (imgscore)
 
 
 def load(path):
@@ -208,8 +210,21 @@ def main(argv):
                             lw, lh, lp = lmimg
                             u2 = w0 * uv2[0][0] + w1 * uv2[1][0] + w2 * uv2[2][0]
                             v2 = w0 * uv2[0][1] + w1 * uv2[1][1] + w2 * uv2[2][1]
-                            lmv = lp[4 * ((int(v2 * lh) % lh) * lw + (int(u2 * lw) % lw))] / 255.0 * LIGHTMAP_SCALE
-                        px_col = bytes(max(0, min(255, int(tp[k + j] * cc[j] * lmv))) for j in range(3))
+                            lmv = lp[4 * ((int(v2 * lh) % lh) * lw + (int(u2 * lw) % lw))] / 255.0
+                        base = [tp[k + j] * cc[j] for j in range(3)]
+                        if lmimg:
+                            a = lmv  # lightmap brightness = CLUT index / 15; its alpha As = a * 0x80
+                            if LM_MODE == 'mul2':
+                                base = [b * 2 * a for b in base]
+                            elif LM_MODE == 'lerp':     # GS ALPHA ((Cs-Cd)*As>>7)+Cd, Cs = grey texel
+                                base = [b * (1 - a) + 255 * a * a for b in base]
+                            elif LM_MODE == 'lerpvc':   # same, Cs = grey texel modulated by vertex colour
+                                base = [b * (1 - a) + 255 * a * cc[j] * a for j, b in enumerate(base)]
+                            elif LM_MODE == 'add':
+                                base = [b + 255 * a * a for b in base]
+                            else:                       # 'mul'
+                                base = [b * a * LIGHTMAP_SCALE for b in base]
+                        px_col = bytes(max(0, min(255, int(b))) for b in base)
                     else:
                         px_col = bytes(colour)
                     zbuf[i] = z

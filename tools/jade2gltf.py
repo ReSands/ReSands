@@ -315,8 +315,11 @@ def main(argv):
                             uv2 = [(a / (8 * uvscale), c / (8 * uvscale)) for a, c, _f in (struct.unpack_from('<3h', r9, 6 * i) for i in range(n9))]
                         lm_uv.append(uv2)
         batch_no = -1
+        # elements whose packets reference data blocks (LOD blocks present) store texture UVs at 1/512
+        # (8x coarser than inline packets): t spans exactly 0..1/8 at 1/4096
+        base_scale = uvscale / 8 if blocks else uvscale
         for b in decode_packet(d, po, ps, blocks):
-            m = batch_mesh(b, uvscale)
+            m = batch_mesh(b, base_scale)
             if 8 in b:
                 batch_no += 1
             if not m or not m[3]:
