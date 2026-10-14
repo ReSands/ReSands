@@ -54,3 +54,6 @@ gog/
 
 # Personal Claude Code settings
 .claude/settings.local.json
+
+# Python caches
+__pycache__/
