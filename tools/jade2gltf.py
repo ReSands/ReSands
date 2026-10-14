@@ -228,6 +228,57 @@ def decode_packet(d, o, size, blobs=None):
     return batches
 
 
+def skinned_batches(d, o, size):
+    """Skinned element packet (CJMeshElement with a bone palette): per batch, keyed by VU address:
+    0x53 V4-32 positions (bind pose), 0x7B V3-16 UVs + strip flag, 0x03 V3-8 bone indices (VU matrix
+    offsets: /4 = bone palette index), 0x2B V3-32 weights, 0xA3 V3-8 signed normals. Returns
+    [(positions, uvs, flags, bones (3 palette indices), weights (3), normals)]."""
+    U = lambda p: struct.unpack_from('<I', d, p)[0]
+    out, cur = [], {}
+
+    def flush():
+        nonlocal cur
+        if 0x53 in cur:
+            n, stride = cur[0x53][1], cur[0x53][2]
+            pos = [struct.unpack_from('<3f', cur[0x53][0], stride * i) for i in range(n)]
+            uv, fl = [(0, 0)] * n, [0] * n
+            if 0x7B in cur:
+                raw = [struct.unpack_from('<3h', cur[0x7B][0], 6 * i) for i in range(min(n, cur[0x7B][1]))]
+                uv, fl = [(a, b) for a, b, _ in raw], [c for _, _, c in raw]
+            bones = [tuple(x // 4 for x in cur[0x03][0][3 * i:3 * i + 3]) for i in range(n)] if 0x03 in cur else [(0, 0, 0)] * n
+            weights = [struct.unpack_from('<3f', cur[0x2B][0], 12 * i) for i in range(n)] if 0x2B in cur else [(1.0, 0, 0)] * n
+            normals = [struct.unpack_from('<3b', cur[0xA3][0], 3 * i) for i in range(n)] if 0xA3 in cur else [(0, 0, 0)] * n
+            out.append((pos, uv, fl, bones, weights, normals))
+        cur = {}
+
+    p, end = o, o + size
+    while p + 16 <= end:
+        lo = U(p)
+        qwc, tid = lo & 0xFFFF, (lo >> 28) & 7
+        stop = min(p + 16 + 16 * qwc, end)
+        v = p + 8
+        while v + 4 <= stop:
+            w = U(v)
+            cmd, num, imm = (w >> 24) & 0x7F, (w >> 16) & 0xFF, w & 0xFFFF
+            if cmd >= 0x60:
+                f, n = cmd & 0xF, num or 256
+                nbytes = (EL[f] * n + 3) // 4 * 4
+                addr = imm & 0x3FF
+                if addr in cur:
+                    flush()
+                cur[addr] = (d[v + 4:v + 4 + EL[f] * n], n, EL[f])
+                v += 4 + nbytes
+            else:
+                if cmd == 0x17:
+                    flush()
+                v += 4 + {0x20: 4, 0x30: 16, 0x31: 16}.get(cmd, 0) + (16 * (imm or 65536) if cmd in (0x50, 0x51) else 0)
+        p += 16 + 16 * qwc
+        if tid in (6, 7):
+            break
+    flush()
+    return out
+
+
 def batch_mesh(b, uvscale):
     if 8 not in b:
         return None
@@ -300,6 +351,21 @@ def main(argv):
             else:
                 stats['no_pass'] += 1
             continue
+        if nb and passes:
+            # skinned element: bind-pose positions, bone palette slots 1..N (0 = unused) -> bone ids
+            palette = d[o + 40:o + 40 + nb]
+            for pos, uvr, fl, bones, weights, _normals in skinned_batches(d, passes[0][1], passes[0][2]):
+                n = len(pos)
+                tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
+                if not tris:
+                    continue
+                uv = [(a / uvscale, c / uvscale) for a, c in uvr]
+                ids = [tuple(palette[k - 1] if 0 < k <= len(palette) else 0 for k in b) for b in bones]
+                m = (pos, uv, [(1.0, 1.0, 1.0, 1.0)] * n, tris, None, (ids, weights))
+                stats['skinned_batches'] = stats.get('skinned_batches', 0) + 1
+                by_record.setdefault(key, []).append((m, matid))
+            stats['drawn'] += 1
+            continue
         _idx, po, ps = passes[0]
         blocks = {bits: (lo, ls) for bits, lo, ls in lods}
         # lightmap pass (pass index 3): same positions, second UV set (block 8)
@@ -325,7 +391,7 @@ def main(argv):
             if not m or not m[3]:
                 continue
             uv2 = lm_uv[batch_no] if 0 <= batch_no < len(lm_uv) else None
-            m = m + ((uv2 if uv2 and len(uv2) == len(m[0]) else None),)
+            m = m + ((uv2 if uv2 and len(uv2) == len(m[0]) else None), None)
             if m[4]:
                 stats['lightmapped_batches'] = stats.get('lightmapped_batches', 0) + 1
             stats['batches'] += 1
@@ -364,7 +430,7 @@ def main(argv):
     spacing = min(spacing * 1.2 + 0.1, 50.0)
     for n_key, key in enumerate(keys):
         prims = []
-        for (pos, uv, col, tris, uv2), matid in by_record[key]:
+        for (pos, uv, col, tris, uv2, skin), matid in by_record[key]:
             lo = [min(p[a] for p in pos) for a in range(3)]
             hi = [max(p[a] for p in pos) for a in range(3)]
             a_pos = add(b''.join(struct.pack('<3f', *p) for p in pos), 5126, 'VEC3', len(pos), 34962, (lo, hi))
@@ -374,6 +440,12 @@ def main(argv):
             attrs = {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}
             if uv2:
                 attrs['TEXCOORD_1'] = add(b''.join(struct.pack('<2f', *t) for t in uv2), 5126, 'VEC2', len(uv2), 34962)
+            if skin:
+                # application-specific attributes (a glTF skin needs the skeleton, which comes from the
+                # game at run time): bone ids from the element's palette, and their weights
+                ids, weights = skin
+                attrs['_BONES'] = add(b''.join(struct.pack('<4H', *b, 0) for b in ids), 5123, 'VEC4', len(ids), 34962)
+                attrs['_WEIGHTS'] = add(b''.join(struct.pack('<4f', *w, 0.0) for w in weights), 5126, 'VEC4', len(weights), 34962)
             prims.append(({'attributes': attrs, 'indices': a_idx}, matid))
         prims_of[key] = prims
         meshes.append({'name': f'{key:08x}', 'primitives': [p for p, _ in prims]})
@@ -561,7 +633,8 @@ def main(argv):
         print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out), {stats.get('textured', 0)} textured materials; "
               f"{stats.get('instances', 0)} instanced objects ({stats.get('instances_coloured', 0)} with their colour block, {stats.get('instanced_tris', 0)} triangles); "
               f"{stats.get('world_space', 0)} with world-space geometry (identity matrix); "
-              f"{stats.get('lightmaps', 0)} lightmap pages, {stats.get('lightmapped_batches', 0)} lightmapped batches")
+              f"{stats.get('lightmaps', 0)} lightmap pages, {stats.get('lightmapped_batches', 0)} lightmapped batches; "
+              f"{stats.get('skinned_batches', 0)} skinned batches")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
