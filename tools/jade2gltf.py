@@ -185,7 +185,10 @@ def decode_packet(d, o, size, blobs=None):
                 nbytes = (EL[f] * n + 3) // 4 * 4
                 if ext is not None and v + 4 >= stop:
                     src = ext[0]
-                    cur.setdefault(f, (imm & 0x3FF, d[src:src + EL[f] * n], n))
+                    if f in cur:  # same format again without MSCNT: the next batch starts
+                        batches.append(cur)
+                        cur = {}
+                    cur[f] = (imm & 0x3FF, d[src:src + EL[f] * n], n)
                     v = stop
                     continue
                 cur.setdefault(f, (imm & 0x3FF, d[v + 4:v + 4 + EL[f] * n], n))
@@ -202,9 +205,10 @@ def decode_packet(d, o, size, blobs=None):
         lo, addr = U(p), U(p + 4)
         qwc, tid = lo & 0xFFFF, (lo >> 28) & 7
         if tid in (0, 3) and blobs is not None:  # refe / ref: data from block `addr`
-            ext = blobs.get(addr >> 24 if addr & 0xFFFFFF == 0 else addr)  # block index in the top byte
-            if ext is not None:
-                vif(p + 8, p + 16, (ext[0], qwc * 16))
+            # address = block index (top byte) + byte offset within the block (low 24 bits)
+            ext = blobs.get(addr >> 24)
+            if ext is not None and (addr & 0xFFFFFF) + qwc * 16 <= ext[1]:
+                vif(p + 8, p + 16, (ext[0] + (addr & 0xFFFFFF), qwc * 16))
             p += 16
             if tid == 0:
                 break
