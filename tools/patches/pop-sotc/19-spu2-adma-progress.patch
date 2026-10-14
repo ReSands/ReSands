@@ -1,0 +1,76 @@
+From e7d5151b13dcb01bcf8130a267ea72d679249dc7 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Wed, 14 Oct 2026 10:01:42 +0100
+Subject: [PATCH] SPU2 AutoDMA: the channel's MADR advances at playback speed
+ during the transfer (current DMA address), instead of staying at the half's
+ start
+
+libsd's sceSdBlockTransStatus reports it; Prince of Persia refills its stream buffer by the consumed amount since the last poll (30 Hz). With half-granular addresses, two half switches between polls looked like none, so stale halves replayed (whine, blips, distorted slow voice-over).
+---
+ ps2xIOP/src/emulator/core/iop_memory.cpp | 12 ++++++++++++
+ ps2xIOP/src/emulator/core/iop_memory.h   | 12 ++++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.cpp b/ps2xIOP/src/emulator/core/iop_memory.cpp
+index 39576a0..56023f1 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -242,6 +242,17 @@ namespace ps2x::iop::detail
+     {
+         if (m_sio2 && IopSio2::owns(address))
+             return m_sio2->read32(address);
++        if ((address == kDmaSpu0Chcr - 8u || address == kDmaSpu1Chcr - 8u) && m_clock)
++        {
++            const AdmaProgress &p = m_admaProgress[address == kDmaSpu1Chcr - 8u ? 1u : 0u];
++            if (p.active)
++            {
++                const uint64_t total = IopSpu2::admaCycles(p.bytes);
++                const uint64_t elapsed = *m_clock > p.start ? *m_clock - p.start : 0u;
++                const uint64_t done = total ? std::min<uint64_t>(p.bytes, (p.bytes * elapsed) / total) : p.bytes;
++                return p.madr + (static_cast<uint32_t>(done) & ~3u);
++            }
++        }
+         const auto value = m_hardware.find(address);
+         if (value != m_hardware.end())
+             return value->second;
+@@ -348,6 +359,7 @@ namespace ps2x::iop::detail
+         const size_t bytes = static_cast<size_t>(std::min<uint64_t>(words * 4u, RamSize - madr));
+         if (m_spu2->autoDma(core))
+         {
++            m_admaProgress[core] = AdmaProgress{madr, static_cast<uint32_t>(bytes), cycle, (chcr & 1u) != 0u};
+             if ((chcr & 1u) != 0u)
+                 m_spu2->admaWrite(core, m_ram.data() + madr, bytes);
+             return;
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.h b/ps2xIOP/src/emulator/core/iop_memory.h
+index 551c811..dc3310c 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.h
++++ b/ps2xIOP/src/emulator/core/iop_memory.h
+@@ -3,6 +3,7 @@
+ #include <cstddef>
+ #include "ps2x/state_io.h"
+ #include <cstdint>
++#include <array>
+ #include <optional>
+ #include <span>
+ #include <string>
+@@ -112,6 +113,17 @@ namespace ps2x::iop::detail
+         uint32_t m_interruptMask = 0;
+         uint32_t m_interruptControl = 1;
+         std::optional<DmaStart> m_dmaStart;
++        // AutoDMA (sound data input) transfer in progress per SPU2 core, so reads of the channel's
++        // MADR advance at playback speed like the real DMA's current address (libsd's
++        // sceSdBlockTransStatus reports it; games refill their stream buffer by it).
++        struct AdmaProgress
++        {
++            uint32_t madr = 0;
++            uint32_t bytes = 0;
++            uint64_t start = 0;
++            bool active = false;
++        };
++        std::array<AdmaProgress, 2> m_admaProgress{};
+         IopSio2 *m_sio2 = nullptr;
+         IopSpu2 *m_spu2 = nullptr;
+         const uint64_t *m_clock = nullptr;
+-- 
+2.54.0 (Apple Git-157)
+
