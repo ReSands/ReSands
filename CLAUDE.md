@@ -326,7 +326,7 @@ Priority (user): a native renderer using **only PS2 assets and no GS emulation**
 - C. Characters: 12 GPU skinning with the game's bone matrices.
 - D. Remove the GS: 13 particles/water/sand/shadows -> 14 post-processing shaders -> 15 2D/HUD/menus/loading screen/movie display -> 16 GS emulation off.
 - E. Later: 17 resolution/widescreen/frame rate/DLSS/RTX; 18 higher-quality assets.
-Sound (IOP/SPU2) and PS2 movies (IPU) are separate "no emulation" tracks if wanted.
+Sound and PS2 movies are in scope too (user, 14 Oct): eventually native sound (no IOP/SPU2 emulation) and native playback of the PS2 movies (no IPU emulation) - separate tracks after the renderer. Judge frames for section A come from our own recompiled game on the PC (SotC GPU GS emulation of the game's own GS commands), not PCSX2.
 
 ## Plan (decided 13 Oct 2026)
 
