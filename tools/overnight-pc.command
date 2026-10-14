@@ -19,9 +19,9 @@ if ! git cat-file -e "$pc_head" 2>/dev/null; then
     echo "The PC is at $pc_head, which this Mac does not know. Stopping."; read -k1; exit 1
 fi
 if [[ "$pc_head" != "$(git rev-parse HEAD)" ]]; then
-    git bundle create /tmp/pop-overnight.bundle "$pc_head..HEAD" >/dev/null 2>&1 &&
+    git bundle create /tmp/pop-overnight.bundle "$pc_head..main" >/dev/null 2>&1 &&
     scp -q -o BatchMode=yes /tmp/pop-overnight.bundle "$PC:C:/dev/PoP_Decomp/game/jobs/pop.bundle" &&
-    ps "git -C '$REMOTE' pull --ff-only game\\jobs\\pop.bundle main 2>&1 | Select-Object -Last 1"
+    ps "git -C '$REMOTE' pull --ff-only game\\jobs\\pop.bundle main 2>&1 | Select-Object -Last 1; git -C '$REMOTE' log --oneline -1"
 fi
 
 echo
