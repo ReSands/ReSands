@@ -1,0 +1,204 @@
+"""Converts the meshes of an unpacked PS2 world pack to glTF, for checking our reading of the format.
+
+Usage: python3 -I tools/jade2gltf.py <unpacked pack.bin> <out.gltf> [--uvscale N]
+  (pack from: jadetex.py unpack PRINCE.BF <key> <out>)
+
+How: the converted engine loader (tools/c2py_rt.py, game/analysis/meshport/py) parses every geometry
+record; a wrapper on CJMeshElement::ReadElement records where each element's data lies. Each
+element (grammar of ReadElement: bbox min/max, word, bone palette, LOD blobs, pass packets) is
+drawn from its first pass packet: a DMA chain of VIF UNPACKs per batch (V3-16 UV + strip flag,
+V4-8 RGBA with 0x80 = 1.0, V3-32 position, V4-32 x3 batch bbox, MSCNT). Triangle strips: a vertex
+whose flag is set starts a strip (no triangle ends there). Elements without pass packets (positions-
+only LOD blobs) are skipped and counted. Each geometry record becomes one node, laid out in a grid,
+since world placement lives elsewhere (game objects).
+"""
+import base64
+import json
+import math
+import os
+import struct
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import c2py_rt  # noqa: E402
+import jadetex  # noqa: E402
+
+READER = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'game', 'analysis', 'meshport', 'py')
+
+
+def capture_elements(pack):
+    """(record key, element offset, size) for every CJMeshElement the converted loader reads."""
+    rt0 = c2py_rt.Runtime()
+    c2py_rt.load_funcs(rt0, READER)
+    orig = rt0.funcs['ReadElement__13CJMeshElementFPPc']
+    out, cur = [], {}
+
+    def wrap(rt, this, pp):
+        a = rt.r32(pp)
+        r = orig(rt, this, pp)
+        out.append((cur['key'], cur['off'] + (a - 0x01000000), rt.r32(pp) - a))
+        return r
+
+    rt0.funcs['ReadElement__13CJMeshElementFPPc'] = wrap
+    for key, (off, size) in sorted(jadetex.records(pack).items()):
+        if size < 8 or struct.unpack_from('<I', pack, off)[0] != 1 or not 0 < struct.unpack_from('<I', pack, off + 4)[0] < 16:
+            continue
+        cur['key'], cur['off'] = key, off
+        c2py_rt.parse_record(None, pack, off, size, rt0.funcs)
+    return out
+
+
+def element_parts(d, o):
+    U = lambda p: struct.unpack_from('<I', d, p)[0]
+    q = o + 36
+    nb = U(q)
+    q += 4 + nb
+    lods = []
+    n = U(q)
+    q += 4
+    for _ in range(n):
+        v, s = U(q), U(q + 4)
+        lods.append((v, q + 8, s))
+        q += 8 + s
+    passes = []
+    n2 = U(q)
+    q += 4
+    for _ in range(n2):
+        idx, s = U(q), U(q + 4)
+        passes.append((idx, q + 8, s))
+        q += 8 + s
+    return nb, lods, passes
+
+
+EL = {0: 4, 1: 2, 2: 1, 4: 8, 5: 4, 6: 2, 8: 12, 9: 6, 0xA: 3, 0xC: 16, 0xD: 8, 0xE: 4, 0xF: 2}
+
+
+def decode_packet(d, o, size):
+    """Batches of {format: (addr, raw bytes, count)} from a DMA chain of VIF codes."""
+    U = lambda p: struct.unpack_from('<I', d, p)[0]
+    batches, cur = [], {}
+    p, end = o, o + size
+    while p + 16 <= end:
+        lo = U(p)
+        qwc, tid = lo & 0xFFFF, (lo >> 28) & 7
+        stop = p + 16 + 16 * qwc
+        v = p + 8
+        while v < min(stop, end):
+            w = U(v)
+            cmd, num, imm = (w >> 24) & 0x7F, (w >> 16) & 0xFF, w & 0xFFFF
+            if cmd >= 0x60:
+                f = cmd & 0xF
+                n = num or 256
+                nbytes = (EL[f] * n + 3) // 4 * 4
+                cur.setdefault(f, (imm & 0x3FF, d[v + 4:v + 4 + EL[f] * n], n))
+                v += 4 + nbytes
+            else:
+                if cmd == 0x17:  # MSCNT: batch complete
+                    batches.append(cur)
+                    cur = {}
+                v += 4 + {0x20: 4, 0x30: 16, 0x31: 16}.get(cmd, 0) + (16 * (imm or 65536) if cmd in (0x50, 0x51) else 0)
+        p = stop
+        if tid in (6, 7):  # ret / end
+            break
+    return batches
+
+
+def batch_mesh(b, uvscale):
+    if 8 not in b:
+        return None
+    _, raw, n = b[8]
+    pos = [struct.unpack_from('<3f', raw, 12 * i) for i in range(n)]
+    uv, flags = [(0.0, 0.0)] * n, [0] * n
+    if 9 in b:
+        _, r, m = b[9]
+        for i in range(min(n, m)):
+            s, t, f = struct.unpack_from('<3h', r, 6 * i)
+            uv[i], flags[i] = (s / uvscale, t / uvscale), f
+    col = [(1.0, 1.0, 1.0, 1.0)] * n
+    if 0xE in b:
+        _, r, m = b[0xE]
+        col = [tuple(min(r[4 * i + k] / 128.0, 1.0) for k in range(4)) for i in range(min(n, m))] + col[m:]
+    tris = []
+    for i in range(2, n):
+        if flags[i]:
+            continue
+        tris.append((i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i))
+    return pos, uv, col, tris
+
+
+def main(argv):
+    pack_path, out_path = argv[0], argv[1]
+    uvscale = float(argv[argv.index('--uvscale') + 1]) if '--uvscale' in argv else 4096.0
+    d = open(pack_path, 'rb').read()
+    elements = capture_elements(d)
+    by_record = {}
+    stats = {'elements': len(elements), 'drawn': 0, 'no_pass': 0, 'batches': 0, 'verts': 0, 'tris': 0, 'uvmax': 0}
+    for key, o, _size in elements:
+        nb, lods, passes = element_parts(d, o)
+        if not passes:
+            stats['no_pass'] += 1
+            continue
+        _idx, po, ps = passes[0]
+        for b in decode_packet(d, po, ps):
+            m = batch_mesh(b, uvscale)
+            if not m or not m[3]:
+                continue
+            stats['batches'] += 1
+            stats['verts'] += len(m[0])
+            stats['tris'] += len(m[3])
+            if 9 in b:
+                _, r, k = b[9]
+                stats['uvmax'] = max(stats['uvmax'], max(abs(x) for i in range(k) for x in struct.unpack_from('<2h', r, 6 * i)))
+            by_record.setdefault(key, []).append(m)
+        stats['drawn'] += 1
+
+    # glTF: one mesh per record (one primitive per batch), nodes in a grid.
+    buf = bytearray()
+    accessors, views, meshes, nodes = [], [], [], []
+
+    def add(data, comp, typ, count, target=None, minmax=None):
+        while len(buf) % 4:
+            buf.append(0)
+        views.append({'buffer': 0, 'byteOffset': len(buf), 'byteLength': len(data), **({'target': target} if target else {})})
+        buf.extend(data)
+        acc = {'bufferView': len(views) - 1, 'componentType': comp, 'count': count, 'type': typ}
+        if minmax:
+            acc['min'], acc['max'] = minmax
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    keys = sorted(by_record)
+    cols = max(1, int(math.ceil(math.sqrt(len(keys)))))
+    spacing = 0.0
+    for parts in by_record.values():
+        for pos, *_ in parts:
+            for axis in range(3):
+                spacing = max(spacing, max(p[axis] for p in pos) - min(p[axis] for p in pos))
+    spacing = min(spacing * 1.2 + 0.1, 50.0)
+    for n_key, key in enumerate(keys):
+        prims = []
+        for pos, uv, col, tris in by_record[key]:
+            lo = [min(p[a] for p in pos) for a in range(3)]
+            hi = [max(p[a] for p in pos) for a in range(3)]
+            a_pos = add(b''.join(struct.pack('<3f', *p) for p in pos), 5126, 'VEC3', len(pos), 34962, (lo, hi))
+            a_uv = add(b''.join(struct.pack('<2f', *t) for t in uv), 5126, 'VEC2', len(uv), 34962)
+            a_col = add(b''.join(struct.pack('<4f', *c) for c in col), 5126, 'VEC4', len(col), 34962)
+            a_idx = add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)
+            prims.append({'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}, 'indices': a_idx})
+        meshes.append({'name': f'{key:08x}', 'primitives': prims})
+        # PS2 data is Z-up (metres); glTF is Y-up: rotate -90 degrees about X.
+        nodes.append({'name': f'{key:08x}', 'mesh': len(meshes) - 1,
+                      'translation': [(n_key % cols) * spacing, 0.0, (n_key // cols) * spacing],
+                      'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
+    gltf = {'asset': {'version': '2.0', 'generator': 'PoP jade2gltf'},
+            'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}], 'nodes': nodes, 'meshes': meshes,
+            'accessors': accessors, 'bufferViews': views,
+            'buffers': [{'byteLength': len(buf), 'uri': 'data:application/octet-stream;base64,' + base64.b64encode(bytes(buf)).decode()}]}
+    json.dump(gltf, open(out_path, 'w'))
+    print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
+          f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
+          f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])
