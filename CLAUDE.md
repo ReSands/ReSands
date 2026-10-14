@@ -336,9 +336,9 @@ Nightly validation **built and proven on the PC (14 Oct)**: Mac button `tools/ov
 
 ## Renderer task order (agreed 14 Oct 2026)
 
-Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
+Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; finish A3 (materials/blend) and A7 (skinning) before B (user, 14 Oct); higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
 - A. Read everything (offline, Mac): 1 PC save-state screenshot + packs loaded (judge for A) -> 2 lighting/brightness check -> 3 materials/blend state (alpha test/blend, additive, double-sided, sky) -> 4 positions-only elements -> 5 whole levels (all packs) -> 6 coverage of all world packs -> 7 skinned mesh data.
-- B. Static world native (PC): 8 API choice + native pass in the presenter -> 9 load-time conversion in C++ (hook CJMeshElement::ReadElement) -> 10 per-frame capture (element lists, matrices, camera) -> 11 draw natively, hybrid with the GS, frame comparison.
+- B. Static world native (PC): 8 **API: Vulkan (user decision 14 Oct 2026: DLSS and ray tracing support, Windows + Linux; the emulated GS renderer is OpenGL, so plan an interop layer or port the presenter)** + native pass in the presenter -> 9 load-time conversion in C++ (hook CJMeshElement::ReadElement) -> 10 per-frame capture (element lists, matrices, camera) -> 11 draw natively, hybrid with the GS, frame comparison.
 - C. Characters: 12 GPU skinning with the game's bone matrices.
 - D. Remove the GS: 13 particles/water/sand/shadows -> 14 post-processing shaders -> 15 2D/HUD/menus/loading screen/movie display -> 16 GS emulation off.
 - E. Later: 17 resolution/widescreen/frame rate/DLSS/RTX; 18 higher-quality assets.
