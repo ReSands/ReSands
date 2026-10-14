@@ -32,6 +32,23 @@ BACKGROUND = {
 }
 
 
+def tidy(text):
+    """Fields from the model's answer, also when the JSON is cut off; repetition loops trimmed."""
+    try:
+        note = json.loads(text)
+    except Exception:  # noqa: BLE001
+        note = {k: m.group(1) for k in ('title', 'what_it_means', 'next_step')
+                for m in [re.search(r'"%s"\s*:\s*"([^"]*)' % k, text)] if m}
+    for k, v in list(note.items()):
+        words = str(v).split()
+        for i in range(3, len(words)):  # cut at the first word repeated three times in a row
+            if words[i].strip(',.') == words[i - 1].strip(',.') == words[i - 2].strip(',.'):
+                words = words[:i - 2] + ['[...]']
+                break
+        note[k] = ' '.join(words)
+    return note
+
+
 def findings(results, changes):
     """The issues, decided by script, each with its evidence."""
     out = []
@@ -68,7 +85,7 @@ def findings(results, changes):
 
 def ask(url, model, prompt):
     body = json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'think': False, 'format': 'json',
-                       'options': {'temperature': 0.2, 'repeat_penalty': 1.1, 'num_ctx': 16384, 'num_predict': 2500}}).encode()
+                       'options': {'temperature': 0.2, 'repeat_penalty': 1.3, 'num_ctx': 4096, 'num_predict': 300}}).encode()
     req = urllib.request.Request(url + '/api/generate', body, {'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=1800) as resp:
         return json.loads(resp.read())['response']
@@ -101,7 +118,7 @@ def main(argv):
     for n, (check, finding, evidence) in enumerate(items, 1):
         note = {}
         try:
-            note = json.loads(ask(url, model, PROMPT.format(check=check, finding=finding, evidence=evidence, background=BACKGROUND.get(check, ''))))
+            note = tidy(ask(url, model, PROMPT.format(check=check, finding=finding, evidence=evidence, background=BACKGROUND.get(check, ''))))
         except Exception as e:  # noqa: BLE001
             note = {'what_it_means': f'(model unavailable: {type(e).__name__})', 'next_step': ''}
         lines += [f"## {n}. {finding} ({check})", '', f"- Evidence: `{evidence}`",
