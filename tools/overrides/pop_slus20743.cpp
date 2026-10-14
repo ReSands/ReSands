@@ -1152,12 +1152,20 @@ namespace
     // matrix index, the element's bbox (element +0x00, 8 floats, as in the pack's element record)
     // and its world matrix (matrix pool base at scratchpad 0x70000260, 0x40 bytes per index).
     PS2Runtime::RecompiledFunction g_origMeshDisplayCap = nullptr, g_origMeshRefDisplayCap = nullptr;
+    // Both Display functions end by calling themselves on the next element of the object
+    // (CJMeshElement +0x4C, CJMeshElementRef +0x1C) with the same matrix index and pass; the
+    // recompiled self tail call is a jump inside the function, so the hook walks the chain itself.
+    // Each line ends with the pass packet address (CJMeshElement +0x20 + 4 * pass; pass 4 draws
+    // packet 1), the target of the frame's DMA CALL for that element.
     void captureDraw(uint8_t *rdram, R5900Context *ctx, char kind)
     {
+        const uint32_t index = getRegU32(ctx, 5) & 0xFFFFu, pass = getRegU32(ctx, 6) & 0xFFu;
+        uint32_t element = getRegU32(ctx, 4);
+        for (unsigned link = 0; element != 0 && link < 4096u; ++link)
         {
-            const uint32_t element = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFFu, pass = getRegU32(ctx, 6) & 0xFFu;
             const uint32_t matrix = guestU32(rdram, 0x70000260u) + index * 0x40u;
-            std::fprintf(g_frameCap, "%c %x %u %u", kind, element, pass, index);
+            const uint32_t packet = kind == 'E' ? guestU32(rdram, element + 0x20u + 4u * (pass == 4u ? 1u : pass)) : 0u;
+            std::fprintf(g_frameCap, "%c %x %u %u %u %x", kind, element, pass, index, link, packet);
             for (uint32_t i = 0; i < 8; ++i)
             {
                 const uint32_t bits = guestU32(rdram, element + 4u * i);
@@ -1173,6 +1181,7 @@ namespace
                 std::fprintf(g_frameCap, " %.9g", f);
             }
             std::fprintf(g_frameCap, "\n");
+            element = guestU32(rdram, element + (kind == 'E' ? 0x4Cu : 0x1Cu));
         }
     }
     void meshDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
