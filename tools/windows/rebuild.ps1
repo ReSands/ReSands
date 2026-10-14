@@ -9,9 +9,11 @@
 #        add -Release with -Play for a Release build (/GL + LTCG, long link) in build-win-play-rel
 #        -RecompSrc / -Out select another PS2Recomp checkout and output folder, e.g.
 #        -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc (the pop-sotc setup)
+#        -SkipGhidra: full rebuild without the Ghidra stages (reuses the last export; for
+#        recompiler-only changes, saves ~10 min)
 #        -Pnach 'Widescreen 16:9;...' compiles in those sections of the PCSX2 patch file
 #        game\patches\SLUS-20743_7F6EB3D0.pnach (code patches only; see tools/pnach.py)
-param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release,
+param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release, [switch]$SkipGhidra,
       [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp', [string]$Vu1 = '',
       [string]$Pnach = '')
 $ErrorActionPreference = 'Stop'
@@ -123,6 +125,7 @@ if (-not $Fast) {
     & $Git -C $RT checkout -q --detach (& $Git -C $RecompSrc rev-parse HEAD)
     "runtime worktree at $(& $Git -C $RT rev-parse --short HEAD)"
 
+    if ($SkipGhidra) { Stage 'Ghidra stages skipped (reusing config.toml / functions.csv)' } else {
     Stage 'Ghidra cleanup'
     Run-Ghidra "$Root\game\ghidra\headless_cleanup.log" @('-scriptPath', "$Root\tools\ghidra", '-postScript', 'PoPMarkDataRanges.java')
     Show-ScriptLines "$Root\game\ghidra\headless_cleanup.log" 'PoPMarkDataRanges.java'
@@ -159,6 +162,7 @@ if (-not $Fast) {
     Run-Ghidra "$Root\game\ghidra\headless_export.log" @('-readOnly', '-scriptPath', "$RecompSrc\ps2xRecomp\tools\ghidra",
         '-postScript', 'ExportPS2Functions.java', "$R\config.toml", "$R\functions.csv")
     Show-ScriptLines "$Root\game\ghidra\headless_export.log" 'ExportPS2Functions.java' | Select-String 'Exported \d'
+    }
     # The Ghidra project was imported on the Mac, so the export writes the Mac path to the ELF.
     $elf = ("$Root\game\ps2\disc\SLUS_207.43" -replace '\\', '/')
     (Get-Content "$R\config.toml") -replace '^input = .*$', "input = `"$elf`"" | Set-Content -Encoding ascii "$R\config.toml"
