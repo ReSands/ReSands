@@ -164,23 +164,30 @@ def element_parts(d, o):
 EL = {0: 4, 1: 2, 2: 1, 4: 8, 5: 4, 6: 2, 8: 12, 9: 6, 0xA: 3, 0xC: 16, 0xD: 8, 0xE: 4, 0xF: 2}
 
 
-def decode_packet(d, o, size):
-    """Batches of {format: (addr, raw bytes, count)} from a DMA chain of VIF codes."""
+def decode_packet(d, o, size, blobs=None):
+    """Batches of {format: (addr, raw bytes, count)} from a DMA chain of VIF codes. DMA tags: cnt (1)
+    carries its data inline; ref/refe (3/0) point at data elsewhere, and in Jade's packets the tag's
+    address is the index of one of the element's blocks (LOD blobs by their 'bits' value, or a game
+    object's per-instance blocks), patched to a pointer at load: `blobs` maps index -> (offset, size).
+    The tag's upper 8 bytes hold two VIF codes; an UNPACK there takes its data from the reference."""
     U = lambda p: struct.unpack_from('<I', d, p)[0]
     batches, cur = [], {}
-    p, end = o, o + size
-    while p + 16 <= end:
-        lo = U(p)
-        qwc, tid = lo & 0xFFFF, (lo >> 28) & 7
-        stop = p + 16 + 16 * qwc
-        v = p + 8
-        while v < min(stop, end):
+
+    def vif(v, stop, ext=None):
+        # walk VIF codes in [v, stop); ext = (offset, size) of referenced data for a trailing UNPACK
+        nonlocal cur
+        while v < stop:
             w = U(v)
             cmd, num, imm = (w >> 24) & 0x7F, (w >> 16) & 0xFF, w & 0xFFFF
             if cmd >= 0x60:
                 f = cmd & 0xF
                 n = num or 256
                 nbytes = (EL[f] * n + 3) // 4 * 4
+                if ext is not None and v + 4 >= stop:
+                    src = ext[0]
+                    cur.setdefault(f, (imm & 0x3FF, d[src:src + EL[f] * n], n))
+                    v = stop
+                    continue
                 cur.setdefault(f, (imm & 0x3FF, d[v + 4:v + 4 + EL[f] * n], n))
                 v += 4 + nbytes
             else:
@@ -188,9 +195,27 @@ def decode_packet(d, o, size):
                     batches.append(cur)
                     cur = {}
                 v += 4 + {0x20: 4, 0x30: 16, 0x31: 16}.get(cmd, 0) + (16 * (imm or 65536) if cmd in (0x50, 0x51) else 0)
+        return v
+
+    p, end = o, o + size
+    while p + 16 <= end:
+        lo, addr = U(p), U(p + 4)
+        qwc, tid = lo & 0xFFFF, (lo >> 28) & 7
+        if tid in (0, 3) and blobs is not None:  # refe / ref: data from block `addr`
+            ext = blobs.get(addr >> 24 if addr & 0xFFFFFF == 0 else addr)  # block index in the top byte
+            if ext is not None:
+                vif(p + 8, p + 16, (ext[0], qwc * 16))
+            p += 16
+            if tid == 0:
+                break
+            continue
+        stop = p + 16 + 16 * qwc
+        vif(p + 8, min(stop, end))
         p = stop
         if tid in (6, 7):  # ret / end
             break
+    if cur:  # reference-style packets end without MSCNT (the program start comes from the caller)
+        batches.append(cur)
     return batches
 
 
@@ -267,7 +292,7 @@ def main(argv):
                 stats['no_pass'] += 1
             continue
         _idx, po, ps = passes[0]
-        for b in decode_packet(d, po, ps):
+        for b in decode_packet(d, po, ps, {bits: (lo, ls) for bits, lo, ls in lods}):
             m = batch_mesh(b, uvscale)
             if not m or not m[3]:
                 continue
