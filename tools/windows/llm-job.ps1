@@ -13,8 +13,10 @@
 #           (inputs copied to game\analysis\naming*). Results: game\analysis\naming\results.
 #           -V2: second configuration (thinking, context from PoPNamingContext.java) -> results_v2;
 #           -Calib: only the 60 calibration functions.
+#   -ThenNaming (with -Job nightly): afterwards run the naming job in the v2 configuration until the
+#           queue ends or the job is stopped (resumes the next night).
 param([ValidateSet('mmi', 'naming', 'nightly')][string]$Job = 'mmi', [switch]$Spec, [int]$Tries = 3,
-      [string]$Model = 'gemma4:26b', [string[]]$Only = @(), [switch]$V2, [switch]$Calib)
+      [string]$Model = 'gemma4:26b', [string[]]$Only = @(), [switch]$V2, [switch]$Calib, [switch]$ThenNaming)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
@@ -55,6 +57,10 @@ $ErrorActionPreference = 'Continue'
 $code = $LASTEXITCODE
 if ($Job -eq 'nightly') {
     & $Python -I "$Root\tools\nightly\report.py" --model $Model 2>&1 | ForEach-Object { "$_" }
+    if ($ThenNaming) {
+        "$(Get-Date -Format 'yyyy-MM-dd HH:mm') nightly done; starting naming (v2)"
+        & $Python -I "$Root\tools\llm_port\name_functions.py" --model $Model --v2 2>&1 | ForEach-Object { "$_" }
+    }
 }
 "$(Get-Date -Format 'yyyy-MM-dd HH:mm') job '$Job' finished (exit $code)"
 exit $code
