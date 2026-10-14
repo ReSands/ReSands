@@ -189,6 +189,11 @@ def decode_packet(d, o, size, blobs=None):
                         batches.append(cur)
                         cur = {}
                     cur[f] = (imm & 0x3FF, d[src:src + EL[f] * n], n)
+                    # the referenced block may continue with more VIF codes after this UNPACK's
+                    # data (e.g. UVs, then UNPACK V4-8 + baked vertex colours)
+                    rest = src + nbytes
+                    if rest + 4 <= ext[0] + ext[1]:
+                        vif(rest, ext[0] + ext[1])
                     v = stop
                     continue
                 cur.setdefault(f, (imm & 0x3FF, d[v + 4:v + 4 + EL[f] * n], n))
