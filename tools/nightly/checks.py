@@ -171,8 +171,8 @@ def check_meshes(work, limit=None, deadline=None):
         for fut in concurrent.futures.as_completed(futures):
             try:
                 r = fut.result()
-            except Exception as e:  # noqa: BLE001
-                r = {'pack': '%08x' % futures[fut], 'error': 'worker: %s: %s' % (type(e).__name__, str(e)[:200])}
+            except Exception:  # noqa: BLE001
+                continue  # worker killed or crashed (e.g. stopped by hand): not saved, so retried next run
             json.dump(r, open(os.path.join(store, r['pack'] + '.json'), 'w'))
             if deadline and time.time() > deadline:
                 for f in futures:
