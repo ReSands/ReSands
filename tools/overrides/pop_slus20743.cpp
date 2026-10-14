@@ -1624,6 +1624,17 @@ namespace
         }
         if (g_sifDmas.size() > 256u)
             g_sifDmas.erase(g_sifDmas.begin(), g_sifDmas.begin() + 128);
+        // POP_SNDLOG=1: DARE's stream refills (fn_ulSendToIOP 0x16B9C0 -> 0x16BA80 range callers),
+        // logged in order with the 0x8100 status polls, to see how the game refills the IOP buffer.
+        static int refills = 0;
+        const uint32_t ra = getRegU32(ctx, 31);
+        if (g_sndLog && ra >= 0x0016B9C0u && ra < 0x0016BA80u && refills < 400)
+        {
+            ++refills;
+            const auto ms = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            std::fprintf(stderr, "[pop:stream] t=%lld us SetDma EE %x -> IOP %x size %#x\n", static_cast<long long>(ms % 100000000),
+                         guestU32(rdram, list), guestU32(rdram, list + 4u), guestU32(rdram, list + 8u));
+        }
         g_origSifSetDma(rdram, ctx, runtime);
     }
 
@@ -1738,9 +1749,17 @@ namespace
             std::fprintf(stderr, "[pop:snd] %s(%x, %x, %x, %x) from %x\n", Addr == 0x00112980u ? "sceSdRemoteInit" : "sceSdRemote",
                          getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6), getRegU32(ctx, 7), ra);
         }
+        const uint32_t fn = getRegU32(ctx, 5);
         callOriginal(Addr, rdram, ctx, runtime);
         if (log && ctx->pc == ra)
             std::fprintf(stderr, "[pop:snd]   -> %x\n", getRegU32(ctx, 2));
+        static int polls = 0;
+        if (Addr == 0x00112AC0u && fn == 0x8100u && ctx->pc == ra && polls < 400)
+        {
+            ++polls;
+            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            std::fprintf(stderr, "[pop:stream] t=%lld us status -> %x\n", static_cast<long long>(us % 100000000), getRegU32(ctx, 2));
+        }
     }
 
     // POP_SNDLOG=1 also logs SIF RPC binds (client -> server id) and counts calls per
