@@ -1,6 +1,6 @@
 #!/bin/zsh
-# Double-click before bed: sends the latest commits to the gaming PC and starts the overnight
-# local-model job THERE (tools/windows/llm-mmifix.ps1 via start-job.ps1), then exits. The Mac
+# Double-click before bed: sends the latest commits to the gaming PC, asks which local-model job
+# to run, and starts it THERE (tools/windows/llm-job.ps1 via start-job.ps1), then exits. The Mac
 # can be switched off afterwards; the PC must stay on. Morning: tools/overnight-pc.command --status
 # (or ask Claude). The PC must not be running the game or a build when you press this.
 cd "${0:A:h}/.."
@@ -24,8 +24,20 @@ if [[ "$pc_head" != "$(git rev-parse HEAD)" ]]; then
     ps "git -C '$REMOTE' pull --ff-only game\\jobs\\pop.bundle main 2>&1 | Select-Object -Last 1"
 fi
 
-echo "== Starting the overnight job on the PC"
-ps "Set-Location '$REMOTE'; & tools\\windows\\start-job.ps1 -Script tools\\windows\\llm-mmifix.ps1 -Arguments '-Tries 3'"
+echo
+echo "Which job should the PC run overnight?"
+echo "  1) MMI instruction fixes, with documented behaviour (judged by the instruction test)"
+echo "  2) MMI instruction fixes, from the instruction name only"
+echo "  3) Function naming suggestions"
+read -k1 "choice?Choice [1-3]: "; echo
+case $choice in
+    1) args='-Job mmi -Spec -Tries 5' ;;
+    2) args='-Job mmi -Tries 5' ;;
+    3) args='-Job naming' ;;
+    *) echo "No job started."; read -k1; exit 1 ;;
+esac
+echo "== Starting the overnight job on the PC ($args)"
+ps "Set-Location '$REMOTE'; & tools\\windows\\start-job.ps1 -Script tools\\windows\\llm-job.ps1 -Arguments '$args'"
 echo
 echo "Started. You can switch this Mac off now; the PC must stay on."
 echo "(Press any key to close.)"

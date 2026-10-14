@@ -33,6 +33,29 @@ TARGETS = {
     'PMADDH': (True, 0), 'PMSUBH': (True, 0), 'PHMADH': (True, 0), 'PHMSBH': (True, 0),
 }
 
+# --spec: documented behaviour per instruction (as a public instruction reference states it), so the
+# model translates a specification into code instead of recalling the instruction from memory.
+SPECS = {
+    'PABSW': 'Parallel Absolute Word. For each of the 4 words i: rd.w[i] = |rt.w[i]| as signed 32-bit; the most negative value 0x80000000 gives 0x7FFFFFFF. rs is not used.',
+    'PABSH': 'Parallel Absolute Halfword. For each of the 8 halfwords i: rd.h[i] = |rt.h[i]| as signed 16-bit; 0x8000 gives 0x7FFF. rs is not used.',
+    'PADDUH': 'Parallel Add with Unsigned Saturation Halfword. For each of the 8 halfwords i, treating both as unsigned 16-bit: rd.h[i] = min(rs.h[i] + rt.h[i], 0xFFFF).',
+    'PSUBUH': 'Parallel Subtract with Unsigned Saturation Halfword. For each of the 8 halfwords i, unsigned: rd.h[i] = rs.h[i] - rt.h[i] if rs.h[i] > rt.h[i], else 0.',
+    'PMTHI': 'Parallel Move To HI. HI (all 128 bits) = rs. rd is not used.',
+    'PMTLO': 'Parallel Move To LO. LO (all 128 bits) = rs. rd is not used.',
+    'PMTHL_LW': 'Parallel Move To HI/LO, Lower Word format (sa = 0). LO.w[0] = rs.w[0], HI.w[0] = rs.w[1], LO.w[2] = rs.w[2], HI.w[2] = rs.w[3]; LO.w[1], LO.w[3], HI.w[1], HI.w[3] keep their values.',
+    'PMULTUW': 'Parallel Multiply Unsigned Word. For k = 0 and 1, with i = 2k: p = (uint64) rs.w[i] * rt.w[i] (unsigned 32x32 -> 64). rd doubleword k = p (rd.w[i] = low 32 bits, rd.w[i+1] = high 32 bits). LO.w[i] = low 32 bits of p and LO.w[i+1] = its sign extension (0xFFFFFFFF if bit 31 of the low part is set, else 0); HI.w[i] = high 32 bits of p and HI.w[i+1] = its sign extension.',
+    'PMADDW': 'Parallel Multiply-Add Word (signed). For k = 0 and 1, with i = 2k: acc = 64-bit value with high word HI.w[i] and low word LO.w[i]; r = acc + (int64)(int32)rs.w[i] * (int32)rt.w[i]. rd doubleword k = r. LO.w[i] = low 32 bits of r, LO.w[i+1] = sign extension of that word; HI.w[i] = high 32 bits of r, HI.w[i+1] = sign extension of that word.',
+    'PMSUBW': 'Parallel Multiply-Subtract Word (signed). As PMADDW but r = acc - (int64)(int32)rs.w[i] * (int32)rt.w[i]: for k = 0 and 1, i = 2k, acc = (HI.w[i] << 32) | LO.w[i]; rd doubleword k = r; LO.w[i] = low 32 bits of r, LO.w[i+1] = its sign extension; HI.w[i] = high 32 bits, HI.w[i+1] = its sign extension.',
+    'PMADDUW': 'Parallel Multiply-Add Unsigned Word. For k = 0 and 1, with i = 2k: acc = (uint64)HI.w[i] << 32 | LO.w[i]; r = acc + (uint64)rs.w[i] * rt.w[i] (unsigned). rd doubleword k = r. LO.w[i] = low 32 bits of r, LO.w[i+1] = sign extension of that word; HI.w[i] = high 32 bits of r, HI.w[i+1] = sign extension of that word.',
+    'PDIVW': 'Parallel Divide Word (signed). For k = 0 and 1, with i = 2k: q = (int32)rs.w[i] / (int32)rt.w[i], r = (int32)rs.w[i] % (int32)rt.w[i] (C semantics). LO.w[i] = q, LO.w[i+1] = sign extension of q; HI.w[i] = r, HI.w[i+1] = sign extension of r. rd is not used.',
+    'PDIVUW': 'Parallel Divide Unsigned Word. For k = 0 and 1, with i = 2k: q = rs.w[i] / rt.w[i], r = rs.w[i] % rt.w[i] (unsigned). LO.w[i] = q, LO.w[i+1] = sign extension of q (as a 32-bit value); HI.w[i] = r, HI.w[i+1] = sign extension of r. rd is not used.',
+    'PDIVBW': 'Parallel Divide Broadcast Word. d = (int16)rt.h[0] (signed). For each of the 4 words i: LO.w[i] = (int32)rs.w[i] / d, HI.w[i] = (int32)rs.w[i] % d (C semantics, signed). rd is not used.',
+    'PMADDH': 'Parallel Multiply-Add Halfword. p[i] = (int32)(int16)rs.h[i] * (int16)rt.h[i] for i = 0..7. Then LO.w[0] += p[0], LO.w[1] += p[1], HI.w[0] += p[2], HI.w[1] += p[3], LO.w[2] += p[4], LO.w[3] += p[5], HI.w[2] += p[6], HI.w[3] += p[7] (32-bit wrapping). rd = {LO.w[0], HI.w[0], LO.w[2], HI.w[2]} after the update (rd.w[0] = LO.w[0], rd.w[1] = HI.w[0], rd.w[2] = LO.w[2], rd.w[3] = HI.w[2]).',
+    'PMSUBH': 'Parallel Multiply-Subtract Halfword. p[i] = (int32)(int16)rs.h[i] * (int16)rt.h[i] for i = 0..7. Then LO.w[0] -= p[0], LO.w[1] -= p[1], HI.w[0] -= p[2], HI.w[1] -= p[3], LO.w[2] -= p[4], LO.w[3] -= p[5], HI.w[2] -= p[6], HI.w[3] -= p[7] (32-bit wrapping). rd = {LO.w[0], HI.w[0], LO.w[2], HI.w[2]} after the update.',
+    'PHMADH': 'Parallel Horizontal Multiply-Add Halfword. p[i] = (int32)(int16)rs.h[i] * (int16)rt.h[i] for i = 0..7. LO.w[0] = p[1] + p[0], HI.w[0] = p[3] + p[2], LO.w[2] = p[5] + p[4], HI.w[2] = p[7] + p[6] (32-bit wrapping); the other HI/LO words are undefined (leave them). rd = {LO.w[0], HI.w[0], LO.w[2], HI.w[2]}.',
+    'PHMSBH': 'Parallel Horizontal Multiply-Subtract Halfword. p[i] = (int32)(int16)rs.h[i] * (int16)rt.h[i] for i = 0..7. LO.w[0] = p[1] - p[0], HI.w[0] = p[3] - p[2], LO.w[2] = p[5] - p[4], HI.w[2] = p[7] - p[6] (32-bit wrapping); the other HI/LO words are undefined (leave them). rd = {LO.w[0], HI.w[0], LO.w[2], HI.w[2]}.',
+}
+
 HELPERS = r'''
 // Register helpers for model-written instruction implementations (r[0] reads as zero, writes ignored).
 static inline uint32_t W(const R5900Context *c, int r, int i) { if (!r) return 0; uint32_t v[4]; std::memcpy(v, &c->r[r], 16); return v[i]; }
@@ -43,15 +66,21 @@ static inline uint32_t LOw(const R5900Context *c, int i) { const uint64_t d = i 
 static inline uint32_t HIw(const R5900Context *c, int i) { const uint64_t d = i < 2 ? c->hi : c->hi1; return (uint32_t)(d >> (32 * (i & 1))); }
 static inline void setLOw(R5900Context *c, int i, uint32_t x) { uint64_t &d = i < 2 ? c->lo : c->lo1; const int s = 32 * (i & 1); d = (d & ~(0xFFFFFFFFull << s)) | ((uint64_t)x << s); }
 static inline void setHIw(R5900Context *c, int i, uint32_t x) { uint64_t &d = i < 2 ? c->hi : c->hi1; const int s = 32 * (i & 1); d = (d & ~(0xFFFFFFFFull << s)) | ((uint64_t)x << s); }
+// Common alternative spellings models use.
+#define getW W
+#define getH H
+#define getLOw LOw
+#define getHIw HIw
 '''
 
 PROMPT = """Implement the PlayStation 2 Emotion Engine (R5900) MMI instruction {insn} exactly as the hardware does, as a C++ function.
-
+{spec}
 Register model:
 - General-purpose registers are 128 bits. Word i (32-bit, i = 0..3, 0 = least significant) of register r: W(ctx, r, i) / setW(ctx, r, i, value) (uint32_t). Halfword i (16-bit, i = 0..7): H(ctx, r, i) / setH(ctx, r, i, value) (int16_t).
 - HI and LO are 128 bits too. Word i (0..3) of LO: LOw(ctx, i) / setLOw(ctx, i, value); of HI: HIw(ctx, i) / setHIw(ctx, i, value) (uint32_t).
 - rd, rs, rt are register numbers from the instruction encoding (rd is 0 when the instruction has no destination register); sa is the instruction's sa field.
 - Standard C++ only (<cstdint> types available). Read all inputs before writing outputs (rd may equal rs or rt).
+- No comments or explanations: code only.
 {feedback}
 Reply with only the complete function, in a ```cpp block:
 ```cpp
@@ -71,9 +100,21 @@ def ask(url, model, prompt):
 
 
 def extract(text):
-    m = re.search(r'```(?:cpp|c\+\+|c)?\s*\n(.*?)```', text, re.S)
-    code = m.group(1) if m else text
-    return code if 'mmi_impl' in code else None
+    # Keep from the function's signature on; drop Markdown fence lines (answers cut off by the
+    # token limit lack the closing fence).
+    start = text.find('static void mmi_impl')
+    if start < 0:
+        return None
+    code = '\n'.join(l for l in text[start:].splitlines() if not l.strip().startswith('```'))
+    depth, opened = 0, False
+    for i, ch in enumerate(code):
+        if ch == '{':
+            depth, opened = depth + 1, True
+        elif ch == '}':
+            depth -= 1
+            if opened and depth == 0:
+                return code[:i + 1]
+    return code
 
 
 def judge(name, code, recomp, workdir):
@@ -113,9 +154,13 @@ def main(argv):
     model = argv[argv.index('--model') + 1] if '--model' in argv else 'gemma4:26b'
     tries = int(argv[argv.index('--tries') + 1]) if '--tries' in argv else 3
     only = argv[argv.index('--only') + 1].split(',') if '--only' in argv else None
+    use_spec = '--spec' in argv
     flags = {'--url', '--model', '--tries', '--only'}
     positional = [a for i, a in enumerate(argv) if not a.startswith('--') and (i == 0 or argv[i - 1] not in flags)]
     recomp = positional[0] if positional else (r'C:\tools\PS2Recomp-sotc' if os.name == 'nt' else os.path.expanduser('~/tools/PS2Recomp-sotc'))
+    global OUTDIR
+    if use_spec:
+        OUTDIR = OUTDIR + '_spec'
     os.makedirs(OUTDIR, exist_ok=True)
     workdir = os.path.join(tempfile.gettempdir(), 'pop-mmifix')
     summary = []
@@ -128,7 +173,8 @@ def main(argv):
             continue
         feedback, history, status, t0 = '', [], 'failed', time.time()
         for attempt in range(1, tries + 1):
-            prompt = PROMPT.format(insn=name.replace('_', '.'), feedback=('\n' + feedback + '\n') if feedback else '')
+            spec = ('\nSpecification: ' + SPECS[name] + '\n') if use_spec else ''
+            prompt = PROMPT.format(insn=name.replace('_', '.'), spec=spec, feedback=('\n' + feedback + '\n') if feedback else '')
             try:
                 text = ask(url, model, prompt)
             except Exception as e:  # noqa: BLE001
