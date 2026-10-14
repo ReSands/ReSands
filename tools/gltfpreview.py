@@ -149,7 +149,8 @@ def main(argv):
                         k = 4 * ((int(v * th) % th) * tw + (int(u * tw) % tw))
                         if tp[k + 3] < 128:
                             continue
-                        px_col = bytes(max(0, min(255, int(tp[k + j] * shade * cc[j]))) for j in range(3))
+                        # baked vertex lighting only (no preview shading), as the PS2's MODULATE: tex * colour
+                        px_col = bytes(max(0, min(255, int(tp[k + j] * cc[j]))) for j in range(3))
                     else:
                         px_col = bytes(colour)
                     zbuf[i] = z
