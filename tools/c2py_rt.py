@@ -53,6 +53,8 @@ class Runtime:
         return bytes(out)
 
     def write(self, a, data):
+        if len(self.pages) > (512 << 20) // PAGE:  # 512 MB of simulated memory: runaway
+            raise RunawaySize('simulated memory above 512 MB')
         a &= 0xFFFFFFFF
         data = memoryview(bytes(data))
         i = 0
@@ -103,6 +105,7 @@ class Runtime:
 
     # --- allocation
     def malloc(self, n):
+        _check(n, 'allocation')
         a = (self.heap + 15) & ~15
         self.heap = a + max(int(n), 1)
         return a
@@ -138,12 +141,26 @@ class Runtime:
         return self.r32(cell), res
 
 
+MAX_BLOCK = 64 << 20  # a larger memcpy/memset/allocation means a misread size, not real data
+
+
+class RunawaySize(Exception):
+    pass
+
+
+def _check(n, what):
+    if not 0 <= int(n) <= MAX_BLOCK:
+        raise RunawaySize(f'{what} of {int(n):#x} bytes (misread size?)')
+
+
 def _memcpy(rt, dst, src, n):
+    _check(n, 'memcpy')
     rt.write(dst, rt.read(src, n))
     return dst
 
 
 def _memset(rt, dst, v, n):
+    _check(n, 'memset')
     rt.write(dst, bytes([v & 0xFF]) * n)
     return dst
 
