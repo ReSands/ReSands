@@ -1205,6 +1205,21 @@ namespace
         }
         if (g_capturing)
         {
+            // the frame's matrix pool (base pointer at scratchpad 0x70000260, 0x40 bytes each): world
+            // matrices of everything drawn, whatever list drew it; first 2048 entries
+            const uint32_t pool = guestU32(rdram, 0x70000260u);
+            for (uint32_t i = 0; pool && i < 2048u; ++i)
+            {
+                std::fprintf(g_frameCap, "M %u", i);
+                for (uint32_t k = 0; k < 16; ++k)
+                {
+                    const uint32_t bits = guestU32(rdram, pool + i * 0x40u + 4u * k);
+                    float f;
+                    std::memcpy(&f, &bits, 4);
+                    std::fprintf(g_frameCap, " %.9g", f);
+                }
+                std::fprintf(g_frameCap, "\n");
+            }
             g_capturing = false;
             std::fclose(g_frameCap);
             g_frameCap = nullptr;
