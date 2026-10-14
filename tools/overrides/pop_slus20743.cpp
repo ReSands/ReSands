@@ -1126,6 +1126,9 @@ namespace
     // levels from the game's own main-view camera (tools/gltfpreview.py --clip).
     PS2Runtime::RecompiledFunction g_origDisplay3DCam = nullptr;
     FILE *g_camLog = nullptr;
+    FILE *g_frameCap = nullptr;
+    unsigned g_frameCapAt = 0;
+    bool g_capturing = false;
     void logCamera(uint8_t *rdram, const char *when, unsigned call)
     {
         const uint32_t gs = guestU32(rdram, 0x00675148u);
@@ -1147,9 +1150,6 @@ namespace
     // CJMeshElement::Display(element, matrix index, pass) (0x4C8A80): element address, pass,
     // matrix index, the element's bbox (element +0x00, 8 floats, as in the pack's element record)
     // and its world matrix (matrix pool base at scratchpad 0x70000260, 0x40 bytes per index).
-    FILE *g_frameCap = nullptr;
-    unsigned g_frameCapAt = 0;
-    bool g_capturing = false;
     PS2Runtime::RecompiledFunction g_origMeshDisplayCap = nullptr;
     void meshDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
