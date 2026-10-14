@@ -1190,14 +1190,19 @@ namespace
     }
     // POP_FRAMECAP also logs calls to candidate static-mesh draw functions (CJSmElement /
     // CJSmRefElement Display, not matched by name in retail): "F <addr> a0 a1 a2 a3 ra".
-    constexpr uint32_t kCapProbe[] = {0x004BCD40u, 0x004BCEC0u, 0x004BD040u, 0x004BD380u};
+    constexpr uint32_t kCapProbe[] = {0x004BDB80u, 0x004BD800u, 0x004BD040u, 0x004BD380u}; // CJIdxMesh::Display, AddIndexedElementToPool, candidates
     PS2Runtime::RecompiledFunction g_capProbeOrig[std::size(kCapProbe)] = {};
     template <size_t I>
     void capProbe(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (g_capturing)
-            std::fprintf(g_frameCap, "F %x %x %x %x %x %x\n", kCapProbe[I], getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6),
+        {
+            std::fprintf(g_frameCap, "F %x %x %x %x %x %x", kCapProbe[I], getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6),
                          getRegU32(ctx, 7), getRegU32(ctx, 31));
+            for (uint32_t k = 0; k < 24u; ++k)  // first 0x60 bytes of the object in a0
+                std::fprintf(g_frameCap, " %08x", guestU32(rdram, getRegU32(ctx, 4) + 4u * k));
+            std::fprintf(g_frameCap, "\n");
+        }
         g_capProbeOrig[I](rdram, ctx, runtime);
     }
     template <size_t... I>
