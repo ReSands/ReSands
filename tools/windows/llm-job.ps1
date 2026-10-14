@@ -10,7 +10,7 @@
 #   naming  tools/llm_port/name_functions.py: name/summary suggestions for anonymous functions
 #           (inputs copied to game\analysis\naming*). Results: game\analysis\naming\results.
 param([ValidateSet('mmi', 'naming')][string]$Job = 'mmi', [switch]$Spec, [int]$Tries = 3,
-      [string]$Model = 'gemma4:26b', [string]$Only = '')
+      [string]$Model = 'gemma4:26b', [string[]]$Only = @())
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
@@ -36,7 +36,7 @@ $Python = (Get-Command python -ErrorAction Stop).Source
 if ($Job -eq 'mmi') {
     $argList = @('-I', "$Root\tools\llm_port\fix_mmi.py", '--model', $Model, '--tries', "$Tries")
     if ($Spec) { $argList += '--spec' }
-    if ($Only) { $argList += @('--only', $Only) }
+    if ($Only) { $argList += @('--only', ($Only -join ',')) }
 } else {
     $argList = @('-I', "$Root\tools\llm_port\name_functions.py", '--model', $Model)
 }
