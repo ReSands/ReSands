@@ -17,17 +17,19 @@ accesses become shifts and masks; goto/labels/switch are flagged.
 import re
 import sys
 
-TYPES = r'(?:undefined8|undefined4|undefined2|undefined1|undefined|uint|int|ulong|long|byte|char|short|ushort|bool|float|code|double|longlong)'
-WIDTH = {'undefined8': 64, 'ulong': 64, 'long': 64, 'longlong': 64, 'double': 64, 'undefined4': 32, 'uint': 32,
+TYPES = r'(?:undefined7|undefined6|undefined5|undefined3|undefined8|undefined4|undefined2|undefined1|undefined|uint|int|ulong|long|byte|char|short|ushort|bool|float|code|double|longlong)'
+WIDTH = {'undefined7': 64, 'undefined6': 64, 'undefined5': 64, 'undefined3': 32, 'undefined8': 64, 'ulong': 64, 'long': 64, 'longlong': 64, 'double': 64, 'undefined4': 32, 'uint': 32,
          'int': 32, 'float': 32, 'code': 32, 'undefined': 32, 'undefined2': 16, 'short': 16, 'ushort': 16,
          'undefined1': 8, 'byte': 8, 'char': 8, 'bool': 8}
 
 todo = []
 PTR = {}     # pointer variable -> element size in bytes
 ARRAYS = {}  # stack array -> byte size
+PTR2 = {}  # double pointer -> element size of the pointer it points to
+SCALARS = {}  # scalar local -> declared type
 
 
-def strip_noise(src):
+def strip_noise(src, buf='puStack_f0'):
     """Record declarations (types), then drop them and the decompiler's byte-swap blocks."""
     lines, out, i = src.split('\n'), [], 0
     while i < len(lines):
@@ -37,8 +39,12 @@ def strip_noise(src):
             base, stars, name, n = d.groups()
             if n:
                 ARRAYS[name] = int(n, 0) * max(WIDTH.get(base, 32) // 8, 1)
-            elif stars:
+            if not n:
+                SCALARS[name] = base + (' ' + stars if stars else '')
+            if stars and not n:
                 PTR[name] = 4 if len(stars) > 1 else max(WIDTH.get(base, 32) // 8, 1)
+                if len(stars) > 1:
+                    PTR2[name] = max(WIDTH.get(base, 32) // 8, 1) if len(stars) == 2 else 4
             i += 1
             continue
         if re.match(r'\s*if \(_LOA_gb_SwapperActive != 0\) \{\s*$', l):
@@ -54,20 +60,33 @@ def strip_noise(src):
         if l.strip():
             out.append(l)
         i += 1
-    return '\n'.join(out)
+    text = '\n'.join(out)
+    for name, base in SCALARS.items():
+        if name == buf:  # the buffer pointer is handled as P (and &P via rt.call_p)
+            continue
+        if re.search(r'&\s*' + name + r'\b', text):
+            cell = name + '__a'
+            text = re.sub(r'&\s*' + name + r'\b', cell, text)
+            ctype = 'undefined4' if base.endswith('*') else base  # a pointer cell holds 32 bits
+            text = re.sub(r'(?<![\w.])' + name + r'\b(?!__a)', f'(*({ctype} *){cell})', text)
+            PTR.pop(name, None)
+            ARRAYS[cell] = 8
+    return text
 
 
 def ptr_arith(e):
     """Scale + on typed pointers; NAME[k] and *NAME loads use the element width."""
+    for name, size2 in PTR2.items():  # *pp + n steps by the pointee's element size
+        e = re.sub(r'\*\s*' + name + r'\s*([+-])\s*(\w+)(?!\s*\*)', lambda m: f'*{name}__D {m.group(1)} {size2} * ({m.group(2)})', e)
     for name, size in PTR.items():
         w = size * 8
         if size != 1:  # scale + first, then indexing (which scales itself)
-            e = re.sub(r'(?<![\w.])' + name + r'\s*([+-])\s*(\w+)(?!\s*\*)', lambda m: f'{name} {m.group(1)} {size} * ({m.group(2)})', e)
+            e = re.sub(r'(?<![\w.*])(?<!\*\s)' + name + r'\s*([+-])\s*(\w+)(?!\s*\*)', lambda m: f'{name} {m.group(1)} {size} * ({m.group(2)})', e)
         e = re.sub(r'\b' + name + r'\[([^\]]+)\]', lambda m: f'rt.r{w}({name} + {size} * ({m.group(1)}))', e)
         e = re.sub(r'(?:(?<=^)|(?<=[(,=!<>&|+\-~ ]))\*\s*' + name + r'\b', f'rt.r{w}({name})', e)
     for name in ARRAYS:
         e = re.sub(r'&\s*' + name + r'\b', name, e)
-    return e
+    return e.replace('__D', '')
 
 
 def split_balanced(s, start):
@@ -83,7 +102,7 @@ def split_balanced(s, start):
     return len(s)
 
 
-CASTFN = {'long': 's64', 'longlong': 's64', 'ulong': 'u64', 'undefined8': 'u64', 'int': 's32', 'uint': 'u32',
+CASTFN = {'undefined7': 'u64', 'undefined6': 'u64', 'undefined5': 'u64', 'undefined3': 'u32', 'long': 's64', 'longlong': 's64', 'ulong': 'u64', 'undefined8': 'u64', 'int': 's32', 'uint': 'u32',
           'undefined4': 'u32', 'undefined': 'u32', 'short': 's16', 'ushort': 'u16', 'undefined2': 'u16',
           'char': 's8', 'byte': 'u8', 'undefined1': 'u8', 'bool': 'u8', 'float': 'f32', 'code': 'u32', 'double': 'f64'}
 
@@ -91,6 +110,8 @@ CASTFN = {'long': 's64', 'longlong': 's64', 'ulong': 'u64', 'undefined8': 'u64',
 def operand_end(e, j):
     while j < len(e) and e[j] == ' ':
         j += 1
+    if j < len(e) and e[j] == '*':  # a dereference as the operand: *x, **x
+        return operand_end(e, j + 1)
     if j < len(e) and e[j] == '(':
         return split_balanced(e, j)
     m = re.match(r'-?[\w.]+(\s*\()?', e[j:])
@@ -175,18 +196,38 @@ def expr(e, buf):
     # function calls (not rt.*) go through the runtime table
     e = re.sub(r'(?<![\w.])([A-Za-z_]\w*)\s*\(', lambda m: m.group(0) if m.group(1) in ('rt', 'not', 'and', 'or', 'P') else f'rt.call(\'{m.group(1)}\', ', e)
     e = e.replace(", )", ")")
+    pos = 0
     while True:
-        m = re.search(r'\((\w+) = ([^,()]+), ', e)
+        m = re.compile(r'\((\w+) = ').search(e, pos)
         if not m:
             break
         k = split_balanced(e, m.start())
-        e = e[:m.start()] + f'(({m.group(1)} := {m.group(2)}), ' + e[m.end():k - 1] + ')[-1]' + e[k:]
+        parts = top_commas(e[m.start() + 1:k - 1])
+        if len(parts) < 2:
+            pos = m.end()
+            continue
+        first = re.match(r'\s*(\w+) = (.*)$', parts[0], re.S)
+        e = e[:m.start()] + f'(({first.group(1)} := {first.group(2).strip()}), ' + ','.join(parts[1:]) + ')[-1]' + e[k:]
+        pos = m.start() + 1
     return re.sub(r'\s+', ' ', e).strip()
 
 
 def statement(s, buf):
     """One C statement (no trailing ';') -> Python line(s)."""
     s = s.strip()
+    lhs, rhs = split_assign(s)
+    while lhs is not None and lhs.startswith('(') and split_balanced(lhs, 0) == len(lhs):
+        lhs = lhs[1:-1].strip()
+        s = lhs + ' = ' + rhs
+    if lhs is not None and re.match(r'\*\s*\(\s*(' + TYPES + r')\s*\*+\s*\)\s*\w+__a$', lhs):
+        m = re.match(r'\*\s*\(\s*(' + TYPES + r')\s*\*+\s*\)\s*(\w+__a)$', lhs)
+        return [f'rt.w{WIDTH.get(m.group(1), 32)}({m.group(2)}, {expr(rhs, buf)})']
+    if lhs is not None and lhs.startswith('*') and not re.match(r'\*\s*\(\s*(' + TYPES + r')\s*\*+\s*\)', lhs):
+        target = lhs[1:].strip()  # *<pointer expression> = v
+        width = PTR.get(target, 4) * 8 if re.match(r'\w+$', target) else 32
+        if target.startswith('*'):  # **(T **)(a): store through the pointer loaded from a
+            return [f'rt.w32({expr(target, buf)}, {expr(rhs, buf)})']
+        return [f'rt.w{width}({expr(target, buf)}, {expr(rhs, buf)})']
     m = re.match(r'\*\s*\(\s*(' + TYPES + r')\s*\*+\s*\)\s*', s)
     if m:  # typed store *(T *)(addr) = value
         j = m.end()
@@ -243,6 +284,16 @@ def top_commas(cond):
     return parts + [cur]
 
 
+def split_assign(s):
+    """Split at the top-level plain '=' (not ==, <=, >=, !=, +=, ...); (None, None) if absent."""
+    depth = 0
+    for i, ch in enumerate(s):
+        depth += (ch == '(') - (ch == ')')
+        if ch == '=' and depth == 0 and s[i + 1:i + 2] != '=' and s[i - 1:i] not in ('=', '<', '>', '!', '+', '-', '|', '&', '^', '*', '/'):
+            return s[:i].strip(), s[i + 1:].strip()
+    return None, None
+
+
 def logical_lines(lines):
     """Join C lines until parentheses balance (multi-line conditions)."""
     acc, depth, body = '', 0, False
@@ -288,6 +339,8 @@ def convert(src, buf):
                     d = re.match(r'\s*(' + TYPES + r')\s*(\*+)\s*(\w+)', p_)
                     if d:
                         PTR[d.group(3)] = 4 if len(d.group(2)) > 1 else max(WIDTH.get(d.group(1), 32) // 8, 1)
+                        if len(d.group(2)) == 2:
+                            PTR2[d.group(3)] = max(WIDTH.get(d.group(1), 32) // 8, 1)
                 fname = re.sub(r'\W', '_', pending_func)
                 py.append(f'def {fname}(rt, ' + ', '.join(params) + '):')
                 continue
@@ -412,7 +465,7 @@ def add_free_names(code):
 
 def main(argv):
     buf = argv[argv.index('--buffer') + 1] if '--buffer' in argv else 'puStack_f0'
-    out = convert(strip_noise(open(argv[0]).read()), buf)
+    out = convert(strip_noise(open(argv[0]).read(), buf), buf)
     open(argv[1], 'w').write(out)
     print(f'{argv[1]}: {out.count(chr(10))} lines, {len(todo)} TODO items')
     for t in todo[:40]:
