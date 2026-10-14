@@ -1120,6 +1120,42 @@ namespace
         }
     }
 
+    // POP_CAMLOG=<file>: the camera matrices of the graphics system object (pointer at 0x675148,
+    // gp+0x758; +0x200 world->screen, +0x240 world->clip, +0x300 projection) before and after
+    // CJadeDrawManager::Display3DElements (0x4BC000), every 15th call, to render our converted
+    // levels from the game's own main-view camera (tools/gltfpreview.py --clip).
+    PS2Runtime::RecompiledFunction g_origDisplay3DCam = nullptr;
+    FILE *g_camLog = nullptr;
+    void logCamera(uint8_t *rdram, const char *when, unsigned call)
+    {
+        const uint32_t gs = guestU32(rdram, 0x00675148u);
+        if (!gs)
+            return;
+        std::fprintf(g_camLog, "%u %s", call, when);
+        for (const uint32_t off : {0x200u, 0x240u, 0x300u})
+            for (uint32_t i = 0; i < 16; ++i)
+            {
+                const uint32_t bits = guestU32(rdram, gs + off + 4u * i);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                std::fprintf(g_camLog, " %.9g", f);
+            }
+        std::fprintf(g_camLog, "\n");
+    }
+    void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static unsigned calls = 0;
+        const bool log = (calls++ % 15u) == 0u;
+        if (log)
+            logCamera(rdram, "before", calls);
+        g_origDisplay3DCam(rdram, ctx, runtime);
+        if (log)
+        {
+            logCamera(rdram, "after", calls);
+            std::fflush(g_camLog);
+        }
+    }
+
     // BIG_ul_SearchKeyToPos(key) 0x488940: every bigfile lookup by key; world packs trigger
     // loading the PC pack with the same key (high-res textures).
     PS2Runtime::RecompiledFunction g_origBigSearch = nullptr;
@@ -2083,6 +2119,12 @@ namespace
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
         pop_drawprobe::install(runtime);
+        if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
+        {
+            g_origDisplay3DCam = runtime.lookupFunction(0x004BC000u);
+            if (g_origDisplay3DCam)
+                runtime.replaceFunction(0x004BC000u, display3DCam);
+        }
         pop_hdtex::runSelfTest();
         runtime.replaceFunction(0x00118918u, newlibRand);
         runtime.replaceFunction(0x004A4D00u, vu1IdleWait);
