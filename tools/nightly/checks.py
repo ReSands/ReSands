@@ -143,7 +143,7 @@ def converter_fingerprint():
     import hashlib
     h = hashlib.sha1()
     for p in [os.path.join(ROOT, 'tools', f) for f in ('jade2gltf.py', 'c2py_rt.py', 'jadetex.py')] + \
-             sorted(os.path.join(ROOT, 'game', 'analysis', 'meshport', 'py', f) for f in os.listdir(os.path.join(ROOT, 'game', 'analysis', 'meshport', 'py'))):
+             sorted(os.path.join(ROOT, 'game', 'analysis', 'meshport', 'py', f) for f in os.listdir(os.path.join(ROOT, 'game', 'analysis', 'meshport', 'py')) if f.endswith('.py')):
         h.update(open(p, 'rb').read())
     return h.hexdigest()[:12]
 
