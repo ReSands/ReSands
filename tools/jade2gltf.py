@@ -126,6 +126,34 @@ def batch_mesh(b, uvscale):
     return pos, uv, col, tris
 
 
+def game_objects(d, recs, geometry_keys):
+    """(name, 16 floats, geometry key) for each .gao record that references a converted geometry.
+    Layout: magic '.gao', name length at +0x10, name at +0x14, 10 bytes, 4x4 float matrix (3x3
+    rotation + translation in metres, row vectors), then keys; the first key naming a converted
+    geometry is the visual."""
+    out = []
+    for key, (o, s) in recs.items():
+        if s < 0x80 or d[o:o + 4] != b'.gao':
+            continue
+        nl = struct.unpack_from('<I', d, o + 0x10)[0]
+        if not 0 < nl < 128:
+            continue
+        name = d[o + 0x14:o + 0x14 + nl].split(b'\0')[0].decode('latin1')
+        m0 = o + 0x14 + nl + 10
+        m = list(struct.unpack_from('<16f', d, m0))
+        if not all(math.isfinite(x) for x in m[:15]):
+            continue
+        geo = None
+        for i in range(m0 + 64, min(o + s - 3, m0 + 64 + 0x80), 2):
+            k = struct.unpack_from('<I', d, i)[0]
+            if k in geometry_keys:
+                geo = k
+                break
+        if geo is not None:
+            out.append((name, m, geo))
+    return out
+
+
 def main(argv):
     pack_path, out_path = argv[0], argv[1]
     uvscale = float(argv[argv.index('--uvscale') + 1]) if '--uvscale' in argv else 4096.0
@@ -168,6 +196,7 @@ def main(argv):
         return len(accessors) - 1
 
     keys = sorted(by_record)
+    place = '--place' in argv
     cols = max(1, int(math.ceil(math.sqrt(len(keys)))))
     spacing = 0.0
     for parts in by_record.values():
@@ -186,15 +215,31 @@ def main(argv):
             a_idx = add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)
             prims.append({'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}, 'indices': a_idx})
         meshes.append({'name': f'{key:08x}', 'primitives': prims})
-        # PS2 data is Z-up (metres); glTF is Y-up: rotate -90 degrees about X.
-        nodes.append({'name': f'{key:08x}', 'mesh': len(meshes) - 1,
-                      'translation': [(n_key % cols) * spacing, 0.0, (n_key // cols) * spacing],
-                      'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
+        if not place:
+            # PS2 data is Z-up (metres); glTF is Y-up: rotate -90 degrees about X.
+            nodes.append({'name': f'{key:08x}', 'mesh': len(meshes) - 1,
+                          'translation': [(n_key % cols) * spacing, 0.0, (n_key // cols) * spacing],
+                          'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
+    roots = list(range(len(nodes)))
+    if place:
+        mesh_of = {key: i for i, key in enumerate(keys)}
+        placed = [g for g in game_objects(d, jadetex.records(d), set(keys)) if g[1][14] > -1000]
+        children = []
+        for name, m, geo in placed:
+            # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
+            mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
+            nodes.append({'name': name, 'mesh': mesh_of[geo], 'matrix': mat})
+            children.append(len(nodes) - 1)
+        nodes.append({'name': 'world (Z-up)', 'children': children, 'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
+        roots = [len(nodes) - 1]
+        stats['placed'] = len(placed)
     gltf = {'asset': {'version': '2.0', 'generator': 'PoP jade2gltf'},
-            'scene': 0, 'scenes': [{'nodes': list(range(len(nodes)))}], 'nodes': nodes, 'meshes': meshes,
+            'scene': 0, 'scenes': [{'nodes': roots}], 'nodes': nodes, 'meshes': meshes,
             'accessors': accessors, 'bufferViews': views,
             'buffers': [{'byteLength': len(buf), 'uri': 'data:application/octet-stream;base64,' + base64.b64encode(bytes(buf)).decode()}]}
     json.dump(gltf, open(out_path, 'w'))
+    if place:
+        print(f"{stats['placed']} game objects placed (objects parked below z -1000 left out)")
     print(f"{stats['elements']} elements: {stats['drawn']} drawn ({stats['batches']} batches, {stats['verts']} vertices, "
           f"{stats['tris']} triangles), {stats['no_pass']} without a pass packet; {len(keys)} records -> {out_path}; "
           f"largest raw UV {stats['uvmax']} (scale 1/{uvscale:g})")

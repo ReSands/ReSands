@@ -43,20 +43,40 @@ def main(argv):
     pitch = math.radians(float(argv[argv.index('--pitch') + 1])) if '--pitch' in argv else math.radians(30)
     g, acc = load(src)
     tris = []  # (3 world points, colour)
-    for node in g['nodes']:
-        if only and node['name'] != only:
-            continue
-        t = node.get('translation', [0, 0, 0]) if not only else [0, 0, 0]
-        for prim in g['meshes'][node['mesh']]['primitives']:
-            pos = acc(prim['attributes']['POSITION'])
-            col = acc(prim['attributes']['COLOR_0'])
-            idx = acc(prim['indices'])
-            # data is Z-up; show Z up on screen
-            P = [(p[0] + t[0], p[1] - t[2], p[2] + t[1]) for p in pos]
-            for k in range(0, len(idx), 3):
-                a, b, c = idx[k], idx[k + 1], idx[k + 2]
-                cc = tuple((col[a][j] + col[b][j] + col[c][j]) / 3 for j in range(3))
-                tris.append((P[a], P[b], P[c], cc))
+
+    def mul(a, b):  # column-major 4x4
+        return [sum(a[k * 4 + r] * b[c * 4 + k] for k in range(4)) for c in range(4) for r in range(4)]
+
+    def local(node):
+        if 'matrix' in node:
+            return node['matrix']
+        x, y, z, w = node.get('rotation', [0, 0, 0, 1])
+        t = node.get('translation', [0, 0, 0])
+        return [1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w), 0,
+                2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w), 0,
+                2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y), 0,
+                t[0], t[1], t[2], 1]
+
+    def visit(i, parent):
+        node = g['nodes'][i]
+        m = mul(parent, local(node))
+        if 'mesh' in node and (not only or node.get('name') == only):
+            for prim in g['meshes'][node['mesh']]['primitives']:
+                pos = acc(prim['attributes']['POSITION'])
+                col = acc(prim['attributes']['COLOR_0'])
+                idx = acc(prim['indices'])
+                P = []
+                for p in pos:
+                    w = [sum(m[c * 4 + r] * (list(p) + [1])[c] for c in range(4)) for r in range(3)]
+                    P.append((w[0], -w[2], w[1]))  # glTF Y-up -> Z-up for display
+                for k in range(0, len(idx), 3):
+                    a, b, c = idx[k], idx[k + 1], idx[k + 2]
+                    cc = tuple((col[a][j] + col[b][j] + col[c][j]) / 3 for j in range(3))
+                    tris.append((P[a], P[b], P[c], cc))
+        for ch in node.get('children', []):
+            visit(ch, m)
+    for root in g['scenes'][g.get('scene', 0)]['nodes']:
+        visit(root, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
     if not tris:
         print('nothing to draw')
         return
