@@ -5,7 +5,10 @@
 // Registers: rs = 5, rt = 6, rd = 7 (as generated); HI/LO are 128 bits ({lo, lo1}, {hi, hi1}).
 #include "ps2_runtime_macros.h"
 
+#include <algorithm>
+#include <bit>
 #include <cinttypes>
+#include <iterator>
 #include <cstdio>
 #include <cstring>
 #include <random>
