@@ -1,0 +1,122 @@
+From fde6dda50f448c8a6f0668c1192434e261c2261a Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Wed, 14 Oct 2026 11:52:33 +0100
+Subject: [PATCH] SPU2 AutoDMA: read queued input from IOP RAM when played, not
+ when the DMA starts
+
+The game refills its stream just behind the play position, polling about every 33 ms while a half-buffer lasts about 27 ms, so part of a half was often written after its DMA started; the snapshot then replayed the previous lap (pops, ~8/s). PS2X_ADMA_DUMP now writes the input as played (interleaved s16 stereo).
+---
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp | 56 +++++++++++++----------
+ ps2xIOP/src/emulator/devices/iop_spu2.h   | 19 +++++++-
+ 2 files changed, 49 insertions(+), 26 deletions(-)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index e994971..004127e 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -335,42 +335,48 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::admaWrite(uint32_t core, const uint8_t *source, size_t bytes)
+     {
+-        // PS2X_ADMA_DUMP=<file>: raw AutoDMA input bytes as the DMA delivers them (first 16 MB),
+-        // to check the stream's sample layout offline.
+-        static FILE *dump = [] { const char *p = std::getenv("PS2X_ADMA_DUMP"); return p && *p ? std::fopen(p, "wb") : nullptr; }();
+-        static size_t dumped = 0;
+-        if (dump && dumped < (16u << 20))
+-        {
+-            std::fwrite(source, 1, bytes, dump);
+-            std::fflush(dump);
+-            dumped += bytes;
+-        }
+         g_spu2Stats.dmaBytes += bytes;
+-        constexpr size_t kBlockBytes = 1024u, kHalf = kBlockBytes / 2u;
++        constexpr size_t kBlockBytes = 1024u;
+         constexpr size_t kMaxQueued = 48000u; // 1 s; more means nothing is consuming it
+         auto &input = m_admaInput[core % kCores];
+-        for (size_t block = 0u; block + kBlockBytes <= bytes; block += kBlockBytes)
++        const size_t frames = (bytes / kBlockBytes) * (kBlockBytes / 4u);
++        if (frames == 0u)
++            return;
++        input.segments.push_back({source, frames, 0u});
++        input.queued += frames;
++        while (input.queued > kMaxQueued && !input.segments.empty())
+         {
+-            for (size_t i = 0u; i < kHalf; i += 2u)
+-            {
+-                const uint8_t *left = source + block + i;
+-                const uint8_t *right = left + kHalf;
+-                input.push_back({static_cast<int16_t>(left[0] | (left[1] << 8)),
+-                                 static_cast<int16_t>(right[0] | (right[1] << 8))});
+-            }
++            const auto &front = input.segments.front();
++            input.queued -= front.frames - front.pos;
++            input.segments.pop_front();
+         }
+-        while (input.size() > kMaxQueued)
+-            input.pop_front();
+     }
+ 
+     std::array<int32_t, 2> IopSpu2::popAdma(uint32_t core)
+     {
+         auto &input = m_admaInput[core];
+-        if (input.empty())
++        if (input.segments.empty())
+             return {};
+-        const auto frame = input.front();
+-        input.pop_front();
+-        return {frame[0], frame[1]};
++        auto &seg = input.segments.front();
++        const size_t block = seg.pos / 256u, i = seg.pos % 256u;
++        const uint8_t *left = seg.data + block * 1024u + i * 2u;
++        const uint8_t *right = left + 512u;
++        const int16_t l = static_cast<int16_t>(left[0] | (left[1] << 8));
++        const int16_t r = static_cast<int16_t>(right[0] | (right[1] << 8));
++        // PS2X_ADMA_DUMP=<file>: the AutoDMA input as played (interleaved s16 stereo, first 16 MB).
++        static FILE *dump = [] { const char *p = std::getenv("PS2X_ADMA_DUMP"); return p && *p ? std::fopen(p, "wb") : nullptr; }();
++        static size_t dumped = 0;
++        if (dump && dumped < (16u << 20))
++        {
++            const int16_t frame[2] = {l, r};
++            std::fwrite(frame, 2, 2, dump);
++            if ((dumped += 4u) % 4096u == 0u)
++                std::fflush(dump);
++        }
++        --input.queued;
++        if (++seg.pos >= seg.frames)
++            input.segments.pop_front();
++        return {l, r};
+     }
+ 
+     void IopSpu2::dmaRead(uint32_t core, uint8_t *destination, size_t bytes, uint64_t cycle)
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.h b/ps2xIOP/src/emulator/devices/iop_spu2.h
+index 29221e3..4203aa6 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.h
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.h
+@@ -133,6 +133,23 @@ namespace ps2x::iop::detail
+         std::array<int16_t, 1024> m_audioBuffer{};
+         size_t m_audioFrames = 0u;
+         std::function<void(std::span<const int16_t>)> m_audioSink;
+-        std::array<std::deque<std::array<int16_t, 2>>, kCores> m_admaInput{};
++        // AutoDMA input: transfers queued as ranges of IOP RAM and read sample by sample when
++        // played, as the hardware does, so data the game writes after the DMA started (it refills
++        // just behind the play position) is still heard. Layout per 1024-byte block: 256 left
++        // samples, then 256 right samples.
++        struct AdmaQueue
++        {
++            struct Segment
++            {
++                const uint8_t *data = nullptr;
++                size_t frames = 0u;
++                size_t pos = 0u;
++            };
++            std::deque<Segment> segments;
++            size_t queued = 0u;
++            void clear() noexcept { segments.clear(); queued = 0u; }
++            [[nodiscard]] size_t size() const noexcept { return queued; }
++        };
++        std::array<AdmaQueue, kCores> m_admaInput{};
+     };
+ }
+-- 
+2.54.0 (Apple Git-157)
+
