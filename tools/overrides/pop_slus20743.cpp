@@ -1129,22 +1129,59 @@ namespace
     void logCamera(uint8_t *rdram, const char *when, unsigned call)
     {
         const uint32_t gs = guestU32(rdram, 0x00675148u);
-        if (!gs)
+        FILE *out = std::strcmp(when, "capture") == 0 ? g_frameCap : g_camLog;
+        if (!gs || !out)
             return;
-        std::fprintf(g_camLog, "%u %s", call, when);
+        std::fprintf(out, "%u %s", call, when);
         for (const uint32_t off : {0x200u, 0x240u, 0x300u})
             for (uint32_t i = 0; i < 16; ++i)
             {
                 const uint32_t bits = guestU32(rdram, gs + off + 4u * i);
                 float f;
                 std::memcpy(&f, &bits, 4);
-                std::fprintf(g_camLog, " %.9g", f);
+                std::fprintf(out, " %.9g", f);
             }
-        std::fprintf(g_camLog, "\n");
+        std::fprintf(out, "\n");
+    }
+    // POP_FRAMECAP=<file>:<n>: during the n-th Display3DElements call, every
+    // CJMeshElement::Display(element, matrix index, pass) (0x4C8A80): element address, pass,
+    // matrix index, the element's bbox (element +0x00, 8 floats, as in the pack's element record)
+    // and its world matrix (matrix pool base at scratchpad 0x70000260, 0x40 bytes per index).
+    FILE *g_frameCap = nullptr;
+    unsigned g_frameCapAt = 0;
+    bool g_capturing = false;
+    PS2Runtime::RecompiledFunction g_origMeshDisplayCap = nullptr;
+    void meshDisplayCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_capturing)
+        {
+            const uint32_t element = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFFu, pass = getRegU32(ctx, 6) & 0xFFu;
+            const uint32_t matrix = guestU32(rdram, 0x70000260u) + index * 0x40u;
+            std::fprintf(g_frameCap, "E %x %u %u", element, pass, index);
+            for (uint32_t i = 0; i < 8; ++i)
+            {
+                const uint32_t bits = guestU32(rdram, element + 4u * i);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                std::fprintf(g_frameCap, " %.9g", f);
+            }
+            for (uint32_t i = 0; i < 16; ++i)
+            {
+                const uint32_t bits = guestU32(rdram, matrix + 4u * i);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                std::fprintf(g_frameCap, " %.9g", f);
+            }
+            std::fprintf(g_frameCap, "\n");
+        }
+        g_origMeshDisplayCap(rdram, ctx, runtime);
     }
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static unsigned calls = 0;
+        g_capturing = g_frameCap && calls == g_frameCapAt;
+        if (g_capturing)
+            logCamera(rdram, "capture", calls);
         const bool log = (calls++ % 15u) == 0u;
         if (log)
             logCamera(rdram, "before", calls);
@@ -1153,6 +1190,13 @@ namespace
         {
             logCamera(rdram, "after", calls);
             std::fflush(g_camLog);
+        }
+        if (g_capturing)
+        {
+            g_capturing = false;
+            std::fclose(g_frameCap);
+            g_frameCap = nullptr;
+            std::fprintf(stderr, "[pop:framecap] frame captured\n");
         }
     }
 
@@ -2119,6 +2163,16 @@ namespace
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
         pop_drawprobe::install(runtime);
+        if (const char *v = std::getenv("POP_FRAMECAP"); v && *v)
+        {
+            const std::string spec = v;
+            const auto colon = spec.rfind(':');
+            g_frameCapAt = colon != std::string::npos ? static_cast<unsigned>(std::strtoul(spec.c_str() + colon + 1, nullptr, 10)) : 300u;
+            g_frameCap = std::fopen(spec.substr(0, colon != std::string::npos && colon > 1 ? colon : spec.size()).c_str(), "w");
+            g_origMeshDisplayCap = runtime.lookupFunction(0x004C8A80u);
+            if (g_frameCap && g_origMeshDisplayCap)
+                runtime.replaceFunction(0x004C8A80u, meshDisplayCap);
+        }
         if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
         {
             g_origDisplay3DCam = runtime.lookupFunction(0x004BC000u);
