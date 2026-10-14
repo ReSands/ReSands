@@ -10,7 +10,8 @@ real names we know (hidden in their decompile): score them with --score.
 Usage: python3 -I tools/llm_port/name_functions.py [--url http://127.0.0.1:11434] [--model gemma4:26b]
        python3 -I tools/llm_port/name_functions.py --score
 """
-import json, os, sys, time, urllib.request
+import json
+import re, os, sys, time, urllib.request
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 NAMING = os.path.join(ROOT, 'game', 'analysis', 'naming')
@@ -28,7 +29,7 @@ Reply with JSON only: {"name": "...", "summary": "one sentence on what it does",
 
 def ask(url, model, prompt):
     body = json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'think': False, 'format': 'json',
-                       'options': {'temperature': 0, 'num_ctx': 8192, 'num_predict': 400}}).encode()
+                       'options': {'temperature': 0.2, 'repeat_penalty': 1.15, 'num_ctx': 8192, 'num_predict': 400}}).encode()
     req = urllib.request.Request(url + '/api/generate', body, {'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=600) as resp:
         return json.loads(resp.read())['response']
@@ -75,7 +76,9 @@ def main(argv):
         try:
             answer = json.loads(text)
         except ValueError:
-            answer = {'name': '', 'summary': '', 'confidence': 'low', 'raw': text[:500]}
+            # Truncated answer (repetition loop cut off by num_predict): keep the name if it came through.
+            m = re.match(r'\s*\{\s*"name"\s*:\s*"([A-Za-z0-9_:~]+)"', text)
+            answer = {'name': m.group(1) if m else '', 'summary': '', 'confidence': 'low', 'raw': text[:500]}
         answer['address'] = addr
         tmp = out + '.tmp'
         with open(tmp, 'w') as f:
