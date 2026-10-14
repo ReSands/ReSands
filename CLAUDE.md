@@ -323,6 +323,12 @@ Open: only 21 elements found in the Aviary pack (check other grammars: CJMeshEle
 - **Packet formats (14 Oct):** pass packets of many elements are DMA REF chains (`[ref -> block 6: UNPACK V3-16 UVs] [ref -> block 1: UNPACK V3-32 positions] [ret]`, pass 3 = block 8 lightmap UVs); the referenced block index is the **top byte** of the tag's address word (patched to pointers at load); no MSCNT, no colours. Per-object lighting: game objects carry `[flags 0xd2x] [0xFFFFFF10] [count] [count x RGBx]` (top byte 0xFD/0xFE/0xFF, not alpha); counts are per geometry point (debris 1743 vs 670 packet vertices), so a point-index map is still missing.
 - **Local model (gemma4:26b) validated 14 Oct:** naming = weak (~1/6 right meaning); MMI fixes from the name only = 1/5; **MMI fixes from a precise one-paragraph spec, judged by the instruction test = 18/18** (`tools/llm_port/fix_mmi.py --spec`; results `game/analysis/mmifix_spec/*.cpp`, not yet wired into the recompiler). Runs entirely on the PC: `tools/windows/llm-job.ps1 -Job mmi|naming [-Spec]` via start-job.ps1; Mac button `tools/overnight-pc.command` (syncs commits, asks which job, starts it, Mac can be switched off). Details: docs/llm_jobs.md.
 
+## Project direction (user, 14 Oct 2026)
+
+Target: a **gold-standard recompilation**: native game code (static recompilation) with the hardware replaced **at the engine level**, not emulated: a native renderer that understands the Jade draw manager's draw calls (not GS emulation), a native sound mixer driven by the engine's sound calls (DARE/UbiSound, not IOP/SPU2 emulation), native movie decoding behind the game's own player (not IPU emulation). Migrate part by part; emulated parts remain until replaced.
+
+Nightly validation (agreed in principle, to build): a check suite on the PC (instruction test, decoder record/replay, converter over all world packs with exact-size parsing, save-state boots with screenshot/log diffs against a baseline, frame capture vs conversion) produces failures by script; Gemma only turns them into grouped bug reports (`docs/nightly/<date>.md`), every line citing evidence. Scripts find wrong bytes; the model writes the reports.
+
 ## Renderer task order (agreed 14 Oct 2026)
 
 Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
