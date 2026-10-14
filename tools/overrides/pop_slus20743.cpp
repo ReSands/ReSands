@@ -1313,6 +1313,20 @@ namespace
                 }
                 std::fprintf(g_frameCap, "\n");
             }
+            // texture manager slots (manager at scratchpad 0x70000050, +0 slot array, 0x50 bytes per
+            // index): "T index gsaddr(+0x18) w,h(+4) bpp(+0x1C) dataptr(+0) first 32 bytes of data"
+            const uint32_t slots = guestU32(rdram, 0x70000050u);
+            for (uint32_t ix = 0; slots && ix < 1024u; ++ix)
+            {
+                const uint32_t sl = slots + ix * 0x50u, data = guestU32(rdram, sl);
+                if (!data)
+                    continue;
+                std::fprintf(g_frameCap, "T %u %x %x %x %x", ix, guestU32(rdram, sl + 0x18u) & 0x3FFFu, guestU32(rdram, sl + 4u),
+                             guestU32(rdram, sl + 0x1Cu), data);
+                for (uint32_t k = 0; k < 8u; ++k)
+                    std::fprintf(g_frameCap, " %08x", guestU32(rdram, data + 4u * k));
+                std::fprintf(g_frameCap, "\n");
+            }
             g_capturing = false;
             g_dmaCapArmed = g_dmaCap != nullptr;
             std::fclose(g_frameCap);
