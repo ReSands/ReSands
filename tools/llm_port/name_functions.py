@@ -28,7 +28,7 @@ Reply with JSON only: {"name": "...", "summary": "one sentence on what it does",
 
 def ask(url, model, prompt):
     body = json.dumps({'model': model, 'prompt': prompt, 'stream': False, 'think': False, 'format': 'json',
-                       'options': {'temperature': 0, 'num_ctx': 8192}}).encode()
+                       'options': {'temperature': 0, 'num_ctx': 8192, 'num_predict': 400}}).encode()
     req = urllib.request.Request(url + '/api/generate', body, {'Content-Type': 'application/json'})
     with urllib.request.urlopen(req, timeout=600) as resp:
         return json.loads(resp.read())['response']
