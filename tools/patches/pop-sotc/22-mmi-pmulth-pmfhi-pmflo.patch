@@ -1,0 +1,54 @@
+From fb514c7ab97bd1cf9d04c55d00815a81746de4da Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Wed, 14 Oct 2026 11:25:37 +0100
+Subject: [PATCH] MMI: PMULTH gives eight signed halfword products (rd/LO/HI as
+ on the EE), PMFHI/PMFLO move all 128 bits of HI/LO
+
+PMULTH summed the products into one value; PMFHI/PMFLO copied only the low doubleword (the upper one, written by PMULTH/PMULTW and the pipeline-1 multiplies, lives in hi1/lo1). Prince of Persia's stream mixer uses both.
+---
+ .../src/lib/mmi_translation_helpers.cpp       | 21 +++++++++----------
+ 1 file changed, 10 insertions(+), 11 deletions(-)
+
+diff --git a/ps2xRecomp/src/lib/mmi_translation_helpers.cpp b/ps2xRecomp/src/lib/mmi_translation_helpers.cpp
+index 7e82737..528102a 100644
+--- a/ps2xRecomp/src/lib/mmi_translation_helpers.cpp
++++ b/ps2xRecomp/src/lib/mmi_translation_helpers.cpp
+@@ -141,9 +141,9 @@ namespace ps2recomp
+         case MMI2_PMSUBW:
+             return translatePMSUBW(inst);
+         case MMI2_PMFHI:
+-            return fmt::format("SET_GPR_U64(ctx, {}, ctx->hi);", rd);
++            return fmt::format("SET_GPR_VEC(ctx, {}, _mm_set_epi64x((int64_t)ctx->hi1, (int64_t)ctx->hi));", rd);
+         case MMI2_PMFLO:
+-            return fmt::format("SET_GPR_U64(ctx, {}, ctx->lo);", rd);
++            return fmt::format("SET_GPR_VEC(ctx, {}, _mm_set_epi64x((int64_t)ctx->lo1, (int64_t)ctx->lo));", rd);
+         case MMI2_PINTH:
+             return fmt::format("SET_GPR_VEC(ctx, {}, PS2_PINTH(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})));", rd, rs, rt);
+         case MMI2_PMULTW:
+@@ -468,15 +468,14 @@ namespace ps2recomp
+ 
+     std::string CodeGenerator::translatePMULTH(const Instruction &inst)
+     {
+-        // Parallel multiply halfword, results sum to HI/LO and rd
+-        return fmt::format("{{ __m128i prod = _mm_madd_epi16(GPR_VEC(ctx, {}), GPR_VEC(ctx, {})); \n"
+-                           "   int32_t p0 = _mm_cvtsi128_si32(prod); \n"
+-                           "   int32_t p1 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 4)); \n"
+-                           "   int32_t p2 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 8)); \n"
+-                           "   int32_t p3 = _mm_cvtsi128_si32(_mm_srli_si128(prod, 12)); \n"
+-                           "   int64_t result = (int64_t)p0 + (int64_t)p1 + (int64_t)p2 + (int64_t)p3; \n"
+-                           "   ctx->lo = (uint32_t)result; ctx->hi = (uint32_t)(result >> 32); \n"
+-                           "   SET_GPR_U64(ctx, {}, result); }}",
++        // Eight signed 16x16->32 products p0..p7: rd = {p0, p2, p4, p6};
++        // LO = {p0, p1, p4, p5}, HI = {p2, p3, p6, p7} (lo/hi hold the low doubleword, lo1/hi1 the upper).
++        return fmt::format("{{ alignas(16) int16_t a[8], b[8]; int32_t p[8]; \n"
++                           "   _mm_store_si128((__m128i *)a, GPR_VEC(ctx, {0})); _mm_store_si128((__m128i *)b, GPR_VEC(ctx, {1})); \n"
++                           "   for (int i = 0; i < 8; ++i) p[i] = (int32_t)a[i] * (int32_t)b[i]; \n"
++                           "   auto dw = [](int32_t x, int32_t y) {{ return (uint64_t)(uint32_t)x | ((uint64_t)(uint32_t)y << 32); }}; \n"
++                           "   ctx->lo = dw(p[0], p[1]); ctx->hi = dw(p[2], p[3]); ctx->lo1 = dw(p[4], p[5]); ctx->hi1 = dw(p[6], p[7]); \n"
++                           "   if ({2} != 0) SET_GPR_VEC(ctx, {2}, _mm_setr_epi32(p[0], p[2], p[4], p[6])); }}",
+                            inst.rs, inst.rt, inst.rd);
+     }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
