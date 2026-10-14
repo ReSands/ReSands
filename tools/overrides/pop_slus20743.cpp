@@ -1188,6 +1188,24 @@ namespace
             captureDraw(rdram, ctx, 'R');
         g_origMeshRefDisplayCap(rdram, ctx, runtime);
     }
+    // POP_FRAMECAP also logs calls to candidate static-mesh draw functions (CJSmElement /
+    // CJSmRefElement Display, not matched by name in retail): "F <addr> a0 a1 a2 a3 ra".
+    constexpr uint32_t kCapProbe[] = {0x004BCD40u, 0x004BCEC0u, 0x004BD040u, 0x004BD380u};
+    PS2Runtime::RecompiledFunction g_capProbeOrig[std::size(kCapProbe)] = {};
+    template <size_t I>
+    void capProbe(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (g_capturing)
+            std::fprintf(g_frameCap, "F %x %x %x %x %x %x\n", kCapProbe[I], getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6),
+                         getRegU32(ctx, 7), getRegU32(ctx, 31));
+        g_capProbeOrig[I](rdram, ctx, runtime);
+    }
+    template <size_t... I>
+    void installCapProbes(PS2Runtime &runtime, std::index_sequence<I...>)
+    {
+        ((g_capProbeOrig[I] = runtime.lookupFunction(kCapProbe[I]),
+          g_capProbeOrig[I] ? (runtime.replaceFunction(kCapProbe[I], capProbe<I>), 0) : 0), ...);
+    }
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static unsigned calls = 0;
@@ -2202,6 +2220,7 @@ namespace
             g_origMeshRefDisplayCap = runtime.lookupFunction(0x004C7B40u);
             if (g_frameCap && g_origMeshRefDisplayCap)
                 runtime.replaceFunction(0x004C7B40u, meshRefDisplayCap);
+            installCapProbes(runtime, std::make_index_sequence<std::size(kCapProbe)>{});
             std::fprintf(stderr, "[pop:framecap] hooks: Display %s, Ref Display %s\n", g_origMeshDisplayCap ? "yes" : "no", g_origMeshRefDisplayCap ? "yes" : "no");
         }
         if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
