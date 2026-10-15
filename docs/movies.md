@@ -75,6 +75,21 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
   values; that tells exactly what the stream is, and gives the judge for stage 2 (or a conversion to
   FFmpeg's format).
 
+## IPU decode works (15 Oct)
+- ps2-web-recomp's IPU model (MIT; tables BSD-2 from Play!; read in full, unchanged) in a test
+  harness (scratch, not in git): reset, IPU_CTRL = 0, IDEC command 0x10000000, the frame bytes as
+  input (from the frame start, through the `00 00 01 B0` end code). Result: **every frame of all 11
+  movies decodes** (22,666 frames): all macroblocks (1,120 at 640x448, 880 at 640x352), no ECD, SCD
+  at the end code, all input consumed. UBISOFT frame 80 shows the logo correctly
+  (`game/analysis/movie/stage2/ubisoft_f80.png`). Default settings suffice: MPEG-2 intra, zigzag,
+  linear quantiser, DC precision 0, IVF 0.
+- So the frames are plain IDEC streams (macroblock data straight away, no flag byte); FFmpeg's `ipu`
+  decoder wants Sony's `.ipu` file layout (flag byte, a marker bit per macroblock), which is why it
+  failed. Decision for 1.0: use this IPU model (adapted) as the decoder, as already planned.
+- Frame count = index count (the last chunk is short); chunk base = header end rounded up to 64.
+- Next: stage 2 reference (`tools/llm_port/movie/` style: frame bytes + audio slices per chunk), then
+  the decoder glue behind `FullMovie` with this IPU code.
+
 ## Stage 1 kit (ready)
 `tools/llm_port/movie/`: `movie.h` (fixed API), `reference.py` (writes `game/analysis/movie/tests/`:
 first 1 MB of each movie + a 0x60-byte truncated copy that must give false), `driver.cpp`,
