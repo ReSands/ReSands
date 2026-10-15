@@ -44,6 +44,23 @@ sits inside a chunk and how frames are split (`VID_fn_vSetDecodingSource`, `VID_
 the bytes handed to the IPU), and the audio layout (`mQueueSoundData`, mono/stereo ADPCM; PS2
 SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second judge).
 
+## Chunk contents (found 15 Oct, for stage 2)
+- Frame k's IPU data is `index[k+1] - index[k]` bytes (last frame: up to the end of the chunk's
+  video part) at `index[k] - index[first frame of the chunk]` inside the chunk's video part
+  (`VideoData::mGetSubChunkSize`); chunk c holds frames c*framesPerChunk .. +framesPerChunk-1
+  (framesPerChunk = header +0x08 = 5); chunk c's data at `dataStart + chunks[c]`.
+- Sound header fields: (0x16f0, 1, 16 bits, 2 channels, 48000 Hz): **raw s16 stereo PCM**, not
+  ADPCM (0x7D20 bytes per chunk = 8,008 stereo samples = 5 frames at 29.97); track t's slice of
+  chunk c is `subChunks[c+1] - subChunks[c]` bytes.
+- chunk size = video + all tracks' slices + 0 or 32 bytes. Open: the order inside a chunk (sound
+  first or video first) and where the 32 bytes go; stage 2's reference must settle it by decoding
+  (FFmpeg IPU must accept the frames; PCM must sound right).
+
+## Stage 1 kit (ready)
+`tools/llm_port/movie/`: `movie.h` (fixed API), `reference.py` (writes `game/analysis/movie/tests/`:
+first 1 MB of each movie + a 0x60-byte truncated copy that must give false), `driver.cpp`,
+`judge.py` (validated: a correct parser passes 22/22), `port.py`. Run: `tools/qwen-stage.command m1`.
+
 ## Plan for the local model (same method as the mesh decoder: small stages, strict judge)
 Each stage: spec = the decompiled C + these notes; a Python reference (written by Claude, short)
 defines the exact output; Qwen ports it to C++ against a fixed header; the judge compares outputs

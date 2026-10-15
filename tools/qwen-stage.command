@@ -5,7 +5,7 @@
 # Results: game/analysis/meshdecode/stage<N>/ (port.log, attempts/, meshdecode.cpp = best so far).
 cd "$(dirname "$0")/.."
 STAGE=${1:-}
-if [ -z "$STAGE" ]; then read -p "Stage(s), e.g. 3 or 4,5 or 4-5 (each runs only if the previous passed): " STAGE; fi
+if [ -z "$STAGE" ]; then read -p "Stage(s): mesh 1-5 (e.g. 3, 4,5, 4-5) or m1 = movie header parser: " STAGE; fi
 case "$STAGE" in *-*) STAGES=$(seq ${STAGE%-*} ${STAGE#*-});; *) STAGES=${STAGE//,/ };; esac
 ROUNDS=${2:-15}
 PC=10.0.0.202
@@ -22,11 +22,16 @@ done
 curl -s http://127.0.0.1:8033/health; echo
 for S in $STAGES; do
   echo "=== stage $S"
-  if ! caffeinate -i python3 -I tools/llm_port/meshdecode/port.py --stage "$S" --rounds "$ROUNDS"; then
-    echo "Stage $S did not pass; stopping. Log: game/analysis/meshdecode/stage$S/port.log"
+  if [ "$S" = "m1" ]; then  # movie decoder stage 1: header parser (docs/movies.md)
+    CMD="tools/llm_port/movie/port.py --rounds $ROUNDS"; LOG=game/analysis/movie/stage1/port.log
+  else
+    CMD="tools/llm_port/meshdecode/port.py --stage $S --rounds $ROUNDS"; LOG=game/analysis/meshdecode/stage$S/port.log
+  fi
+  if ! caffeinate -i python3 -I $CMD; then
+    echo "Stage $S did not pass; stopping. Log: $LOG"
     break
   fi
-  echo "Stage $S passed. Log: game/analysis/meshdecode/stage$S/port.log"
+  echo "Stage $S passed. Log: $LOG"
 done
 echo "To stop the model on the PC: ssh $PC powershell -File C:\\dev\\PoP_Decomp\\tools\\windows\\llama-serve.ps1 -Stop"
 read -p "Press Enter to close."
