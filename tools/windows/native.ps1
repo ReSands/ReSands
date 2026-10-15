@@ -1,7 +1,9 @@
 # Builds the native renderer (tools/native: pop_native + pop_native_view) with MSVC + Ninja into
 # game\native-build, and optionally renders a scene: -Scene <gltf> -Clip <file> -Out <png> [-Nearest]
 param([string]$Scene = '', [string]$Clip = '', [string]$Out = '', [switch]$Nearest)
-$ErrorActionPreference = 'Stop'
+# 'Continue': native tools write warnings to stderr, which 'Stop' turns into errors in
+# Windows PowerShell 5; exit codes are checked instead
+$ErrorActionPreference = 'Continue'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

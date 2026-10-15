@@ -13,21 +13,15 @@ FetchContent_Declare(vulkan_headers GIT_REPOSITORY https://github.com/KhronosGro
                      GIT_TAG vulkan-sdk-1.4.341.0 GIT_SHALLOW TRUE)
 FetchContent_Declare(volk GIT_REPOSITORY https://github.com/zeux/volk.git
                      GIT_TAG vulkan-sdk-1.4.341.0 GIT_SHALLOW TRUE)
+# header-only: SOURCE_SUBDIR points at no CMakeLists, so MakeAvailable only downloads them
 FetchContent_Declare(cgltf GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
-                     GIT_TAG v1.15 GIT_SHALLOW TRUE)
+                     GIT_TAG v1.15 GIT_SHALLOW TRUE SOURCE_SUBDIR no-cmake)
 FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git
-                     GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4)
+                     GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4 SOURCE_SUBDIR no-cmake)
 FetchContent_MakeAvailable(vulkan_headers)
 set(VOLK_PULL_IN_VULKAN OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(volk)
-FetchContent_GetProperties(cgltf)
-if(NOT cgltf_POPULATED)
-  FetchContent_Populate(cgltf)
-endif()
-FetchContent_GetProperties(stb)
-if(NOT stb_POPULATED)
-  FetchContent_Populate(stb)
-endif()
+FetchContent_MakeAvailable(cgltf stb)
 target_link_libraries(volk PUBLIC Vulkan::Headers)
 
 add_library(pop_native STATIC src/native_renderer.cpp)
