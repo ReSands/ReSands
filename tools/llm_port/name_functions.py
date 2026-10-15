@@ -14,6 +14,8 @@ Usage: python3 -I tools/llm_port/name_functions.py [--url http://127.0.0.1:11434
 16k context with a check that the whole prompt was read, and per-function context from
 tools/ghidra/PoPNamingContext.java (game/analysis/naming/context/<addr>.txt: class, callers,
 callees, strings). Results go to results_v2/. --calib = only the calibration functions.
+--stop-at HH:MM: finish the current function and stop at that local time (overnight runs must not
+outlive their job: a killed job leaves this process running on the GPU).
 """
 import json
 import re, os, sys, time, urllib.request
@@ -72,6 +74,15 @@ def main(argv):
     url = argv[argv.index('--url') + 1] if '--url' in argv else 'http://127.0.0.1:11434'
     model = argv[argv.index('--model') + 1] if '--model' in argv else 'gemma4:26b'
     v2 = '--v2' in argv
+    stop_at = None
+    if '--stop-at' in argv:
+        import datetime
+        hh, mm = map(int, argv[argv.index('--stop-at') + 1].split(':'))
+        now = datetime.datetime.now()
+        stop_at = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if stop_at <= now:
+            stop_at += datetime.timedelta(days=1)
+        stop_at = stop_at.timestamp()
     results = os.path.join(NAMING, 'results_v2' if v2 else 'results')
     os.makedirs(results, exist_ok=True)
     queue = [l.split()[0] for l in open(QUEUE) if l.strip()]
@@ -86,6 +97,9 @@ def main(argv):
         src = os.path.join(NAMING, 'decomp', f'{addr}.c')
         if os.path.exists(out) or not os.path.exists(src):
             continue
+        if stop_at and time.time() >= stop_at:
+            print(f'stop time reached after {count} functions; run again to resume', flush=True)
+            return
         code = open(src).read()[:6000 if not v2 else 30000]
         prompt = PROMPT + code + '\n```\n'
         ctx = os.path.join(NAMING, 'context', f'{addr}.txt')
