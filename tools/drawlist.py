@@ -27,7 +27,7 @@ def main(argv):
     caps = captures(argv[0])
     cap = caps[int(argv[2])] if len(argv) > 2 else caps[-1]
     draws = [f for f in cap if f and f[0] in ('E', 'R')]
-    ours = Counter(int(f[5], 16) for f in draws if f[0] == 'E' and int(f[5], 16))
+    ours = Counter(int(f[5], 16) for f in draws if int(f[5], 16))  # E and R (Ref packets since 15 Oct)
     calls, kinds = Counter(), Counter()
     for pc, tag, da, data in dmacmp.chain_records(argv[1]):
         tid = (tag[0] >> 28) & 7

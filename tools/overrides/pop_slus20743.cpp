@@ -1155,8 +1155,8 @@ namespace
     // Both Display functions end by calling themselves on the next element of the object
     // (CJMeshElement +0x4C, CJMeshElementRef +0x1C) with the same matrix index and pass; the
     // recompiled self tail call is a jump inside the function, so the hook walks the chain itself.
-    // Each line ends with the pass packet address (CJMeshElement +0x20 + 4 * pass; pass 4 draws
-    // packet 1), the target of the frame's DMA CALL for that element.
+    // Each line has the pass packet address (CJMeshElement +0x20 + 4 * pass, pass 4 draws packet 1;
+    // Ref: see below), the target of the frame's DMA CALL for that element.
     void captureDraw(uint8_t *rdram, R5900Context *ctx, char kind)
     {
         const uint32_t index = getRegU32(ctx, 5) & 0xFFFFu, pass = getRegU32(ctx, 6) & 0xFFu;
@@ -1164,7 +1164,10 @@ namespace
         for (unsigned link = 0; element != 0 && link < 4096u; ++link)
         {
             const uint32_t matrix = guestU32(rdram, 0x70000260u) + index * 0x40u;
-            const uint32_t packet = kind == 'E' ? guestU32(rdram, element + 0x20u + 4u * (pass == 4u ? 1u : pass)) : 0u;
+            // CJMeshElementRef::Display sends the word at ref + 4 * pass (pass 4 -> 0, low 4 bits
+            // masked); ref + 0x20 is the shared CJMeshElement (appended as "m <addr>")
+            const uint32_t packet = kind == 'E' ? guestU32(rdram, element + 0x20u + 4u * (pass == 4u ? 1u : pass))
+                                                : guestU32(rdram, element + 4u * (pass == 4u ? 0u : pass)) & ~0xFu;
             std::fprintf(g_frameCap, "%c %x %u %u %u %x", kind, element, pass, index, link, packet);
             for (uint32_t i = 0; i < 8; ++i)
             {
@@ -1180,6 +1183,8 @@ namespace
                 std::memcpy(&f, &bits, 4);
                 std::fprintf(g_frameCap, " %.9g", f);
             }
+            if (kind == 'R')
+                std::fprintf(g_frameCap, " m %x", guestU32(rdram, element + 0x20u));
             std::fprintf(g_frameCap, "\n");
             element = guestU32(rdram, element + (kind == 'E' ? 0x4Cu : 0x1Cu));
         }
