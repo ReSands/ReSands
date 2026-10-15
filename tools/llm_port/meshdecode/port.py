@@ -2,9 +2,9 @@
 meshdecode.h, judged by judge.py (identical output to the Python reference on every element of the
 test packs). Each round the model gets the task, its previous file and the judge's report, and
 returns a complete meshdecode.cpp. Attempts and reports are kept in <outdir>/attempts/; the best
-file so far is <outdir>/meshdecode.cpp. Resumable (continues from the last attempt).
+file so far is <outdir>/stage<N>/meshdecode.cpp. Stage 1 is only element_parts (see STAGES). Resumable (continues from the last attempt).
 
-Usage: python3 -I tools/llm_port/meshdecode/port.py [--url http://127.0.0.1:8033] [--rounds 30]
+Usage: python3 -I tools/llm_port/meshdecode/port.py [--stage N] [--url http://127.0.0.1:8033] [--rounds 30]
                                                     [--tests game/analysis/meshdecode/tests]
                                                     [--out game/analysis/meshdecode]
 Needs llama-server (OpenAI-compatible API) reachable at --url, e.g. through
@@ -24,15 +24,40 @@ sys.path.insert(0, HERE)
 import judge  # noqa: E402
 
 FUNCS = ['element_parts', 'EL', 'decode_packet', 'variant3_batches', 'skinned_batches', 'batch_mesh']
+# staged: start tiny, add one function per stage once the previous one passes. Per stage: the Python
+# functions the model ports, and the output sections the judge compares ('J' element lines always).
+STAGES = {
+    1: (['element_parts'], {'parts'}),
+    2: (['element_parts', 'EL', 'variant3_batches'], {'parts', 'v3'}),
+    3: (['element_parts', 'EL', 'decode_packet'], {'parts', 'pkt'}),
+    4: (['element_parts', 'EL', 'decode_packet', 'batch_mesh'], {'parts', 'pkt', 'mesh'}),
+    5: (FUNCS, None),  # everything
+}
+CPP_NAMES = {'element_parts': 'elementParts', 'decode_packet': 'decodePacket', 'variant3_batches': 'variant3Batches',
+             'skinned_batches': 'skinnedBatches', 'batch_mesh': 'batchMesh'}
+STUBS = {  # appended for the functions a stage does not ask for (they "fail", the judge ignores them)
+    'elementParts': 'bool elementParts(const uint8_t *, size_t, uint32_t, ElementParts &) { return false; }',
+    'decodePacket': 'bool decodePacket(const uint8_t *, size_t, uint32_t, uint32_t, const std::map<uint32_t, std::pair<uint32_t, uint32_t>> *, std::vector<Batch> &) { return false; }',
+    'variant3Batches': 'bool variant3Batches(const uint8_t *, size_t, uint32_t, uint32_t, std::vector<Variant3Batch> &) { return false; }',
+    'skinnedBatches': 'bool skinnedBatches(const uint8_t *, size_t, uint32_t, uint32_t, std::vector<SkinnedBatch> &) { return false; }',
+    'batchMesh': 'bool batchMesh(const Batch &, double, Mesh &) { return false; }',
+}
 
 
-def reference_source():
+def stubs_for(funcs):
+    wanted = {CPP_NAMES[f] for f in funcs if f in CPP_NAMES}
+    rest = [STUBS[n] for n in STUBS if n not in wanted]
+    return ('\n\n// stubs added by port.py for functions outside this stage\nnamespace pop_mesh\n{\n' + '\n'.join(rest) + '\n}\n') if rest else ''
+
+
+
+def reference_source(funcs=FUNCS):
     src = open(os.path.join(ROOT, 'tools', 'jade2gltf.py')).read()
     tree = ast.parse(src)
     parts = []
     for node in tree.body:
         name = getattr(node, 'name', None) or (node.targets[0].id if isinstance(node, ast.Assign) else None)
-        if name in FUNCS:
+        if name in funcs:
             parts.append(ast.get_source_segment(src, node))
     return 'import struct\n\n' + '\n\n\n'.join(parts)
 
@@ -66,6 +91,8 @@ must produce exactly the same results as the Python reference on about 1,800 rea
   Default colours (1.0, 1.0, 1.0, 1.0) and the `col[m:]` tail must behave exactly like the Python
   list expression.
 - Write the complete file in ONE ```cpp code block. No other files, no main().
+- Implement ONLY these functions of the header: {wanted}. Do not write the others (they are
+  provided separately).
 """
 
 
@@ -109,11 +136,15 @@ def main(argv):
     url, rounds = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '30'))
     tests = opt('--tests', os.path.join(ROOT, 'game', 'analysis', 'meshdecode', 'tests'))
     out = opt('--out', os.path.join(ROOT, 'game', 'analysis', 'meshdecode'))
+    say = lambda s: (print(s, flush=True), log.write(time.strftime('%H:%M:%S ') + s + '\n'), log.flush())
+    stage = int(opt('--stage', '1'))
+    funcs, sections = STAGES[stage]
+    wanted = ', '.join(CPP_NAMES[f] for f in funcs if f in CPP_NAMES)
+    task = TASK.format(header=open(os.path.join(HERE, 'meshdecode.h')).read(), python=reference_source(funcs), wanted=wanted)
+    out = os.path.join(out, 'stage%d' % stage)
     att = os.path.join(out, 'attempts')
     os.makedirs(att, exist_ok=True)
     log = open(os.path.join(out, 'port.log'), 'a')
-    say = lambda s: (print(s, flush=True), log.write(time.strftime('%H:%M:%S ') + s + '\n'), log.flush())
-    task = TASK.format(header=open(os.path.join(HERE, 'meshdecode.h')).read(), python=reference_source())
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     prev_code, prev_report, best = None, None, (-1, None)
     if done:
@@ -138,7 +169,9 @@ def main(argv):
             continue
         path = os.path.join(att, name + '.cpp')
         open(path, 'w').write(code)
-        res = judge.judge(path, tests)
+        full = os.path.join(att, name + '.full.cpp')  # what the judge compiles: the answer + stubs
+        open(full, 'w').write(code + stubs_for(funcs))
+        res = judge.judge(full, tests, sections)
         rep = report_text(res)
         json.dump(res, open(os.path.join(att, name + '.json'), 'w'), indent=1)
         open(os.path.join(att, name + '.report.txt'), 'w').write(rep)

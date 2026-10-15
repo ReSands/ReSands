@@ -40,7 +40,9 @@ def blocks(lines):
     return out
 
 
-def judge(candidate, tests):
+def judge(candidate, tests, sections=None):
+    """sections: output line kinds to compare ('parts', 'v3', 'pkt', 'mesh', 'skin'); None = all."""
+    keep = (lambda l: True) if sections is None else (lambda l: l.split(' ', 1)[0] in sections)
     work = tempfile.mkdtemp(prefix='meshjudge')
     exe = os.path.join(work, 'driver')
     cmd = [CXX, '-std=c++17', '-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all',
@@ -60,7 +62,8 @@ def judge(candidate, tests):
         if r.returncode != 0:
             return {'ok': False, 'stage': 'crash', 'pack': os.path.basename(base),
                     'detail': trunc(r.stderr[-4000:], 4000), 'last_output': trunc(got[-1] if got else '', 300)}
-        eb, gb = blocks(exp), blocks(got)
+        eb = {k: [l for l in v if keep(l)] for k, v in blocks(exp).items()}
+        gb = {k: [l for l in v if keep(l)] for k, v in blocks(got).items()}
         for key in eb:
             total += 1
             e_lines, g_lines = eb[key], gb.get(key, ['<element missing from output>'])
