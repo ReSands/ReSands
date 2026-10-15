@@ -34,10 +34,12 @@ def png_bytes(w, h, rgba):
             + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
 
 
-def capture_elements(pack):
+def capture_elements(pack, errors=None):
     """(record key, element offset, size, material index) for every CJMeshElement the converted
     loader reads. The material index is field +4 of the geometry's 0x1C-byte element entry (table
-    at object +0x28, count +0x24), whose +0x18 heads the chain of mesh elements (+0x4C = next)."""
+    at object +0x28, count +0x24), whose +0x18 heads the chain of mesh elements (+0x4C = next).
+    A geometry record the loader cannot read is skipped (appended to `errors` as (key, message),
+    or reported on stderr), so one bad record does not lose the rest of the pack."""
     rt0 = c2py_rt.Runtime()
     c2py_rt.load_funcs(rt0, READER)
     orig = rt0.funcs['ReadElement__13CJMeshElementFPPc']
@@ -60,7 +62,15 @@ def capture_elements(pack):
         rt.write(0x01000000, pack[off:off + size])
         cell = rt.alloca(8)
         rt.w32(cell, 0x01000000 + 8)
-        obj = create(rt, 0, cell, 0, struct.unpack_from('<I', pack, off + 4)[0])
+        try:
+            obj = create(rt, 0, cell, 0, struct.unpack_from('<I', pack, off + 4)[0])
+        except Exception as e:  # noqa: BLE001 - e.g. c2py_rt.RunawaySize on a misread size
+            msg = f'{type(e).__name__}: {str(e)[:160]}'
+            if errors is not None:
+                errors.append((key, msg))
+            else:
+                print(f'geometry record {key:08x} skipped: {msg}', file=sys.stderr)
+            continue
         material = {}
         if obj:
             table, count = rt.r32(obj + 0x28), rt.r32(obj + 0x24)

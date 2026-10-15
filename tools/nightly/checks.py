@@ -113,11 +113,14 @@ def mesh_pack(key):
     res['geometry_bad'] = bad[:20]
     res['geometry_bad_count'] = len(bad)
     # element decoding
+    cap_errors = []
     try:
-        els = jade2gltf.capture_elements(pack)
+        els = jade2gltf.capture_elements(pack, cap_errors)
     except Exception as e:  # noqa: BLE001
         res['error'] = 'capture: %s: %s' % (type(e).__name__, str(e)[:200])
         return res
+    res['capture_skipped'] = [{'record': '%08x' % k, 'exception': m} for k, m in cap_errors[:20]]
+    res['capture_skipped_count'] = len(cap_errors)
     decoded = empty = instanced = other = 0
     empty_examples = []
     for key2, o, s, mat, entry, chain in els:
@@ -200,7 +203,7 @@ def check_meshes(work, limit=None, deadline=None):
     out.update({'ok': True, 'packs': len(results), 'pack_errors': [r for r in results if 'error' in r][:20],
                 'geometry': tot('geometry'), 'geometry_bad': tot('geometry_bad_count'),
                 'elements': tot('elements'), 'decoded': tot('decoded'), 'decoded_empty': tot('decoded_empty'),
-                'instanced': tot('instanced'), 'no_data': tot('no_data'),
+                'instanced': tot('instanced'), 'no_data': tot('no_data'), 'capture_skipped': tot('capture_skipped_count'),
                 'worst_packs': sorted(({'pack': r['pack'], 'geometry_bad': r.get('geometry_bad_count', 0), 'decoded_empty': r.get('decoded_empty', 0),
                                         'examples': (r.get('geometry_bad') or [])[:3] + (r.get('empty_examples') or [])[:3]}
                                        for r in results if r.get('geometry_bad_count') or r.get('decoded_empty')),
