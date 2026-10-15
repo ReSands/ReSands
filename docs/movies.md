@@ -56,6 +56,25 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
   first or video first) and where the 32 bytes go; stage 2's reference must settle it by decoding
   (FFmpeg IPU must accept the frames; PCM must sound right).
 
+## Frames and the IPU (15 Oct, stage 2 research)
+- Chunk data base = the header end rounded up to 64 bytes (UBISOFT: 0x4A8 -> 0x4C0, i.e. +0x18):
+  frame k = `[base + chunks[c] + index[k] - index[c*fpc], ... + index[k+1] - index[c*fpc])`, video first
+  in the chunk, each frame ending with zero padding to 16 bytes and the code `00 00 01 B0`; the sound
+  follows the chunk's video (raw s16 stereo PCM, 48 kHz).
+- The player (`VID_fn_vSetDecodingContext`, `VID_fn_vDecodeMovie`): IPU SETTH (0x9...), IPU_CTRL from
+  the movie's decoding settings (`VID_fn_vSetCTRLValue`: DCPR, AS, IVF, QST, MP1 = FFmpeg's IPU flag
+  bits), then **IDEC** (command 1) with QSC/DTD/SGN/DTE/OFM from the movie object; source DMA of the
+  frame rounded to 16 bytes.
+- Frames start with bytes like 0x4B, 0x47, 0x45, 0x43 (0x40 always set).
+- **FFmpeg's IPU decoder rejects every variant tried**: as stored, padding stripped before the end
+  code, any prepended flag byte (all 256), 32-bit word-swapped. FFmpeg expects flag byte + IDEC
+  macroblocks + exactly 32 bits after byte alignment. So the game's IDEC stream differs from Sony's
+  `.ipu` files in some detail not found yet.
+- Next: decode one frame with a hardware-faithful IPU model instead of FFmpeg: ps2-web-recomp's MIT IPU
+  (our chosen IPU base, `runtime/src/ipu/ipu.cpp`) run in IDEC mode on frame 0 with the game's CTRL/CMD
+  values; that tells exactly what the stream is, and gives the judge for stage 2 (or a conversion to
+  FFmpeg's format).
+
 ## Stage 1 kit (ready)
 `tools/llm_port/movie/`: `movie.h` (fixed API), `reference.py` (writes `game/analysis/movie/tests/`:
 first 1 MB of each movie + a 0x60-byte truncated copy that must give false), `driver.cpp`,
