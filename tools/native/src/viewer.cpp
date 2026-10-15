@@ -4,7 +4,7 @@
 //
 // Usage: pop_native_view <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]
 //                        [--depth <file>] (raw float32 view depth per pixel) [--add <more.gltf>]...
-//                        [--fog a,b,R,G,B] (GS fog: F = a + b * depth, FOGCOL)
+//                        [--fog a,b,R,G,B] (GS fog: F = a + b * depth, FOGCOL) [--addfog a,b <gltf>] (own fog)
 //        pop_native_view <scene.gltf> <clip file> <screenshot.png> --window [--scale N]
 //          interactive: starts at the game's camera. Mouse drag (left button) looks around, WASD
 //          moves, Q/E down/up, Shift faster, R back to the game camera, 1-4 internal resolution
@@ -180,7 +180,7 @@ int main(int argc, char **argv)
     // one renderer mesh per glTF primitive, one draw per (node, primitive); every scene file adds to them
     std::vector<Draw> draws;
     size_t vertexTotal = 0, triTotal = 0, imageTotal = 0;
-    auto addScene = [&](cgltf_data *data) {
+    auto addScene = [&](cgltf_data *data, const float *ownFog) {
         imageTotal += data->images_count;
         std::vector<int> imageIndex(data->images_count, -1);
         for (size_t i = 0; i < data->images_count; ++i)
@@ -285,6 +285,12 @@ int main(int argc, char **argv)
                 std::memcpy(m, out, sizeof m);
             }
             std::memcpy(d.model, m, sizeof m);
+            if (ownFog)
+            {
+                d.ownFog = true;
+                d.fogA = ownFog[0];
+                d.fogB = ownFog[1];
+            }
             for (int m : meshPrims[n.mesh])
             {
                 d.mesh = m;
@@ -292,18 +298,22 @@ int main(int argc, char **argv)
             }
         }
     };
-    addScene(data);
+    addScene(data, nullptr);
     std::vector<cgltf_data *> extra;
     for (int i = 4; i + 1 < argc; ++i)
-        if (!std::strcmp(argv[i], "--add"))
+        if (!std::strcmp(argv[i], "--add") || (!std::strcmp(argv[i], "--addfog") && i + 2 < argc))
         {
+            float ownFog[2] = {255.0f, 0.0f};
+            const bool withFog = !std::strcmp(argv[i], "--addfog");
+            if (withFog)
+                std::sscanf(argv[++i], "%f,%f", &ownFog[0], &ownFog[1]);
             cgltf_data *more = nullptr;
             if (cgltf_parse_file(&opt, argv[i + 1], &more) != cgltf_result_success || cgltf_load_buffers(&opt, more, argv[i + 1]) != cgltf_result_success)
             {
                 std::fprintf(stderr, "cannot load %s\n", argv[i + 1]);
                 return 1;
             }
-            addScene(more);
+            addScene(more, withFog ? ownFog : nullptr);
             extra.push_back(more);
         }
     if (!r.upload(error))

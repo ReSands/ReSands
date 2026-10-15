@@ -59,6 +59,8 @@ namespace pop_native
     {
         int mesh;
         float model[16]; // object -> world, column-major (glTF order)
+        bool ownFog = false;           // far layers (sky) use their own GS fog constants
+        float fogA = 255.0f, fogB = 0.0f;
     };
 
     struct Options

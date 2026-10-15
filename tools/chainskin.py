@@ -256,7 +256,9 @@ def write_gltf(meshes, path, offset_grid=False):
             g.setdefault('samplers', [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}])
             m = {'pbrMetallicRoughness': {'baseColorTexture': {'index': len(g['textures']) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
                  'doubleSided': True}
-            if test[0]:  # GS alpha test (ATST GREATER as the game uses), AREF on the 0x80 scale
+            if len(test) > 2 and test[2]:  # GS ALPHA 0x44: (Cs - Cd) * As + Cd
+                m.update({'alphaMode': 'BLEND'})
+            elif test[0]:  # GS alpha test (ATST GREATER as the game uses), AREF on the 0x80 scale
                 m.update({'alphaMode': 'MASK', 'alphaCutoff': round(min(test[1] * 2, 255) / 255.0, 3)})
             g['materials'].append(m)
             images[key] = len(g['materials']) - 1
