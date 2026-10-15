@@ -88,6 +88,12 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
   failed. For 1.0 (native decoder, no IPU emulation): the IDEC decoding core of this model (VLC,
   dequantise, IDCT, colour conversion) can serve as a plain frame decoder called from the
   `FullMovie` hooks, without emulating IPU registers, FIFOs or DMA. To be decided with the user.
+- **FFmpeg decodes them too (15 Oct):** `.ipu` frame = flag byte **0x00** + the frame's bytes with the
+  zero padding before `00 00 01 B0` removed + `00 00 01 B0`. Frame 80 matches the IPU model within
+  0.29/255 mean (colour-conversion rounding). Stripping zeros also eats a real final zero byte in
+  ~12% of frames (FFmpeg needs exactly 32 bits after byte alignment); UBISOFT: 154/176 decode
+  as stripped, the 22 others decode with one zero byte put back. Exact end = where IDEC stops
+  (bit position from the IPU model), or retry with 1..15 bytes back.
 - Whole-movie check (15 Oct): UBISOFT decoded with audio (track 0 = the chunk's PCM straight after
   its video, 16-byte aligned; 5.8725 s of audio vs 5.8725 s of video, music-like signal) ->
   `game/analysis/movie/stage2/ubisoft_decoded.mp4`.
