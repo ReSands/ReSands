@@ -3,7 +3,7 @@
 // frame of the same moment.
 //
 // Usage: pop_native_view <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]
-//                        [--depth <file>] (raw float32 view depth per pixel)
+//                        [--depth <file>] (raw float32 view depth per pixel) [--add <more.gltf>]...
 //        pop_native_view <scene.gltf> <clip file> <screenshot.png> --window [--scale N]
 //          interactive: starts at the game's camera. Mouse drag (left button) looks around, WASD
 //          moves, Q/E down/up, Shift faster, R back to the game camera, 1-4 internal resolution
@@ -176,117 +176,135 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    std::vector<int> imageIndex(data->images_count, -1);
-    for (size_t i = 0; i < data->images_count; ++i)
-    {
-        Image img;
-        if (loadImage(&data->images[i], opt, img))
-            imageIndex[i] = r.addImage(img);
-    }
-    auto texImage = [&](const cgltf_texture_view &v) {
-        return v.texture && v.texture->image ? imageIndex[cgltf_image_index(data, v.texture->image)] : -1;
-    };
-    std::vector<int> materialIndex(data->materials_count, -1);
-    for (size_t i = 0; i < data->materials_count; ++i)
-    {
-        const cgltf_material &gm = data->materials[i];
-        Material mat;
-        mat.baseImage = texImage(gm.pbr_metallic_roughness.base_color_texture);
-        mat.lightmapImage = texImage(gm.occlusion_texture); // jade2gltf: lightmap page on TEXCOORD_1
-        mat.alphaMode = gm.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
-                        : gm.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
-                                                                  : AlphaMode::Opaque;
-        mat.cutoff = gm.alpha_cutoff;
-        materialIndex[i] = r.addMaterial(mat);
-    }
-
-    // one renderer mesh per glTF primitive
-    std::map<const cgltf_mesh *, std::vector<int>> meshPrims;
-    size_t vertexTotal = 0, triTotal = 0;
-    for (size_t mi = 0; mi < data->meshes_count; ++mi)
-    {
-        const cgltf_mesh &gm = data->meshes[mi];
-        for (size_t pi = 0; pi < gm.primitives_count; ++pi)
-        {
-            const cgltf_primitive &p = gm.primitives[pi];
-            const cgltf_accessor *pos = nullptr, *uv = nullptr, *uv2 = nullptr, *col = nullptr;
-            for (size_t a = 0; a < p.attributes_count; ++a)
-            {
-                const cgltf_attribute &at = p.attributes[a];
-                if (at.type == cgltf_attribute_type_position)
-                    pos = at.data;
-                else if (at.type == cgltf_attribute_type_texcoord && at.index == 0)
-                    uv = at.data;
-                else if (at.type == cgltf_attribute_type_texcoord && at.index == 1)
-                    uv2 = at.data;
-                else if (at.type == cgltf_attribute_type_color && at.index == 0)
-                    col = at.data;
-            }
-            if (!pos || p.type != cgltf_primitive_type_triangles)
-                continue;
-            Mesh mesh;
-            mesh.vertices.resize(pos->count);
-            for (size_t v = 0; v < pos->count; ++v)
-            {
-                Vertex &vx = mesh.vertices[v];
-                float c[4] = {1, 1, 1, 1};
-                cgltf_accessor_read_float(pos, v, vx.pos, 3);
-                vx.uv[0] = vx.uv[1] = vx.uv2[0] = vx.uv2[1] = 0;
-                if (uv)
-                    cgltf_accessor_read_float(uv, v, vx.uv, 2);
-                if (uv2)
-                    cgltf_accessor_read_float(uv2, v, vx.uv2, 2);
-                if (col)
-                    cgltf_accessor_read_float(col, v, c, col->type == cgltf_type_vec3 ? 3 : 4);
-                std::memcpy(vx.colour, c, sizeof c);
-            }
-            if (p.indices)
-                for (size_t k = 0; k < p.indices->count; ++k)
-                    mesh.indices.push_back(static_cast<uint32_t>(cgltf_accessor_read_index(p.indices, k)));
-            else
-                for (size_t k = 0; k < pos->count; ++k)
-                    mesh.indices.push_back(static_cast<uint32_t>(k));
-            mesh.material = p.material ? materialIndex[cgltf_material_index(data, p.material)] : -1;
-            // a material whose lightmap exists but the primitive has no second UV set: no lightmap
-            vertexTotal += mesh.vertices.size();
-            triTotal += mesh.indices.size() / 3;
-            meshPrims[&gm].push_back(r.addMesh(std::move(mesh)));
-        }
-    }
-
+    // one renderer mesh per glTF primitive, one draw per (node, primitive); every scene file adds to them
     std::vector<Draw> draws;
-    for (size_t ni = 0; ni < data->nodes_count; ++ni)
-    {
-        const cgltf_node &n = data->nodes[ni];
-        if (!n.mesh)
-            continue;
-        Draw d;
-        // object -> game world: the node's and its parents' local transforms, except jade2gltf's
-        // root "world (Z-up)" (Z-up -> glTF Y-up), since the game's clip matrix works in Z-up
-        float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-        for (const cgltf_node *p = &n; p; p = p->parent)
+    size_t vertexTotal = 0, triTotal = 0, imageTotal = 0;
+    auto addScene = [&](cgltf_data *data) {
+        imageTotal += data->images_count;
+        std::vector<int> imageIndex(data->images_count, -1);
+        for (size_t i = 0; i < data->images_count; ++i)
         {
-            if (p->name && std::strncmp(p->name, "world (Z-up)", 12) == 0)
-                continue;
-            float local[16], out[16];
-            cgltf_node_transform_local(p, local);
-            for (int c = 0; c < 4; ++c) // out = local * m
-                for (int r = 0; r < 4; ++r)
+            Image img;
+            if (loadImage(&data->images[i], opt, img))
+                imageIndex[i] = r.addImage(img);
+        }
+        auto texImage = [&](const cgltf_texture_view &v) {
+            return v.texture && v.texture->image ? imageIndex[cgltf_image_index(data, v.texture->image)] : -1;
+        };
+        std::vector<int> materialIndex(data->materials_count, -1);
+        for (size_t i = 0; i < data->materials_count; ++i)
+        {
+            const cgltf_material &gm = data->materials[i];
+            Material mat;
+            mat.baseImage = texImage(gm.pbr_metallic_roughness.base_color_texture);
+            mat.lightmapImage = texImage(gm.occlusion_texture); // jade2gltf: lightmap page on TEXCOORD_1
+            mat.alphaMode = gm.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
+                            : gm.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
+                                                                      : AlphaMode::Opaque;
+            mat.cutoff = gm.alpha_cutoff;
+            materialIndex[i] = r.addMaterial(mat);
+        }
+
+        // one renderer mesh per glTF primitive
+        std::map<const cgltf_mesh *, std::vector<int>> meshPrims;
+        for (size_t mi = 0; mi < data->meshes_count; ++mi)
+        {
+            const cgltf_mesh &gm = data->meshes[mi];
+            for (size_t pi = 0; pi < gm.primitives_count; ++pi)
+            {
+                const cgltf_primitive &p = gm.primitives[pi];
+                const cgltf_accessor *pos = nullptr, *uv = nullptr, *uv2 = nullptr, *col = nullptr;
+                for (size_t a = 0; a < p.attributes_count; ++a)
                 {
-                    float s = 0;
-                    for (int k = 0; k < 4; ++k)
-                        s += local[k * 4 + r] * m[c * 4 + k];
-                    out[c * 4 + r] = s;
+                    const cgltf_attribute &at = p.attributes[a];
+                    if (at.type == cgltf_attribute_type_position)
+                        pos = at.data;
+                    else if (at.type == cgltf_attribute_type_texcoord && at.index == 0)
+                        uv = at.data;
+                    else if (at.type == cgltf_attribute_type_texcoord && at.index == 1)
+                        uv2 = at.data;
+                    else if (at.type == cgltf_attribute_type_color && at.index == 0)
+                        col = at.data;
                 }
-            std::memcpy(m, out, sizeof m);
+                if (!pos || p.type != cgltf_primitive_type_triangles)
+                    continue;
+                Mesh mesh;
+                mesh.vertices.resize(pos->count);
+                for (size_t v = 0; v < pos->count; ++v)
+                {
+                    Vertex &vx = mesh.vertices[v];
+                    float c[4] = {1, 1, 1, 1};
+                    cgltf_accessor_read_float(pos, v, vx.pos, 3);
+                    vx.uv[0] = vx.uv[1] = vx.uv2[0] = vx.uv2[1] = 0;
+                    if (uv)
+                        cgltf_accessor_read_float(uv, v, vx.uv, 2);
+                    if (uv2)
+                        cgltf_accessor_read_float(uv2, v, vx.uv2, 2);
+                    if (col)
+                        cgltf_accessor_read_float(col, v, c, col->type == cgltf_type_vec3 ? 3 : 4);
+                    std::memcpy(vx.colour, c, sizeof c);
+                }
+                if (p.indices)
+                    for (size_t k = 0; k < p.indices->count; ++k)
+                        mesh.indices.push_back(static_cast<uint32_t>(cgltf_accessor_read_index(p.indices, k)));
+                else
+                    for (size_t k = 0; k < pos->count; ++k)
+                        mesh.indices.push_back(static_cast<uint32_t>(k));
+                mesh.material = p.material ? materialIndex[cgltf_material_index(data, p.material)] : -1;
+                // a material whose lightmap exists but the primitive has no second UV set: no lightmap
+                vertexTotal += mesh.vertices.size();
+                triTotal += mesh.indices.size() / 3;
+                meshPrims[&gm].push_back(r.addMesh(std::move(mesh)));
+            }
         }
-        std::memcpy(d.model, m, sizeof m);
-        for (int m : meshPrims[n.mesh])
+
+        for (size_t ni = 0; ni < data->nodes_count; ++ni)
         {
-            d.mesh = m;
-            draws.push_back(d);
+            const cgltf_node &n = data->nodes[ni];
+            if (!n.mesh)
+                continue;
+            Draw d;
+            // object -> game world: the node's and its parents' local transforms, except jade2gltf's
+            // root "world (Z-up)" (Z-up -> glTF Y-up), since the game's clip matrix works in Z-up
+            float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            for (const cgltf_node *p = &n; p; p = p->parent)
+            {
+                if (p->name && std::strncmp(p->name, "world (Z-up)", 12) == 0)
+                    continue;
+                float local[16], out[16];
+                cgltf_node_transform_local(p, local);
+                for (int c = 0; c < 4; ++c) // out = local * m
+                    for (int r = 0; r < 4; ++r)
+                    {
+                        float s = 0;
+                        for (int k = 0; k < 4; ++k)
+                            s += local[k * 4 + r] * m[c * 4 + k];
+                        out[c * 4 + r] = s;
+                    }
+                std::memcpy(m, out, sizeof m);
+            }
+            std::memcpy(d.model, m, sizeof m);
+            for (int m : meshPrims[n.mesh])
+            {
+                d.mesh = m;
+                draws.push_back(d);
+            }
         }
-    }
+    };
+    addScene(data);
+    std::vector<cgltf_data *> extra;
+    for (int i = 4; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--add"))
+        {
+            cgltf_data *more = nullptr;
+            if (cgltf_parse_file(&opt, argv[i + 1], &more) != cgltf_result_success || cgltf_load_buffers(&opt, more, argv[i + 1]) != cgltf_result_success)
+            {
+                std::fprintf(stderr, "cannot load %s\n", argv[i + 1]);
+                return 1;
+            }
+            addScene(more);
+            extra.push_back(more);
+        }
     if (!r.upload(error))
     {
         std::fprintf(stderr, "upload: %s\n", error.c_str());
@@ -296,7 +314,7 @@ int main(int argc, char **argv)
     if (windowed)
     {
         std::printf("%s: %zu draws, %zu triangles, %zu textures; loaded in %.0f ms\n", r.deviceName().c_str(), draws.size(), triTotal,
-                    data->images_count, std::chrono::duration<double, std::milli>(t1 - t0).count());
+                    imageTotal, std::chrono::duration<double, std::milli>(t1 - t0).count());
         std::fflush(stdout);
         FreeCamera cam(clip);
         long presented = 0;
@@ -413,7 +431,7 @@ int main(int argc, char **argv)
         df.write(reinterpret_cast<const char *>(depth.data()), static_cast<std::streamsize>(depth.size() * sizeof(float)));
     }
     std::printf("%s: %zu draws, %zu vertices, %zu triangles, %zu textures; load+upload %.0f ms, render %.1f ms -> %s (%ux%u)\n",
-                r.deviceName().c_str(), draws.size(), vertexTotal, triTotal, data->images_count,
+                r.deviceName().c_str(), draws.size(), vertexTotal, triTotal, imageTotal,
                 std::chrono::duration<double, std::milli>(t1 - t0).count(), std::chrono::duration<double, std::milli>(t2 - t1).count(),
                 argv[3], width, height);
     cgltf_free(data);

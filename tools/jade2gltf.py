@@ -402,7 +402,8 @@ def main(argv):
                 tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
                 if not tris:
                     continue
-                uv = [(a / uvscale, c / uvscale) for a, c in uvr]
+                # skinned UVs are at 1/512 (raw 0..512, as reference-style static meshes), not 1/4096
+                uv = [(a / 512.0, c / 512.0) for a, c in uvr]
                 ids = [tuple(palette[k - 1] if 0 < k <= len(palette) else 0 for k in b) for b in bones]
                 m = (pos, uv, colours or [(1.0, 1.0, 1.0, 1.0)] * n, tris, None, (ids, weights))
                 stats['skinned_batches'] = stats.get('skinned_batches', 0) + 1
