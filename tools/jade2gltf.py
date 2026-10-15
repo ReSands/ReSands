@@ -394,6 +394,8 @@ def main(argv):
             else:
                 stats['no_pass'] += 1
             continue
+        if nb and passes and '--static-only' in argv:
+            continue  # characters come from the frame capture (chainskin.py), posed
         if nb and passes:
             # skinned element: bind-pose positions, bone palette slots 1..N (0 = unused) -> bone ids
             palette = d[o + 40:o + 40 + nb]

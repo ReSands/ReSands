@@ -94,6 +94,34 @@ def texture(vram, tex0):
     return w, h, bytes(out)
 
 
+def rigid_batches(ups):
+    """Rigid (non-skinned) objects drawn with their own matrix, e.g. weapons in a hand: reference-style
+    packets (REF tags) or inline, V4-32 positions at VU 0x03, V3-16 UVs + strip flag at 0x43 and V4-8
+    colours (or V3-8 normals) at 0x83. ups = (format, count, vu addr, payload) in send order (payloads
+    of REF tags are the referenced data). Returns [(positions, uvs, flags, colours or None)]."""
+    out, cur = [], {}
+
+    def flush():
+        if 0x3 in cur and cur[0x3][0] == 0xC:
+            f, n, pl = cur[0x3]
+            pos = [struct.unpack_from('<3f', pl, 16 * i) for i in range(min(n, len(pl) // 16))]
+            uv, fl = [(0, 0)] * len(pos), [0] * len(pos)
+            if 0x43 in cur and cur[0x43][0] == 9:
+                raw = [struct.unpack_from('<3h', cur[0x43][2], 6 * i) for i in range(min(len(pos), len(cur[0x43][2]) // 6))]
+                uv, fl = [(a, b) for a, b, _ in raw] + uv[len(raw):], [c for _, _, c in raw] + fl[len(raw):]
+            # 0x83 holds normals (V3-8, or V4-8 = packed normal + a spare byte, e.g. 125,17,3,1 on the
+            # Prince's sword), not colours: rigid parts are lit by VU1 like the characters
+            out.append((pos, uv, fl, None))
+        cur.clear()
+    for f, n, a, pl in ups:
+        if a in (0x3, 0x43, 0x83) and a in cur:
+            flush()
+        if a in (0x3, 0x43, 0x83):
+            cur[a] = (f, n, pl)
+    flush()
+    return out
+
+
 def skinned_draws(chain_path, with_textures=False):
     """[(target, packet bytes, {vu addr: [16 floats] matrices uploaded before the CALL}, texture or None,
     alpha test (ATE, AREF), GS ALPHA blend byte)]; textures decoded from GS memory as the frame's uploads left it at the draw."""
@@ -123,12 +151,13 @@ def skinned_draws(chain_path, with_textures=False):
             # packets (VIF 0x50/0x51: GS primitives sent straight to the GS) are not meshes
             first = struct.unpack_from('<4I', cur['bytes'], 0) if len(cur['bytes']) >= 16 else (0, 0, 0, 0)
             direct = any((w >> 24) & 0x7F in (0x50, 0x51) for w in first[2:])
-            if not direct and jade2gltf.skinned_batches(cur['bytes'], 0, len(cur['bytes'])):
+            rigid = [] if direct else rigid_batches(cur['ups'])
+            if not direct and (jade2gltf.skinned_batches(cur['bytes'], 0, len(cur['bytes'])) or rigid):
                 tex = None
                 if with_textures and cur['tex0'] is not None:
                     tex = texture(vram, cur['tex0'])
                 t = cur['test']
-                out.append((cur['target'], cur['bytes'], cur['mats'], tex, (t & 1, (t >> 4) & 0xFF), cur['alpha'] & 0xFF))
+                out.append((cur['target'], cur['bytes'], cur['mats'], tex, (t & 1, (t >> 4) & 0xFF), cur['alpha'] & 0xFF, rigid))
             cur = None
     return out
 
@@ -145,10 +174,21 @@ def xform(m, v):
 
 def build(chain_path, near=None, with_textures=False):
     posed, bind = [], []
-    for target, pkt, mats, tex, test, alpha in skinned_draws(chain_path, with_textures):
-        if alpha == 0x46:
+    for target, pkt, mats, tex, test, alpha, rigid in skinned_draws(chain_path, with_textures):
+        if alpha in (0x46, 0x54):  # 0x54: (Cs-Cd)*Ad+Cd shine pass, 16x16 texture, UVs from VU1 (weapons)
             # second pass of characters: ALPHA 0x46 = Cd * (1 - As) with a 4-bit shading texture whose
             # UVs VU1 probably computes (not modelled yet); drawn as an ordinary mesh it hides the colours
+            continue
+        if rigid and 0 in mats:  # weapons etc.: one rigid object, object matrix at VU 0
+            for pos, uv, fl, col in rigid:
+                n = len(pos)
+                tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
+                out = [xform(mats[0], v) for v in pos]
+                if not tris or (near and not any((p[0] - near[0]) ** 2 + (p[1] - near[1]) ** 2 + (p[2] - near[2]) ** 2 < near[3] ** 2 for p in out)):
+                    continue
+                c = col or [(1.0, 1.0, 1.0, 1.0)] * n
+                posed.append((out, uv, c, tris, target, tex, test))
+                bind.append((pos, uv, c, tris, target, tex, test))
             continue
         batches = jade2gltf.skinned_batches(pkt, 0, len(pkt))
         # layout B (no UNPACK to VU 0x53): one rigid part, placed by the object matrix at VU 0
