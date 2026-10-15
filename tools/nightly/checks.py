@@ -164,15 +164,30 @@ def check_meshes(work, limit=None, deadline=None):
         keys = keys[:limit]
     todo = [k for k in keys if not os.path.exists(os.path.join(store, '%08x.json' % k))]
     # Few workers, and a fresh process per pack: one large pack's simulated memory can take
-    # several GB (it exhausted a 16 GB Mac with one worker per core).
+    # several GB (it exhausted a 16 GB Mac with one worker per core). Each pack has a time limit
+    # (a misread size once kept one pack busy for 10 hours): a pack that hits it is saved as a
+    # 'timeout' finding, so it is not retried until the converter changes.
     workers = int(os.environ.get('POP_NIGHTLY_WORKERS', '3'))
-    with concurrent.futures.ProcessPoolExecutor(max_workers=workers, max_tasks_per_child=1) as ex:
-        futures = {ex.submit(mesh_pack, k): k for k in todo}
+    limit_s = int(os.environ.get('POP_NIGHTLY_PACK_SECONDS', '900'))
+
+    def one(k):
+        t0 = time.time()
+        try:
+            r = subprocess.run([sys.executable, '-I', os.path.abspath(__file__), '--mesh-pack', '%08x' % k],
+                               capture_output=True, text=True, timeout=limit_s)
+        except subprocess.TimeoutExpired:
+            return {'pack': '%08x' % k, 'error': 'timeout: still running after %d s (stopped)' % limit_s, 'seconds': limit_s}
+        try:
+            return json.loads(r.stdout.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            return None  # crashed (e.g. out of memory or stopped by hand): not saved, so retried next run
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(one, k): k for k in todo}
         for fut in concurrent.futures.as_completed(futures):
-            try:
-                r = fut.result()
-            except Exception:  # noqa: BLE001
-                continue  # worker killed or crashed (e.g. stopped by hand): not saved, so retried next run
+            r = fut.result()
+            if r is None:
+                continue
             json.dump(r, open(os.path.join(store, r['pack'] + '.json'), 'w'))
             if deadline and time.time() > deadline:
                 for f in futures:
@@ -251,6 +266,9 @@ def diff(prev, cur):
 
 
 def main(argv):
+    if '--mesh-pack' in argv:  # one pack, in its own process (check_meshes): result as one JSON line
+        print(json.dumps(mesh_pack(int(argv[argv.index('--mesh-pack') + 1], 16))))
+        return 0
     only = argv[argv.index('--only') + 1].split(',') if '--only' in argv else ['mmi', 'meshes', 'boot']
     limit = int(argv[argv.index('--packs') + 1]) if '--packs' in argv else None
     date = argv[argv.index('--date') + 1] if '--date' in argv else datetime.date.today().isoformat()

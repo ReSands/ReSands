@@ -47,7 +47,7 @@ $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
 # Priority 4 = normal. The default (7) runs the task below normal priority, which Windows may
 # also power-throttle, so timings would not match an interactive run.
-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 4) -AllowStartIfOnBatteries -Priority 4
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 14) -AllowStartIfOnBatteries -Priority 4
 Register-ScheduledTask -TaskName $Task -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $Task
 "started $Script $Arguments; log: $Log"
