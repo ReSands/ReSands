@@ -23,6 +23,7 @@ import gsvram  # noqa: E402
 import jade2gltf  # noqa: E402
 
 PALETTE_VU = 0x388
+LIGHTING = True  # bake the VU1 character lighting into the vertex colours
 
 
 def gs_replay(tag, data, vram, regs):
@@ -142,6 +143,8 @@ def skinned_draws(chain_path, with_textures=False):
                 if f == 0xC and n % 4 == 0 and len(p) >= 64 * (n // 4):
                     for k in range(n // 4):
                         pre[a + 4 * k] = list(struct.unpack_from('<16f', p, 64 * k))
+                elif f == 0xC and n == 1 and len(p) >= 16:
+                    pre[('v', a)] = list(struct.unpack_from('<4f', p, 0))
         if tid == 5:
             cur = {'target': tag[1] & 0x7FFFFFFF, 'bytes': b'', 'ups': [], 'mats': dict(pre),
                    'tex0': regs.get(0x06), 'test': regs.get(0x47, 0), 'alpha': regs.get(0x42, 0)}
@@ -160,6 +163,29 @@ def skinned_draws(chain_path, with_textures=False):
                 out.append((cur['target'], cur['bytes'], cur['mats'], tex, (t & 1, (t >> 4) & 0xFF), cur['alpha'] & 0xFF, rigid))
             cur = None
     return out
+
+
+LIGHT_SIGN = 1.0  # intensity = max(0, n.d): matches the game (fight frame character area: mean 57 vs 56; -1 gives 66)
+
+
+def light(mats, n_world):
+    """VU1 character lighting as the game sets it up per draw: VU 0x04 = 3 unit light directions (the
+    columns of the 3x3 part), VU 0x10 = their colours (rows), VU 0x1D = ambient (0x80 = 1.0 scale).
+    Returns RGB on the 0x80 = 1.0 scale (may exceed 1, as PS2 vertex colours up to 0xFF do)."""
+    L, C, amb = mats.get(0x4), mats.get(0x10), mats.get(('v', 0x1D))
+    if not L or not C:
+        return None
+    col = list(amb[:3]) if amb else [0.0, 0.0, 0.0]
+    for i in range(3):
+        d = (L[i], L[4 + i], L[8 + i])
+        k = max(0.0, LIGHT_SIGN * sum(n_world[j] * d[j] for j in range(3)))
+        for c in range(3):
+            col[c] += k * C[4 * i + c]
+    return tuple(min(c, 255.0) / 128.0 for c in col) + (1.0,)
+
+
+def rotate(m, v):
+    return (v[0] * m[0] + v[1] * m[4] + v[2] * m[8], v[0] * m[1] + v[1] * m[5] + v[2] * m[9], v[0] * m[2] + v[1] * m[6] + v[2] * m[10])
 
 
 TRANSPOSE = False  # experiment only: transposed rotations break the body apart (15 Oct), so False is right
@@ -198,9 +224,10 @@ def build(chain_path, near=None, with_textures=False):
             tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
             if not tris:
                 continue
-            out = []
-            for v, b, w in zip(pos, bones, weights):
+            out, lit = [], []
+            for vi, (v, b, w) in enumerate(zip(pos, bones, weights)):
                 acc = [0.0, 0.0, 0.0]
+                nacc = [0.0, 0.0, 0.0]
                 tot = 0.0
                 for slot, wt in zip(b, w):
                     if wt == 0:
@@ -210,14 +237,21 @@ def build(chain_path, near=None, with_textures=False):
                         continue
                     p = xform(m, v)
                     acc = [acc[k] + wt * p[k] for k in range(3)]
+                    if normals:
+                        nr = rotate(m, normals[vi])
+                        nacc = [nacc[k] + wt * nr[k] for k in range(3)]
                     tot += wt
                 out.append(tuple(a / tot for a in acc) if tot else tuple(v))
+                ln = sum(x * x for x in nacc) ** 0.5
+                lit.append(light(mats, [x / ln for x in nacc]) if normals and ln > 0 else None)
             if near:
                 cx, cy, cz, r = near
                 if not any((p[0] - cx) ** 2 + (p[1] - cy) ** 2 + (p[2] - cz) ** 2 < r * r for p in out):
                     continue
             # colour 1.0 = PS2 MODULATE at 0x80; normal-lit parts are lit by VU1 at run time (not modelled yet)
             col = colours if colours else [(1.0, 1.0, 1.0, 1.0)] * n
+            if LIGHTING and all(c is not None for c in lit):
+                col = lit
             posed.append((out, uv, col, tris, target, tex, test))
             bind.append((list(pos), uv, col, tris, target, tex, test))
     return posed, bind
