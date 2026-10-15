@@ -1,7 +1,8 @@
 #version 450
-// PS2 MODULATE (texture * vertex colour, 0x80 = 1.0, already normalised by the converter) and the
-// lightmap pass folded in as the best frame match so far ("lerpvc", tools/gltfpreview.py): the game
-// draws the grey lightmap texel (CLUT alpha As = texel) with ALPHA ((Cs - Cd) * As >> 7) + Cd.
+// PS2 MODULATE (texture * vertex colour, 0x80 = 1.0, already normalised by the converter), then the
+// lightmap pass as the game draws it (frame capture, 15 Oct): GS ALPHA 0x46 = Cd * (1 - As) with the
+// 4-bit lightmap page, whose CLUT alpha ramps 0..0x80 with the index (= our grey / 255). The
+// lightmap only darkens what the base pass wrote; its colour (Cs) is not used.
 layout(push_constant) uniform Push {
     mat4 mvp;
     vec4 params;
@@ -22,7 +23,7 @@ void main()
     vec3 base = t.rgb * vColour.rgb;
     if (pc.params.z > 0.5) {
         float a = texture(lightmapTex, vUv2).r;
-        base = base * (1.0 - a) + a * a * vColour.rgb;
+        base *= 1.0 - a;
     }
     outColour = vec4(base, pc.params.x == 2.0 ? t.a : 1.0);
 }

@@ -3,6 +3,7 @@
 // frame of the same moment.
 //
 // Usage: pop_native_view <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]
+//                        [--depth <file>] (raw float32 view depth per pixel)
 //   clip file: the game's world -> clip matrix, 16 comma- or space-separated floats (row vectors, as
 //   graphics system +0x240 holds it; POP_CAMLOG / POP_FRAMECAP "capture" lines carry it).
 #include "native_renderer.h"
@@ -244,7 +245,12 @@ int main(int argc, char **argv)
     }
     const auto t1 = std::chrono::steady_clock::now();
     std::vector<uint8_t> rgba;
-    if (!r.renderOffscreen(width, height, clip, draws, rgba, error))
+    std::vector<float> depth;
+    const char *depthPath = nullptr;
+    for (int i = 4; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--depth"))
+            depthPath = argv[i + 1];
+    if (!r.renderOffscreen(width, height, clip, draws, rgba, error, depthPath ? &depth : nullptr))
     {
         std::fprintf(stderr, "render: %s\n", error.c_str());
         return 1;
@@ -258,6 +264,11 @@ int main(int argc, char **argv)
     {
         std::fprintf(stderr, "cannot write %s\n", argv[3]);
         return 1;
+    }
+    if (depthPath) // raw little-endian float32 view depth per pixel, row-major
+    {
+        std::ofstream df(depthPath, std::ios::binary);
+        df.write(reinterpret_cast<const char *>(depth.data()), static_cast<std::streamsize>(depth.size() * sizeof(float)));
     }
     std::printf("%s: %zu draws, %zu vertices, %zu triangles, %zu textures; load+upload %.0f ms, render %.1f ms -> %s (%ux%u)\n",
                 r.deviceName().c_str(), draws.size(), vertexTotal, triTotal, data->images_count,

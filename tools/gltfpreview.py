@@ -15,8 +15,10 @@ import zlib
 # lightmap brightness = CLUT index / 15 (greyscale ramp); scale for the multiply (2.0 if the GS pass
 # modulates with 0x80 = 1.0, to be checked against a frame)
 LIGHTMAP_SCALE = float(__import__('os').environ.get('POP_LM_SCALE', '1.0'))
-# how the lightmap combines with the base texture (POP_LM_MODE: mul, mul2, lerp, lerpvc, add)
-LM_MODE = __import__('os').environ.get('POP_LM_MODE', 'lerpvc')  # best match to the game frame (imgscore)
+# how the lightmap combines with the base texture (POP_LM_MODE: gs46, mul, mul2, lerp, lerpvc, add).
+# gs46 is what the game does (frame capture, 15 Oct): GS ALPHA 0x46 = Cd * (1 - As), As = CLUT
+# alpha of the 4-bit lightmap = index / 15 = our grey / 255 (correlation 0.976 vs 0.870 for lerpvc)
+LM_MODE = __import__('os').environ.get('POP_LM_MODE', 'gs46')
 
 
 def load(path):
@@ -220,7 +222,9 @@ def main(argv):
                         base = [tp[k + j] * cc[j] for j in range(3)]
                         if lmimg:
                             a = lmv  # lightmap brightness = CLUT index / 15; its alpha As = a * 0x80
-                            if LM_MODE == 'mul2':
+                            if LM_MODE == 'gs46':       # GS ALPHA 0x46: Cd * (1 - As)
+                                base = [b * (1 - a) for b in base]
+                            elif LM_MODE == 'mul2':
                                 base = [b * 2 * a for b in base]
                             elif LM_MODE == 'lerp':     # GS ALPHA ((Cs-Cd)*As>>7)+Cd, Cs = grey texel
                                 base = [b * (1 - a) + 255 * a * a for b in base]

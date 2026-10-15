@@ -282,7 +282,7 @@ namespace pop_native
             at[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             at[1] = at[0];
             at[1].format = VK_FORMAT_D32_SFLOAT;
-            at[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            at[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE; // read back on request (renderOffscreen depthOut)
             at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             VkAttachmentReference colourRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
             VkAttachmentReference depthRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -635,15 +635,18 @@ namespace pop_native
     }
 
     bool Renderer::renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
-                                   std::vector<uint8_t> &rgbaOut, std::string &error)
+                                   std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut)
     {
         Texture colour, depth;
-        Buffer readback;
+        Buffer readback, depthReadback;
         VkFramebuffer fb = VK_NULL_HANDLE;
         bool ok = m->createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT, colour, error) &&
-                  m->createImage(width, height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                  m->createImage(width, height, VK_FORMAT_D32_SFLOAT,
+                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                  VK_IMAGE_ASPECT_DEPTH_BIT, depth, error) &&
+                  m->createBuffer(VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, depthReadback, error) &&
                   m->createBuffer(VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, readback, error);
         if (ok)
@@ -709,6 +712,14 @@ namespace pop_native
                 region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.imageExtent = {width, height, 1};
                 vkCmdCopyImageToBuffer(cb, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
+                if (depthOut)
+                {
+                    Impl::barrier(cb, depth.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+                    vkCmdCopyImageToBuffer(cb, depth.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, depthReadback.buffer, 1, &region);
+                }
             }, error);
         }
         if (ok)
@@ -717,12 +728,23 @@ namespace pop_native
             vkMapMemory(m->device, readback.memory, 0, readback.size, 0, &p);
             rgbaOut.assign(static_cast<uint8_t *>(p), static_cast<uint8_t *>(p) + size_t(width) * height * 4);
             vkUnmapMemory(m->device, readback.memory);
+            if (depthOut)
+            {
+                // stored depth = near / w (0 = nothing drawn)
+                vkMapMemory(m->device, depthReadback.memory, 0, depthReadback.size, 0, &p);
+                const float *z = static_cast<const float *>(p);
+                depthOut->resize(size_t(width) * height);
+                for (size_t i = 0; i < depthOut->size(); ++i)
+                    (*depthOut)[i] = z[i] > 0.0f ? m->options.nearW / z[i] : 0.0f;
+                vkUnmapMemory(m->device, depthReadback.memory);
+            }
         }
         if (fb)
             vkDestroyFramebuffer(m->device, fb, nullptr);
         m->destroyImage(colour);
         m->destroyImage(depth);
         m->destroyBuffer(readback);
+        m->destroyBuffer(depthReadback);
         return ok;
     }
 }

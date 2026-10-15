@@ -74,8 +74,9 @@ namespace pop_native
         bool upload(std::string &error);
         // renders the draws through `clip` (the game's world -> clip matrix, row vectors as the game
         // stores them) into a width x height RGBA image
+        // depthOut (optional): per-pixel view depth w (0 where nothing was drawn)
         bool renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
-                             std::vector<uint8_t> &rgbaOut, std::string &error);
+                             std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr);
         std::string deviceName() const;
 
     private:
