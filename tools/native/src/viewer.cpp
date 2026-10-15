@@ -113,6 +113,10 @@ int main(int argc, char **argv)
     {
         if (!std::strcmp(argv[i], "--nearest"))
             options.linearFilter = false;
+        else if (!std::strcmp(argv[i], "--cull") && i + 1 < argc)
+            options.cull = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--cull-ccw"))
+            options.cullClockwise = false;
         else if (!std::strcmp(argv[i], "--window"))
             windowed = true;
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc)
@@ -203,6 +207,7 @@ int main(int argc, char **argv)
                             : gm.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
                                                                       : AlphaMode::Opaque;
             mat.cutoff = gm.alpha_cutoff;
+        mat.doubleSided = gm.double_sided;
             materialIndex[i] = r.addMaterial(mat);
         }
 

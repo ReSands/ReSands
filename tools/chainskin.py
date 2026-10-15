@@ -23,6 +23,7 @@ import gsvram  # noqa: E402
 import jade2gltf  # noqa: E402
 
 PALETTE_VU = 0x388
+DOUBLE_SIDED = True  # culling characters breaks them with either winding (15 Oct): strip winding is not consistent
 LIGHTING = True  # bake the VU1 character lighting into the vertex colours
 
 
@@ -112,7 +113,13 @@ def rigid_batches(ups):
                 uv, fl = [(a, b) for a, b, _ in raw] + uv[len(raw):], [c for _, _, c in raw] + fl[len(raw):]
             # 0x83 holds normals (V3-8, or V4-8 = packed normal + a spare byte, e.g. 125,17,3,1 on the
             # Prince's sword), not colours: rigid parts are lit by VU1 like the characters
-            out.append((pos, uv, fl, None))
+            nrm = None
+            if 0x83 in cur and cur[0x83][0] in (0xA, 0xE):
+                st = 3 if cur[0x83][0] == 0xA else 4
+                pl = cur[0x83][2]
+                nrm = [struct.unpack_from('<3b', pl, st * i) for i in range(min(len(pos), len(pl) // st))]
+                nrm = nrm if len(nrm) == len(pos) else None
+            out.append((pos, uv, fl, nrm))
         cur.clear()
     for f, n, a, pl in ups:
         if a in (0x3, 0x43, 0x83) and a in cur:
@@ -206,10 +213,18 @@ def build(chain_path, near=None, with_textures=False):
             # UVs VU1 probably computes (not modelled yet); drawn as an ordinary mesh it hides the colours
             continue
         if rigid and 0 in mats:  # weapons etc.: one rigid object, object matrix at VU 0
-            for pos, uv, fl, col in rigid:
+            for pos, uv, fl, nrm in rigid:
                 n = len(pos)
                 tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
                 out = [xform(mats[0], v) for v in pos]
+                col = None
+                if LIGHTING and nrm:
+                    lit = []
+                    for v in nrm:
+                        nw = rotate(mats[0], v)
+                        ln = sum(x * x for x in nw) ** 0.5
+                        lit.append(light(mats, [x / ln for x in nw]) if ln > 0 else None)
+                    col = lit if all(c is not None for c in lit) else None
                 if not tris or (near and not any((p[0] - near[0]) ** 2 + (p[1] - near[1]) ** 2 + (p[2] - near[2]) ** 2 < near[3] ** 2 for p in out)):
                     continue
                 c = col or [(1.0, 1.0, 1.0, 1.0)] * n
@@ -289,7 +304,7 @@ def write_gltf(meshes, path, offset_grid=False):
             g.setdefault('textures', []).append({'source': len(g['images']) - 1, 'sampler': 0})
             g.setdefault('samplers', [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}])
             m = {'pbrMetallicRoughness': {'baseColorTexture': {'index': len(g['textures']) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
-                 'doubleSided': True}
+                 'doubleSided': DOUBLE_SIDED}
             if len(test) > 2 and test[2]:  # GS ALPHA 0x44: (Cs - Cd) * As + Cd
                 m.update({'alphaMode': 'BLEND'})
             elif test[0]:  # GS alpha test (ATST GREATER as the game uses), AREF on the 0x80 scale

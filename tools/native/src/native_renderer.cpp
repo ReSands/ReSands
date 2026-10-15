@@ -80,6 +80,7 @@ namespace pop_native
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VkPipeline pipelineOpaque = VK_NULL_HANDLE, pipelineBlend = VK_NULL_HANDLE;
+        VkPipeline pipelineOpaqueCull = VK_NULL_HANDLE, pipelineBlendCull = VK_NULL_HANDLE;
         Buffer vertexBuffer, indexBuffer;
 
         std::vector<Image> images;
@@ -310,7 +311,7 @@ namespace pop_native
             vkCmdBindIndexBuffer(cb, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
             for (int pass = 0; pass < 2; ++pass) // opaque + alpha-tested, then blended in draw order
             {
-                vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pass ? pipelineBlend : pipelineOpaque);
+                VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
                 {
                     if (d.mesh < 0 || static_cast<size_t>(d.mesh) >= ranges.size())
@@ -320,6 +321,13 @@ namespace pop_native
                     const AlphaMode mode = mat ? mat->alphaMode : AlphaMode::Opaque;
                     if ((mode == AlphaMode::Blend) != (pass == 1) || r.indexCount == 0)
                         continue;
+                    const bool cull = mat && !mat->doubleSided;
+                    const VkPipeline want = pass ? (cull ? pipelineBlendCull : pipelineBlend) : (cull ? pipelineOpaqueCull : pipelineOpaque);
+                    if (want != bound)
+                    {
+                        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
+                        bound = want;
+                    }
                     Push push;
                     mul(clip, d.model, push.mvp);
                     push.params[0] = static_cast<float>(static_cast<int>(mode));
@@ -517,8 +525,8 @@ namespace pop_native
             vp.viewportCount = vp.scissorCount = 1;
             VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
             rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode = VK_CULL_MODE_NONE; // the converter marks all materials double-sided for now
-            rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            rs.cullMode = options.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE; // converter: all double-sided
+            rs.frontFace = options.cull == 2 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth = 1.0f;
             VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
             ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -549,6 +557,12 @@ namespace pop_native
             gp.layout = pipelineLayout;
             gp.renderPass = renderPass;
             bool ok = check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineOpaque), "opaque pipeline", error);
+            VkPipelineRasterizationStateCreateInfo rsCull = rs;
+            rsCull.cullMode = VK_CULL_MODE_BACK_BIT;
+            rsCull.frontFace = options.cullClockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+            gp.pRasterizationState = &rsCull;
+            ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineOpaqueCull), "opaque cull pipeline", error);
+            gp.pRasterizationState = &rs;
             // blend: GS ALPHA (Cs - Cd) * As + Cd, depth tested but not written
             ds.depthWriteEnable = VK_FALSE;
             ba.blendEnable = VK_TRUE;
@@ -559,6 +573,8 @@ namespace pop_native
             ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
             ba.alphaBlendOp = VK_BLEND_OP_ADD;
             ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineBlend), "blend pipeline", error);
+            gp.pRasterizationState = &rsCull;
+            ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineBlendCull), "blend cull pipeline", error);
             vkDestroyShaderModule(device, vs, nullptr);
             vkDestroyShaderModule(device, fs, nullptr);
             return ok;
@@ -594,6 +610,10 @@ namespace pop_native
                 vkDestroyPipeline(m->device, m->pipelineOpaque, nullptr);
             if (m->pipelineBlend)
                 vkDestroyPipeline(m->device, m->pipelineBlend, nullptr);
+            if (m->pipelineOpaqueCull)
+                vkDestroyPipeline(m->device, m->pipelineOpaqueCull, nullptr);
+            if (m->pipelineBlendCull)
+                vkDestroyPipeline(m->device, m->pipelineBlendCull, nullptr);
             if (m->pipelineLayout)
                 vkDestroyPipelineLayout(m->device, m->pipelineLayout, nullptr);
             if (m->setLayout)

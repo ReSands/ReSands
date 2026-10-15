@@ -37,6 +37,7 @@ namespace pop_native
         int lightmapImage = -1; // -1: no lightmap
         AlphaMode alphaMode = AlphaMode::Opaque;
         float cutoff = 0.5f;
+        bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
     };
 
     struct Mesh
@@ -67,6 +68,8 @@ namespace pop_native
     {
         bool linearFilter = true; // bilinear texture filtering (the PS2's usual setting) or nearest
         float nearW = 0.05f;      // near plane in clip w (view depth)
+        int cull = 0;             // experiment: 0 none, 1 cull clockwise, 2 cull counter-clockwise (all draws)
+        bool cullClockwise = true; // single-sided materials: which screen winding is the back face
         float clearColour[4] = {24 / 255.0f, 24 / 255.0f, 32 / 255.0f, 1.0f};
         // windowed use: the instance extensions the window system needs, and a callback that creates
         // the window's surface for the instance (returns a VkSurfaceKHR handle, 0 on failure)
