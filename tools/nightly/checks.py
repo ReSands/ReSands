@@ -95,7 +95,7 @@ def mesh_pack(key):
     except Exception as e:  # noqa: BLE001
         res['error'] = 'unpack: %s: %s' % (type(e).__name__, str(e)[:200])
         return res
-    geo = [k for k, (o, s) in recs.items() if s >= 8 and struct.unpack_from('<I', pack, o)[0] == 1 and 0 < struct.unpack_from('<I', pack, o + 4)[0] < 16]
+    geo = [k for k, (o, s) in recs.items() if s >= 8 and struct.unpack_from('<II', pack, o) == (1, 7)]  # geometric objects (see jade2gltf)
     res.update({'records': len(recs), 'geometry': len(geo)})
     # exact-size parse of every geometry record
     import c2py_rt

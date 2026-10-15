@@ -241,7 +241,7 @@ def main(argv):
         load_funcs(rt0, argv[0])
         ok = bad = err = 0
         for key, (off, size) in sorted(jadetex.records(pack).items()):
-            if size < 8 or struct.unpack_from('<I', pack, off)[0] != 1 or not 0 < struct.unpack_from('<I', pack, off + 4)[0] < 16:
+            if size < 8 or struct.unpack_from('<II', pack, off) != (1, 7):  # geometric object (GRO type 7); see jade2gltf
                 continue
             try:
                 end, _ = parse_record(argv[0], pack, off, size, rt0.funcs)

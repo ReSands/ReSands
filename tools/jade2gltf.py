@@ -60,7 +60,9 @@ def capture_elements(pack, errors=None):
 
     rt0.funcs['ReadElement__13CJMeshElementFPPc'] = wrap
     for key, (off, size) in sorted(jadetex.records(pack).items()):
-        if size < 8 or struct.unpack_from('<I', pack, off)[0] != 1 or not 0 < struct.unpack_from('<I', pack, off + 4)[0] < 16:
+        # geometry records start (1, 7): 7 = geometric object, the type passed to GEO_p_CreateFromBuffer; the
+        # only other value seen (3, record 32002bcf in ff02b54d, 92 bytes) is a different object kind
+        if size < 8 or struct.unpack_from('<II', pack, off) != (1, 7):
             continue
         cur['off'], cur['found'] = off, []
         rt = c2py_rt.Runtime()

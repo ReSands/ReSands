@@ -66,12 +66,57 @@ def strip_noise(src, buf='puStack_f0'):
             continue
         if re.search(r'&\s*' + name + r'\b', text):
             cell = name + '__a'
+            if PTR.get(name, 1) != 1:
+                # scale its pointer arithmetic now: in the cell form it is a plain 32-bit value
+                # (GEO_SKN_Load's `puStack_18 = puStack_18 + 1` steps 4 bytes)
+                text = '\n'.join(scale_pointer_terms(l, name, PTR[name]) for l in text.split('\n'))
             text = re.sub(r'&\s*' + name + r'\b', cell, text)
             ctype = 'undefined4' if base.endswith('*') else base  # a pointer cell holds 32 bits
             text = re.sub(r'(?<![\w.])' + name + r'\b(?!__a)', f'(*({ctype} *){cell})', text)
             PTR.pop(name, None)
             ARRAYS[cell] = 8
     return text
+
+
+def term_end(e, j):
+    """operand_end, but a cast group `(T *)` / `*(T *)` also takes the operand it applies to."""
+    k = operand_end(e, j)
+    if re.fullmatch(r'\s*\**\s*\(\s*(' + TYPES + r')\s*\**\s*\)\s*', e[j:k]):
+        return term_end(e, k)
+    return k
+
+
+def scale_pointer_terms(e, name, size):
+    """`name + term` / `name - term` -> `name + size * (term)` for a typed pointer `name`. The term is
+    a whole multiplicative operand (C precedence): a negative literal, a dereference, a call, a
+    parenthesised group, optionally chained with * and / (e.g. `p + -2`, `p + *(int *)(q + 4) * 2`).
+    Not when `name` is itself dereferenced (`*p + 1` adds to the value) or cast (`(int)p + 2`)."""
+    out, i = '', 0
+    # not after `)`: in C that is a cast, e.g. `(int)p + 2` adds bytes
+    pat = re.compile(r'(?<![\w.*)])(?<!\*\s)(?<!\)\s)' + name + r'\s*([+-])\s*')
+    while True:
+        m = pat.search(e, i)
+        if not m or m.end() >= len(e):
+            return out + e[i:]
+        if e.startswith(f'{size} * (', m.end()):  # already scaled (ptr_arith runs more than once)
+            out += e[i:m.end()]
+            i = m.end()
+            continue
+        k = term_end(e, m.end())
+        if k == m.end():  # no operand recognised: leave as is
+            out += e[i:m.end()]
+            i = m.end()
+            continue
+        while True:  # extend over * and / (binding tighter than + and -)
+            n = re.match(r'\s*[*/]\s*', e[k:])
+            if not n:
+                break
+            k2 = term_end(e, k + n.end())
+            if k2 == k + n.end():
+                break
+            k = k2
+        out += e[i:m.start()] + f'{name} {m.group(1)} {size} * ({e[m.end():k].strip()})'
+        i = k
 
 
 def ptr_arith(e):
@@ -81,7 +126,7 @@ def ptr_arith(e):
     for name, size in PTR.items():
         w = size * 8
         if size != 1:  # scale + first, then indexing (which scales itself)
-            e = re.sub(r'(?<![\w.*])(?<!\*\s)' + name + r'\s*([+-])\s*(\w+)(?!\s*\*)', lambda m: f'{name} {m.group(1)} {size} * ({m.group(2)})', e)
+            e = scale_pointer_terms(e, name, size)
         e = re.sub(r'\b' + name + r'\[([^\]]+)\]', lambda m: f'rt.r{w}({name} + {size} * ({m.group(1)}))', e)
         e = re.sub(r'(?:(?<=^)|(?<=[(,=!<>&|+\-~ ]))\*\s*' + name + r'\b', f'rt.r{w}({name})', e)
     for name in ARRAYS:
@@ -171,7 +216,11 @@ def expr(e, buf):
             inner = e[j:k].strip()
             if inner.startswith('(') and split_balanced(inner, 0) == len(inner):
                 inner = inner[1:-1]
-            out += f'rt.r{WIDTH.get(m.group(1), 32)}({expr(inner, buf)})'
+            w = WIDTH.get(m.group(1), 32)
+            load = f'rt.r{w}({expr(inner, buf)})'
+            # C reads through a signed type give a signed value (e.g. `*(int *)p == -0x3f21dffe`, the
+            # 0xC0DE2002 marker test in GEO_p_CreateFromBuffer, was never true on an unsigned read)
+            out += f'rt.s{w}({load})' if CASTFN.get(m.group(1), 'u').startswith('s') else load
             i = k
             continue
         out += e[i]
