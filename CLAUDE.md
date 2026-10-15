@@ -159,7 +159,7 @@ Build requirements: CMake 3.20+, C++20, mainly tested with MSVC, SSE4/AVX host s
 ## RTX Remix (fast path to DLSS / path tracing, test first)
 
 - RTX Remix targets DirectX 8 and early DirectX 9 games with a fixed-function pipeline (DX9.0c shader-heavy games usually do not work; OpenGL and non-PC games do not work without a wrapper). Needs an NVIDIA RTX GPU, Windows.
-- The PC version of Sands of Time is a DirectX game, so it might be compatible. No existing Remix project for it found. Compatibility unknown; test it.
+- The PC version of Sands of Time is a DirectX game, so it might be compatible. Stock Remix does not work (shader-based D3D9). **kaminoer/pop-sot-rtx** (found 15 Oct 2026; v0.2, Apr 2026) is a closed-source `d3d9.dll` proxy that converts the game's shader draws to fixed function so Remix works (video of the Hall of Learning path-traced). Supports the English Ubisoft Connect version only (our GOG copy untested). Repo holds only README + `rtx.conf` (PC texture hashes, not useful for the PS2 path). Its known issues (water placeholder, time-power overlays, fog off, multiplicative particles skipped, VS-driven particles flattened, Remix skeletons without hierarchy) match our Stage D hard parts. Option for step 17: a D3D9 fixed-function back end fed by our native draw list could drive Remix on the recomp.
 - GOG's wrapper may interfere with Remix. Test with the original exe/DLLs too.
 - Check the ModDB Remix compatibility table before starting.
 - Remix needs upgraded PBR materials to look right; plain old textures tend to look uniformly shiny or matte.
