@@ -85,7 +85,12 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
   linear quantiser, DC precision 0, IVF 0.
 - So the frames are plain IDEC streams (macroblock data straight away, no flag byte); FFmpeg's `ipu`
   decoder wants Sony's `.ipu` file layout (flag byte, a marker bit per macroblock), which is why it
-  failed. Decision for 1.0: use this IPU model (adapted) as the decoder, as already planned.
+  failed. For 1.0 (native decoder, no IPU emulation): the IDEC decoding core of this model (VLC,
+  dequantise, IDCT, colour conversion) can serve as a plain frame decoder called from the
+  `FullMovie` hooks, without emulating IPU registers, FIFOs or DMA. To be decided with the user.
+- Whole-movie check (15 Oct): UBISOFT decoded with audio (track 0 = the chunk's PCM straight after
+  its video, 16-byte aligned; 5.8725 s of audio vs 5.8725 s of video, music-like signal) ->
+  `game/analysis/movie/stage2/ubisoft_decoded.mp4`.
 - Frame count = index count (the last chunk is short); chunk base = header end rounded up to 64.
 - Next: stage 2 reference (`tools/llm_port/movie/` style: frame bytes + audio slices per chunk), then
   the decoder glue behind `FullMovie` with this IPU code.
