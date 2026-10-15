@@ -1147,7 +1147,7 @@ namespace
             }
         std::fprintf(out, "\n");
     }
-    // POP_FRAMECAP=<file>:<n>: during the n-th Display3DElements call, every
+    // POP_FRAMECAP=<file>:<n>: from the n-th Display3DElements call to the frame's DMA kick, every
     // CJMeshElement::Display(element, matrix index, pass) (0x4C8A80): element address, pass,
     // matrix index, the element's bbox (element +0x00, 8 floats, as in the pack's element record)
     // and its world matrix (matrix pool base at scratchpad 0x70000260, 0x40 bytes per index).
@@ -1282,10 +1282,16 @@ namespace
         g_dmaCap = nullptr;
         std::fprintf(stderr, "[pop:dmacap] chain from %x captured, %zu bytes\n", start, total);
     }
+    void finishFrameCapture(uint8_t *rdram);
     void kickCap(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // a0 = graphics system; the chain is closed inside the kick, so dump after it returns
+        if (g_capturing)
+            finishFrameCapture(rdram);
+        const uint32_t ra = getRegU32(ctx, 31);
         g_origKick(rdram, ctx, runtime);
+        if (ctx->pc != ra)  // see finishFrameCapture: the kick was interrupted by a scheduler unwind
+            std::fprintf(stderr, "[pop:dmacap] kick returned early (pc %x, ra %x); chain may be incomplete\n", ctx->pc, ra);
         if (g_dmaCapArmed > 0 && g_chainStart)
         {
             // one file per kick: <file>.<capture>.<kick>
@@ -1294,6 +1300,61 @@ namespace
             if ((g_dmaCap = std::fopen(path.c_str(), "wb")) != nullptr)
                 dumpChain(rdram, g_chainStart);
         }
+    }
+
+    // Ends a POP_FRAMECAP capture. Called at the frame's DMA kick, not when the Display3DElements
+    // wrapper returns: the SotC runtime's dispatcher unwinds the C++ stack to the EE scheduler at
+    // checkpoints and resumes the guest function later from the scheduler, so a wrapped call can
+    // "return" in the middle of the frame (the first captures stopped after ~12 of ~770 draws).
+    void finishFrameCapture(uint8_t *rdram)
+    {
+        // the frame's matrix pool (base pointer at scratchpad 0x70000260, 0x40 bytes each): world
+        // matrices of everything drawn, whatever list drew it; first 2048 entries
+        const uint32_t pool = guestU32(rdram, 0x70000260u);
+        for (uint32_t i = 0; pool && i < 2048u; ++i)
+        {
+            std::fprintf(g_frameCap, "M %u", i);
+            for (uint32_t k = 0; k < 16; ++k)
+            {
+                const uint32_t bits = guestU32(rdram, pool + i * 0x40u + 4u * k);
+                float f;
+                std::memcpy(&f, &bits, 4);
+                std::fprintf(g_frameCap, " %.9g", f);
+            }
+            std::fprintf(g_frameCap, "\n");
+        }
+        // texture manager slots (manager at scratchpad 0x70000050, +0 slot array, 0x50 bytes per
+        // index): "T index gsaddr(+0x18) w,h(+4) bpp(+0x1C) dataptr(+0) first 32 bytes of data"
+        const uint32_t slots = guestU32(rdram, 0x70000050u);
+        std::fprintf(g_frameCap, "S slots %x keys %zu\n", slots, g_textureKeys.size());
+        for (const auto &[ix, key] : g_textureKeys)
+            std::fprintf(g_frameCap, "K %u %08x\n", ix, key);
+        for (uint32_t ix = 0; slots && ix < 1024u; ++ix)
+        {
+            const uint32_t sl = slots + ix * 0x50u, data = guestU32(rdram, sl);
+            if (!data && !(guestU32(rdram, sl + 0x18u) & 0x3FFFu))
+                continue;
+            std::fprintf(g_frameCap, "T %u %x %x %x %x", ix, guestU32(rdram, sl + 0x18u) & 0x3FFFu, guestU32(rdram, sl + 4u),
+                         guestU32(rdram, sl + 0x1Cu), data);
+            for (uint32_t k = 0; k < 8u; ++k)
+                std::fprintf(g_frameCap, " %08x", guestU32(rdram, data + 4u * k));
+            std::fprintf(g_frameCap, "\n");
+        }
+        g_capturing = false;
+        if (!g_dmaCapPath.empty())
+        {
+            g_dmaCapArmed = 8;
+            ++g_dmaCapSerial;
+        }
+        std::fflush(g_frameCap);
+        std::fprintf(g_frameCap, "== end of capture %u\n", g_dmaCapSerial);
+        std::fflush(g_frameCap);
+        if (g_frameCapAt != 0)
+        {
+            std::fclose(g_frameCap);
+            g_frameCap = nullptr;
+        }
+        std::fprintf(stderr, "[pop:framecap] frame captured (%u)\n", g_dmaCapSerial);
     }
 
     void display3DCam(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1309,9 +1370,11 @@ namespace
             if (triggered)
                 std::filesystem::remove(trigger, ec);
         }
-        g_capturing = g_frameCap && (calls == g_frameCapAt || triggered);
-        if (g_capturing)
+        if (!g_capturing && g_frameCap && (calls == g_frameCapAt || triggered))
+        {
+            g_capturing = true;  // until the frame's kick (finishFrameCapture)
             logCamera(rdram, "capture", calls);
+        }
         const bool log = (calls++ % 15u) == 0u;
         if (log)
             logCamera(rdram, "before", calls);
@@ -1320,56 +1383,6 @@ namespace
         {
             logCamera(rdram, "after", calls);
             std::fflush(g_camLog);
-        }
-        if (g_capturing)
-        {
-            // the frame's matrix pool (base pointer at scratchpad 0x70000260, 0x40 bytes each): world
-            // matrices of everything drawn, whatever list drew it; first 2048 entries
-            const uint32_t pool = guestU32(rdram, 0x70000260u);
-            for (uint32_t i = 0; pool && i < 2048u; ++i)
-            {
-                std::fprintf(g_frameCap, "M %u", i);
-                for (uint32_t k = 0; k < 16; ++k)
-                {
-                    const uint32_t bits = guestU32(rdram, pool + i * 0x40u + 4u * k);
-                    float f;
-                    std::memcpy(&f, &bits, 4);
-                    std::fprintf(g_frameCap, " %.9g", f);
-                }
-                std::fprintf(g_frameCap, "\n");
-            }
-            // texture manager slots (manager at scratchpad 0x70000050, +0 slot array, 0x50 bytes per
-            // index): "T index gsaddr(+0x18) w,h(+4) bpp(+0x1C) dataptr(+0) first 32 bytes of data"
-            const uint32_t slots = guestU32(rdram, 0x70000050u);
-            std::fprintf(g_frameCap, "S slots %x keys %zu\n", slots, g_textureKeys.size());
-            for (const auto &[ix, key] : g_textureKeys)
-                std::fprintf(g_frameCap, "K %u %08x\n", ix, key);
-            for (uint32_t ix = 0; slots && ix < 1024u; ++ix)
-            {
-                const uint32_t sl = slots + ix * 0x50u, data = guestU32(rdram, sl);
-                if (!data && !(guestU32(rdram, sl + 0x18u) & 0x3FFFu))
-                    continue;
-                std::fprintf(g_frameCap, "T %u %x %x %x %x", ix, guestU32(rdram, sl + 0x18u) & 0x3FFFu, guestU32(rdram, sl + 4u),
-                             guestU32(rdram, sl + 0x1Cu), data);
-                for (uint32_t k = 0; k < 8u; ++k)
-                    std::fprintf(g_frameCap, " %08x", guestU32(rdram, data + 4u * k));
-                std::fprintf(g_frameCap, "\n");
-            }
-            g_capturing = false;
-            if (!g_dmaCapPath.empty())
-            {
-                g_dmaCapArmed = 8;
-                ++g_dmaCapSerial;
-            }
-            std::fflush(g_frameCap);
-            std::fprintf(g_frameCap, "== end of capture %u\n", g_dmaCapSerial);
-            std::fflush(g_frameCap);
-            if (g_frameCapAt != 0)
-            {
-                std::fclose(g_frameCap);
-                g_frameCap = nullptr;
-            }
-            std::fprintf(stderr, "[pop:framecap] frame captured (%u)\n", g_dmaCapSerial);
         }
     }
 
@@ -2349,16 +2362,16 @@ namespace
             if (g_frameCap && g_origMeshRefDisplayCap)
                 runtime.replaceFunction(0x004C7B40u, meshRefDisplayCap);
             installCapProbes(runtime, std::make_index_sequence<std::size(kCapProbe)>{});
+            // the kick ends each capture (finishFrameCapture); POP_DMACAP also dumps the chain there
+            g_origKick = runtime.lookupFunction(0x004A2C80u);
+            if (g_frameCap && g_origKick)
+                runtime.replaceFunction(0x004A2C80u, kickCap);
             if (const char *dv = std::getenv("POP_DMACAP"); dv && *dv)
             {
                 g_dmaCapPath = dv;
                 g_origClosePacket = runtime.lookupFunction(0x004A1800u);
-                g_origKick = runtime.lookupFunction(0x004A2C80u);
-                if (g_origClosePacket && g_origKick)
-                {
+                if (g_origClosePacket)
                     runtime.replaceFunction(0x004A1800u, closePacketCap);
-                    runtime.replaceFunction(0x004A2C80u, kickCap);
-                }
             }
             std::fprintf(stderr, "[pop:framecap] hooks: Display %s, Ref Display %s\n", g_origMeshDisplayCap ? "yes" : "no", g_origMeshRefDisplayCap ? "yes" : "no");
         }
