@@ -101,6 +101,29 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
 - Next: stage 2 reference (`tools/llm_port/movie/` style: frame bytes + audio slices per chunk), then
   the decoder glue behind `FullMovie` with this IPU code.
 
+## Native player (15 Oct)
+- **Exact frame end:** the data's last 1 bit belongs to the final end-of-block code (`10` or
+  `0110`), whose last 0 bit follows it; so after stripping the zero padding, if the last byte's
+  lowest bit is 1 the next (zero) byte is data. With that rule FFmpeg decodes **all 22,666 frames
+  of all 11 movies** with no errors, and 911 sampled frames match the independent IPU model (mean
+  0.1-0.33/255, largest 14: IDCT/colour rounding).
+- Audio: each chunk's slices follow its video (16-byte aligned), track after track, then 0 or 32
+  bytes of padding at the chunk's end (byte accounting exact in every chunk checked). Track =
+  language (`MovieSetSoundTrack`), in the same order as the Bink versions' tracks (CINE_010, 60 s of
+  loudness envelope: PS2 track t vs PC Bink track t correlates 0.96-0.97, other tracks ~0.7).
+- `MOVIEPS2.BIG` = the 39 vision movies (`vis_111.int` ... `vis_821.int`, 640x352, 1 PCM track),
+  indexed by `MOVIEPS2.FAT` (32-byte entries: index, offset, size, 0, name length, name); each
+  entry is a complete movie file, its data start aligned from the movie's own start. The player
+  finds names there too. `DOLBY.INT` exists on no version: the game asks for it and skips it.
+- In game (Mac play build, 15 Oct): UBISOFT, INTRO, POP_IN, POP_OUT play from the disc files, and
+  vis_112 from the archive (forced), no decode errors.
+- `tools/overrides/pop_movies.cpp`: `MoviePlayer` base (frame queue, audio ring, decode thread),
+  sources `Ps2MoviePlayer` (disc `.INT`, FFmpeg `ipu` decoder, PCM) and `BinkPlayer` (other
+  versions). Default source PS2 (`POP_MOVIE_SOURCE=bink` prefers Bink; each is the other's
+  fallback); `POP_PS2_MOVIE_DIR` (default: current directory). No IPU emulation.
+- The flag byte is fixed at 0 (right for every disc movie); the game's own settings
+  (`VID_fn_vSetCTRLValue`: DCPR, AS, IVF, QST, MP1) map onto FFmpeg's flag bits if ever needed.
+
 ## Stage 1 kit (ready)
 `tools/llm_port/movie/`: `movie.h` (fixed API), `reference.py` (writes `game/analysis/movie/tests/`:
 first 1 MB of each movie + a 0x60-byte truncated copy that must give false), `driver.cpp`,

@@ -1,17 +1,22 @@
-// Movie playback for Prince of Persia: The Sands of Time (SLUS_207.43) from the Bink files of
-// another owned version (Xbox, PC/GOG or GameCube), decoded with FFmpeg. The PS2's own movies need
-// the IPU, which the runtime does not emulate; without Bink files the old behaviour stays
-// (the movie is reported missing and skipped).
+// Movie playback for Prince of Persia: The Sands of Time (SLUS_207.43), natively, behind the game's
+// own player. Two sources, both decoded with FFmpeg:
+//  - the PS2 disc's own movies (*.INT): IPU frames (MPEG-2 intra macroblocks) decoded by FFmpeg's
+//    `ipu` decoder, with the movie's own PCM sound. No IPU emulation. Default.
+//  - optionally, the Bink files of another owned version (Xbox, PC/GOG or GameCube).
+// Without a usable file the old behaviour stays (the movie is reported missing and skipped).
 //
 // The game plays movies through VIDEO_MainCall (0x4378C0), which calls small wrappers around
 // its FullMovie object. Those wrappers are replaced here; everything above them (button skip,
 // looping, sound pause, centring, drawing with PS2_DisplayVideo) is the game's own code.
 // PS2_DisplayVideo uploads the frame from a guest buffer of 16x16-pixel RGBA blocks.
 //
-// Environment: POP_MOVIES=0 turns this off. POP_MOVIE_DIRS lists folders to search, separated
-// by ';' (default: the Xbox, GOG and GameCube folders relative to game/ps2/disc, in that order:
-// the Xbox files have the highest bitrate and 5.1 sound). Debug: POP_MOVIE_FORCE=<file> plays
-// that file for every movie; POP_MOVIE_TEST=1 draws a coordinate test pattern.
+// Environment: POP_MOVIES=0 turns this off. POP_MOVIE_SOURCE=ps2 (default) or bink picks the
+// preferred source (the other is the fallback). POP_PS2_MOVIE_DIR is the folder with the disc's
+// .INT files (default: the current directory, game/ps2/disc). POP_MOVIE_DIRS lists folders to
+// search for Bink files, separated by ';' (default: the Xbox, GOG and GameCube folders relative
+// to game/ps2/disc, in that order: the Xbox files have the highest bitrate and 5.1 sound).
+// Debug: POP_MOVIE_FORCE=<file or archive movie name> plays it for every movie; POP_MOVIE_TEST=1 draws a
+// coordinate test pattern.
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -39,6 +44,7 @@ extern "C"
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -109,12 +115,158 @@ namespace
         std::vector<uint8_t> rgba;
     };
 
-    // Decodes one Bink file on its own thread: RGBA frames into a queue, stereo s16 into a ring
-    // that the movie audio stream drains.
-    class BinkPlayer
+    // Decodes one movie on its own thread: RGBA frames into a queue, stereo s16 into a ring
+    // that the movie audio stream drains. Sources (Bink, PS2) supply the decode loop.
+    class MoviePlayer
     {
     public:
-        ~BinkPlayer() { close(); }
+        virtual ~MoviePlayer() = default;
+
+        // Stops and joins the decode thread; derived destructors call it before freeing.
+        void stop()
+        {
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_stop = true;
+            }
+            m_cv.notify_all();
+            if (m_thread.joinable())
+                m_thread.join();
+        }
+
+        uint32_t frameCount() const { return m_frames; }
+        double fps() const { return m_fps; }
+        virtual std::string audioDescription() const = 0;
+
+        // Waits (briefly) for frame `number` and returns it, dropping older ones.
+        bool takeFrame(uint32_t number, Frame &out)
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+            for (;;)
+            {
+                while (!m_queue.empty() && m_queue.front().number < number)
+                    m_queue.pop_front();
+                m_cv.notify_all();
+                if (!m_queue.empty())
+                {
+                    out = std::move(m_queue.front());
+                    m_queue.pop_front();
+                    m_cv.notify_all();
+                    return true;
+                }
+                if (m_eof || m_cv.wait_until(lock, deadline) == std::cv_status::timeout)
+                    return false;
+            }
+        }
+
+        // Called on the audio thread.
+        void readAudio(int16_t *out, size_t samples)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const size_t n = std::min(samples, m_ringQueued);
+            for (size_t i = 0; i < n; ++i)
+                out[i] = m_ring[(m_ringRead + i) % kAudioRing];
+            m_ringRead = (m_ringRead + n) % kAudioRing;
+            m_ringQueued -= n;
+            std::fill(out + n, out + samples, int16_t{0});
+            m_cv.notify_all();
+        }
+
+    protected:
+        void startThread()
+        {
+            m_thread = std::thread([this] {
+                decodeLoop();
+                {
+                    std::lock_guard<std::mutex> lock(m_mutex);
+                    m_eof = true;
+                }
+                m_cv.notify_all();
+            });
+        }
+
+        virtual void decodeLoop() = 0;
+
+        // Blocks while the frame queue is full or the sound ring has less than `room` samples
+        // free; false once stopping.
+        bool waitForRoom(size_t room = kSampleRate * 2)
+        {
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_cv.wait(lock, [this, room] {
+                return m_stop || (m_queue.size() < kQueuedFrames && m_ringQueued + room <= kAudioRing);
+            });
+            return !m_stop;
+        }
+
+        // Converts a decoded picture to RGBA at the output size and queues it.
+        void pushVideo(const AVFrame *frame, uint32_t number)
+        {
+            m_sws = sws_getCachedContext(m_sws, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
+                                         m_outWidth, m_pictureHeight, AV_PIX_FMT_RGBA, SWS_BILINEAR,
+                                         nullptr, nullptr, nullptr);
+            if (!m_sws)
+                return;
+            Frame out;
+            out.number = number;
+            out.rgba.resize(static_cast<size_t>(m_outWidth) * m_pictureHeight * 4);
+            uint8_t *dst[1] = {out.rgba.data()};
+            const int stride[1] = {m_outWidth * 4};
+            sws_scale(m_sws, frame->data, frame->linesize, 0, frame->height, dst, stride);
+            for (size_t i = 3; i < out.rgba.size(); i += 4)
+                out.rgba[i] = 0x80; // GS alpha 1.0
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_queue.push_back(std::move(out));
+            m_cv.notify_all();
+        }
+
+        // Queues interleaved stereo s16 samples (as many as fit).
+        void pushPcm(const int16_t *pcm, size_t samples)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const size_t n = std::min(samples, kAudioRing - m_ringQueued);
+            for (size_t i = 0; i < n; ++i)
+                m_ring[(m_ringRead + m_ringQueued + i) % kAudioRing] = pcm[i];
+            m_ringQueued += n;
+        }
+
+        void freeScaler()
+        {
+            sws_freeContext(m_sws);
+            m_sws = nullptr;
+        }
+
+        int m_outWidth = 0, m_pictureHeight = 0;
+        double m_fps = 29.97;
+        uint32_t m_frames = 0;
+
+    private:
+        SwsContext *m_sws = nullptr;
+        std::thread m_thread;
+        std::mutex m_mutex;
+        std::condition_variable m_cv;
+        bool m_stop = false, m_eof = false;
+        std::deque<Frame> m_queue;
+        std::vector<int16_t> m_ring = std::vector<int16_t>(kAudioRing);
+        size_t m_ringRead = 0, m_ringQueued = 0;
+    };
+
+    // A Bink file of another version.
+    class BinkPlayer : public MoviePlayer
+    {
+    public:
+        ~BinkPlayer() override
+        {
+            stop();
+            freeScaler();
+            for (AudioTrack &t : m_tracks)
+            {
+                swr_free(&t.swr);
+                avcodec_free_context(&t.codec);
+            }
+            avcodec_free_context(&m_videoCodec);
+            avformat_close_input(&m_fmt);
+        }
 
         bool open(const std::string &path, int track, int outWidth, int pictureHeight)
         {
@@ -163,70 +315,11 @@ namespace
             m_outWidth = outWidth;
             m_pictureHeight = pictureHeight;
 
-            m_thread = std::thread([this] { decodeLoop(); });
+            startThread();
             return m_frames > 0;
         }
 
-        void close()
-        {
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_stop = true;
-            }
-            m_cv.notify_all();
-            if (m_thread.joinable())
-                m_thread.join();
-            sws_freeContext(m_sws);
-            m_sws = nullptr;
-            for (AudioTrack &t : m_tracks)
-            {
-                swr_free(&t.swr);
-                avcodec_free_context(&t.codec);
-            }
-            m_tracks.clear();
-            avcodec_free_context(&m_videoCodec);
-            avformat_close_input(&m_fmt);
-        }
-
-        uint32_t frameCount() const { return m_frames; }
-        double fps() const { return m_fps; }
-
-        // Waits (briefly) for frame `number` and returns it, dropping older ones.
-        bool takeFrame(uint32_t number, Frame &out)
-        {
-            std::unique_lock<std::mutex> lock(m_mutex);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
-            for (;;)
-            {
-                while (!m_queue.empty() && m_queue.front().number < number)
-                    m_queue.pop_front();
-                m_cv.notify_all();
-                if (!m_queue.empty())
-                {
-                    out = std::move(m_queue.front());
-                    m_queue.pop_front();
-                    m_cv.notify_all();
-                    return true;
-                }
-                if (m_eof || m_cv.wait_until(lock, deadline) == std::cv_status::timeout)
-                    return false;
-            }
-        }
-
-        // Called on the audio thread.
-        void readAudio(int16_t *out, size_t samples)
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            const size_t n = std::min(samples, m_ringQueued);
-            for (size_t i = 0; i < n; ++i)
-                out[i] = m_ring[(m_ringRead + i) % kAudioRing];
-            m_ringRead = (m_ringRead + n) % kAudioRing;
-            m_ringQueued -= n;
-            std::fill(out + n, out + samples, int16_t{0});
-            m_cv.notify_all();
-        }
-
-        std::string audioDescription() const
+        std::string audioDescription() const override
         {
             if (m_tracks.empty())
                 return "no audio";
@@ -292,22 +385,14 @@ namespace
             return ctx && avcodec_parameters_to_context(ctx, par) >= 0 && avcodec_open2(ctx, codec, nullptr) >= 0;
         }
 
-        void decodeLoop()
+        void decodeLoop() override
         {
             AVPacket *pkt = av_packet_alloc();
             AVFrame *frame = av_frame_alloc();
             uint32_t number = 0;
             bool flushed = false;
-            while (!flushed)
+            while (!flushed && waitForRoom())
             {
-                {
-                    std::unique_lock<std::mutex> lock(m_mutex);
-                    m_cv.wait(lock, [this] {
-                        return m_stop || (m_queue.size() < kQueuedFrames && m_ringQueued < kAudioRing - kSampleRate * 2);
-                    });
-                    if (m_stop)
-                        break;
-                }
                 const bool eof = av_read_frame(m_fmt, pkt) < 0;
                 if (eof)
                 {
@@ -330,33 +415,8 @@ namespace
                 while (avcodec_receive_frame(m_videoCodec, frame) >= 0)
                     pushVideo(frame, ++number);
             }
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_eof = true;
-            }
-            m_cv.notify_all();
             av_frame_free(&frame);
             av_packet_free(&pkt);
-        }
-
-        void pushVideo(const AVFrame *frame, uint32_t number)
-        {
-            m_sws = sws_getCachedContext(m_sws, frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
-                                         m_outWidth, m_pictureHeight, AV_PIX_FMT_RGBA, SWS_BILINEAR,
-                                         nullptr, nullptr, nullptr);
-            if (!m_sws)
-                return;
-            Frame out;
-            out.number = number;
-            out.rgba.resize(static_cast<size_t>(m_outWidth) * m_pictureHeight * 4);
-            uint8_t *dst[1] = {out.rgba.data()};
-            const int stride[1] = {m_outWidth * 4};
-            sws_scale(m_sws, frame->data, frame->linesize, 0, frame->height, dst, stride);
-            for (size_t i = 3; i < out.rgba.size(); i += 4)
-                out.rgba[i] = 0x80; // GS alpha 1.0
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_queue.push_back(std::move(out));
-            m_cv.notify_all();
         }
 
         AudioTrack *trackFor(int stream)
@@ -402,31 +462,230 @@ namespace
             }
             for (AudioTrack &t : m_tracks)
                 t.fifo.erase(t.fifo.begin(), t.fifo.begin() + static_cast<std::ptrdiff_t>(samples * t.channels));
-
-            std::lock_guard<std::mutex> lock(m_mutex);
-            const size_t n = std::min(mixed.size(), kAudioRing - m_ringQueued);
-            for (size_t i = 0; i < n; ++i)
-                m_ring[(m_ringRead + m_ringQueued + i) % kAudioRing] = mixed[i];
-            m_ringQueued += n;
+            pushPcm(mixed.data(), mixed.size());
         }
 
         AVFormatContext *m_fmt = nullptr;
         AVCodecContext *m_videoCodec = nullptr;
-        SwsContext *m_sws = nullptr;
         std::vector<AudioTrack> m_tracks;
         float m_mixScale = 1.0f;
         int m_video = -1;
-        int m_outWidth = 0, m_pictureHeight = 0;
-        double m_fps = 29.97;
-        uint32_t m_frames = 0;
+    };
 
-        std::thread m_thread;
-        std::mutex m_mutex;
-        std::condition_variable m_cv;
-        bool m_stop = false, m_eof = false;
-        std::deque<Frame> m_queue;
-        std::vector<int16_t> m_ring = std::vector<int16_t>(kAudioRing);
-        size_t m_ringRead = 0, m_ringQueued = 0;
+    // The PS2 disc's own movie files (*.INT). Layout (little-endian), read from the files and the
+    // game's player (FullMovie::mReadHeaders, VID_fn_vDoDecodeMovie):
+    //  0x00 header: +0x04 frame rate (float), +0x08 frames per chunk, +0x0C chunk count N,
+    //       +0x10 sound track count T (languages), +0x18/+0x1C/+0x20/+0x24 sizes of the video
+    //       header, alpha header, each sound header and the subtitles;
+    //  0x28 N + 1 chunk offsets; the video header (version 3, then 0x80 bytes of movie info:
+    //       +0x60/+0x64 width/height in macroblocks, +0x70 frame count; then one offset per
+    //       frame); the alpha header; T sound headers (0x14 bytes: ..., bits 16, channels 2,
+    //       48000 Hz; then N + 1 offsets of each chunk's slice); the subtitles.
+    //  Chunk data starts at the header's end rounded up to 64 bytes (from the movie's start, also
+    //  for the movies packed in MOVIEPS2.BIG). Chunk c holds frames
+    //  c * fpc ... in order, frame k at index[k] - index[c * fpc], each ending with zero padding
+    //  to 16 bytes and the code 00 00 01 B0; then, 16-byte aligned, one slice of raw s16 stereo
+    //  PCM per track, track after track.
+    // A frame is the data of one IPU IDEC command: MPEG-2 intra macroblocks without headers.
+    // FFmpeg's `ipu` decoder takes it as a flag byte (decoding settings; 0 = MPEG-2, zigzag,
+    // linear quantiser, DC precision 8 bits: right for all 11 movies on the disc, every frame
+    // checked against an independent IPU decoder) followed by the macroblock data and the end
+    // code, with exactly the data's bytes before the end code.
+    class Ps2MoviePlayer : public MoviePlayer
+    {
+    public:
+        ~Ps2MoviePlayer() override
+        {
+            stop();
+            freeScaler();
+            av_packet_free(&m_packet);
+            av_frame_free(&m_frame);
+            avcodec_free_context(&m_codec);
+        }
+
+        // Reads the headers of the movie at `offset` in the file and sets up the decoder;
+        // start() begins decoding.
+        bool open(const std::string &path, uint64_t offset, int track)
+        {
+            m_file.open(path, std::ios::binary);
+            m_file.seekg(static_cast<std::streamoff>(offset));
+            uint8_t head[0x28];
+            if (!m_file.read(reinterpret_cast<char *>(head), sizeof head))
+                return false;
+            float fps;
+            std::memcpy(&fps, head + 4, 4);
+            m_framesPerChunk = u32(head + 0x08);
+            const uint32_t chunks = u32(head + 0x0C);
+            m_tracks = u32(head + 0x10);
+            const uint32_t videoSize = u32(head + 0x18), alphaSize = u32(head + 0x1C);
+            const uint32_t soundSize = u32(head + 0x20), subtitleSize = u32(head + 0x24);
+            if (!head[0x14] || !m_framesPerChunk || !chunks || chunks > 100000u || videoSize < 4u + 0x80u ||
+                (m_tracks && soundSize < 0x14u + (chunks + 1u) * 4u) || m_tracks > 16u)
+                return false;
+            const uint64_t tables = (chunks + 1ull) * 4ull + videoSize + alphaSize + uint64_t(soundSize) * m_tracks + subtitleSize;
+            std::vector<uint8_t> t(static_cast<size_t>(tables));
+            if (tables > (64ull << 20) || !m_file.read(reinterpret_cast<char *>(t.data()), static_cast<std::streamsize>(t.size())))
+                return false;
+            m_chunks.resize(chunks + 1u);
+            for (uint32_t i = 0; i <= chunks; ++i)
+                m_chunks[i] = u32(t.data() + i * 4u);
+            const uint8_t *video = t.data() + (chunks + 1u) * 4u;
+            if (u32(video) != 3u)
+                return false;
+            const uint8_t *info = video + 4;
+            m_width = u32(info + 0x60) * 16u;
+            m_height = u32(info + 0x64) * 16u;
+            const uint32_t frames = u32(info + 0x70);
+            if (!m_width || !m_height || m_width > 1024u || m_height > 1024u || !frames ||
+                4u + 0x80u + uint64_t(frames) * 4u > videoSize)
+                return false;
+            m_index.resize(frames);
+            for (uint32_t i = 0; i < frames; ++i)
+                m_index[i] = u32(info + 0x80 + i * 4u);
+            const uint8_t *sound = video + videoSize + alphaSize;
+            m_slices.assign(m_tracks, {});
+            for (uint32_t k = 0; k < m_tracks; ++k)
+            {
+                m_slices[k].resize(chunks + 1u);
+                for (uint32_t i = 0; i <= chunks; ++i)
+                    m_slices[k][i] = u32(sound + uint64_t(k) * soundSize + 0x14 + i * 4u);
+            }
+            m_track = (track >= 0 && static_cast<uint32_t>(track) < m_tracks) ? static_cast<uint32_t>(track) : 0u;
+            m_dataStart = offset + ((sizeof head + tables + 63u) & ~uint64_t{63}); // aligned within the movie
+
+            const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_IPU);
+            if (!codec || !(m_codec = avcodec_alloc_context3(codec)))
+                return false;
+            m_codec->width = static_cast<int>(m_width);
+            m_codec->height = static_cast<int>(m_height);
+            if (avcodec_open2(m_codec, codec, nullptr) < 0 || !(m_packet = av_packet_alloc()) || !(m_frame = av_frame_alloc()))
+                return false;
+
+            m_fps = fps > 1.0f && fps < 120.0f ? fps : 29.97;
+            m_frames = frames;
+            return true;
+        }
+
+        void start(int outWidth, int pictureHeight)
+        {
+            m_outWidth = outWidth;
+            m_pictureHeight = pictureHeight;
+            startThread();
+        }
+
+        uint32_t width() const { return m_width; }
+        uint32_t height() const { return m_height; }
+
+        std::string audioDescription() const override
+        {
+            return m_tracks ? "PCM track " + std::to_string(m_track) + " of " + std::to_string(m_tracks) : "no audio";
+        }
+
+    private:
+        static uint32_t u32(const uint8_t *p)
+        {
+            uint32_t v;
+            std::memcpy(&v, p, 4);
+            return v;
+        }
+
+        static size_t findEndCode(const std::vector<uint8_t> &data, size_t from)
+        {
+            static const uint8_t kEnd[4] = {0x00, 0x00, 0x01, 0xB0};
+            const auto it = std::search(data.begin() + static_cast<std::ptrdiff_t>(from), data.end(), kEnd, kEnd + 4);
+            return it == data.end() ? SIZE_MAX : static_cast<size_t>(it - data.begin());
+        }
+
+        // Decodes one frame's IDEC data [begin, end) (end = its end code) and queues the picture.
+        void decodeFrame(const uint8_t *begin, const uint8_t *end, uint32_t number)
+        {
+            // The data's last 1 bit belongs to the final end-of-block code ("10" or "0110"), whose
+            // last 0 bit follows it: if that 1 is a byte's lowest bit, the next (zero) byte is data.
+            while (end > begin && end[-1] == 0)
+                --end;
+            size_t bytes = static_cast<size_t>(end - begin);
+            if (bytes && (end[-1] & 1u))
+                ++bytes;
+            if (av_new_packet(m_packet, static_cast<int>(1u + bytes + 4u)) < 0)
+                return;
+            m_packet->data[0] = 0x00; // flags: MPEG-2, zigzag, linear quantiser, DC precision 8
+            std::memcpy(m_packet->data + 1, begin, static_cast<size_t>(end - begin));
+            if (bytes > static_cast<size_t>(end - begin))
+                m_packet->data[bytes] = 0;
+            static const uint8_t kEnd[4] = {0x00, 0x00, 0x01, 0xB0};
+            std::memcpy(m_packet->data + 1 + bytes, kEnd, 4);
+            const int sent = avcodec_send_packet(m_codec, m_packet);
+            av_packet_unref(m_packet);
+            if (sent < 0)
+            {
+                if (m_badFrames++ < 5)
+                    std::cerr << "[pop:movie] frame " << number << " does not decode" << std::endl;
+                return;
+            }
+            while (avcodec_receive_frame(m_codec, m_frame) >= 0)
+                pushVideo(m_frame, number);
+        }
+
+        void decodeLoop() override
+        {
+            std::vector<uint8_t> chunk;
+            std::vector<int16_t> pcm;
+            const uint32_t chunks = static_cast<uint32_t>(m_chunks.size() - 1u);
+            for (uint32_t c = 0; c < chunks; ++c)
+            {
+                const uint32_t first = c * m_framesPerChunk;
+                if (first >= m_frames)
+                    break;
+                const uint32_t last = std::min(first + m_framesPerChunk, m_frames); // exclusive
+                if (m_chunks[c + 1] < m_chunks[c])
+                    break;
+                chunk.resize(m_chunks[c + 1] - m_chunks[c]);
+                m_file.clear();
+                m_file.seekg(static_cast<std::streamoff>(m_dataStart + m_chunks[c]));
+                if (!m_file.read(reinterpret_cast<char *>(chunk.data()), static_cast<std::streamsize>(chunk.size())))
+                    break;
+
+                size_t videoEnd = 0;
+                for (uint32_t f = first; f < last; ++f)
+                {
+                    if (!waitForRoom())
+                        return;
+                    const size_t start = m_index[f] - m_index[first];
+                    const size_t end = start < chunk.size() ? findEndCode(chunk, start) : SIZE_MAX;
+                    if (end == SIZE_MAX)
+                        break;
+                    decodeFrame(chunk.data() + start, chunk.data() + end, f + 1u);
+                    videoEnd = end + 4u;
+                }
+
+                if (m_tracks)
+                {
+                    size_t offset = (videoEnd + 15u) & ~size_t{15};
+                    for (uint32_t k = 0; k < m_track; ++k)
+                        offset += m_slices[k][c + 1] - m_slices[k][c];
+                    const size_t bytes = m_slices[m_track][c + 1] - m_slices[m_track][c];
+                    if (offset + bytes <= chunk.size())
+                    {
+                        pcm.resize(bytes / 2u);
+                        std::memcpy(pcm.data(), chunk.data() + offset, pcm.size() * 2u);
+                        if (!waitForRoom(pcm.size()))
+                            return;
+                        pushPcm(pcm.data(), pcm.size());
+                    }
+                }
+            }
+        }
+
+        std::ifstream m_file;
+        uint64_t m_dataStart = 0;
+        uint32_t m_framesPerChunk = 0, m_tracks = 0, m_track = 0;
+        uint32_t m_width = 0, m_height = 0;
+        std::vector<uint32_t> m_chunks, m_index;
+        std::vector<std::vector<uint32_t>> m_slices;
+        AVCodecContext *m_codec = nullptr;
+        AVPacket *m_packet = nullptr;
+        AVFrame *m_frame = nullptr;
+        int m_badFrames = 0;
     };
 
     // One movie at a time (the game has a single FullMovie).
@@ -434,8 +693,10 @@ namespace
     {
         uint32_t object = 0;      // the game's FullMovie
         std::string path;
+        bool ps2 = false;         // the disc's own movie (else a Bink file)
+        uint64_t offset = 0;      // where the PS2 movie starts in its file
         int track = 0;
-        std::unique_ptr<BinkPlayer> player;
+        std::unique_ptr<MoviePlayer> player;
         uint32_t allocation = 0;  // guest block from the game's allocator
         uint32_t output = 0;      // 64-byte aligned frame buffer in it
         uint32_t width = 0, height = 0, pictureHeight = 0; // padded to 16
@@ -446,7 +707,7 @@ namespace
     };
 
     std::mutex g_audioMutex;
-    BinkPlayer *g_audioSource = nullptr; // guarded by g_audioMutex
+    MoviePlayer *g_audioSource = nullptr; // guarded by g_audioMutex
     std::atomic<bool> g_audioStarted{false};
     AudioStream g_stream{};
     bool g_streamReady = false;
@@ -504,6 +765,55 @@ namespace
         return {};
     }
 
+    // The disc's own movie: a file of that name (the name's last path part, without a ";1"
+    // version, case-insensitive) in POP_PS2_MOVIE_DIR (default: the current directory), or an
+    // entry of MOVIEPS2.BIG there. MOVIEPS2.FAT has 32-byte entries: index, offset, size, 0,
+    // name length, name (the vision movies vis_*.int).
+    struct Ps2Movie
+    {
+        std::string path;
+        uint64_t offset = 0;
+    };
+
+    Ps2Movie findPs2(const std::string &guestName)
+    {
+        std::string base = guestName.substr(guestName.find_last_of("\\/:") + 1);
+        base = base.substr(0, base.find(';'));
+        auto lower = [](std::string v) {
+            std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return std::tolower(c); });
+            return v;
+        };
+        base = lower(base);
+        const char *env = std::getenv("POP_PS2_MOVIE_DIR");
+        const std::filesystem::path dir = env && *env ? env : ".";
+        std::error_code ec;
+        std::filesystem::path fat, big;
+        for (const auto &entry : std::filesystem::directory_iterator(dir, ec))
+        {
+            const std::string name = lower(entry.path().filename().string());
+            if (name == base)
+                return {entry.path().string(), 0};
+            if (name == "movieps2.fat")
+                fat = entry.path();
+            else if (name == "movieps2.big")
+                big = entry.path();
+        }
+        if (fat.empty() || big.empty())
+            return {};
+        std::ifstream in(fat, std::ios::binary);
+        uint8_t e[32];
+        while (in.read(reinterpret_cast<char *>(e), sizeof e))
+        {
+            uint32_t offset, length;
+            std::memcpy(&offset, e + 4, 4);
+            std::memcpy(&length, e + 16, 4);
+            const std::string name(reinterpret_cast<const char *>(e + 20), strnlen(reinterpret_cast<const char *>(e + 20), std::min<uint32_t>(length, 12u)));
+            if (lower(name) == base)
+                return {big.string(), offset};
+        }
+        return {};
+    }
+
     void releaseMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (!g_movie)
@@ -524,11 +834,20 @@ namespace
 
     bool startPlayer(Movie &movie)
     {
-        movie.player = std::make_unique<BinkPlayer>();
-        if (!movie.player->open(movie.path, movie.track, static_cast<int>(movie.width), static_cast<int>(movie.pictureHeight)))
+        if (movie.ps2)
         {
-            movie.player.reset();
-            return false;
+            auto player = std::make_unique<Ps2MoviePlayer>();
+            if (!player->open(movie.path, movie.offset, movie.track))
+                return false;
+            player->start(static_cast<int>(movie.width), static_cast<int>(movie.pictureHeight));
+            movie.player = std::move(player);
+        }
+        else
+        {
+            auto player = std::make_unique<BinkPlayer>();
+            if (!player->open(movie.path, movie.track, static_cast<int>(movie.width), static_cast<int>(movie.pictureHeight)))
+                return false;
+            movie.player = std::move(player);
         }
         movie.current = 1;
         movie.shown = 0;
@@ -546,10 +865,31 @@ namespace
         const int language = static_cast<int>(guestU32(rdram, kSoundTrack));
         // Debug: POP_MOVIE_FORCE=<file> plays that file in place of every movie.
         const char *force = std::getenv("POP_MOVIE_FORCE");
-        const std::string path = force && *force ? std::string(force) : findBink(name, language >= 0 && language < 5 ? language : 0);
+        const char *source = std::getenv("POP_MOVIE_SOURCE");
+        const bool preferBink = source && std::string(source) == "bink";
+        const std::string bink = findBink(name, language >= 0 && language < 5 ? language : 0);
+        // POP_MOVIE_FORCE may also name a movie of the disc's archive (e.g. vis_112.int).
+        const bool forceFile = force && *force && std::filesystem::exists(force);
+        const Ps2Movie ps2 = findPs2(force && *force && !forceFile ? std::string(force) : name);
+        std::string path;
+        bool isPs2 = false;
+        if (forceFile)
+        {
+            path = force;
+            char magic[3] = {};
+            std::ifstream(path, std::ios::binary).read(magic, 3);
+            isPs2 = std::memcmp(magic, "BIK", 3) != 0 && std::memcmp(magic, "KB2", 3) != 0; // Bink 1 / 2
+        }
+        else if (!ps2.path.empty() && (!preferBink || bink.empty()))
+        {
+            path = ps2.path;
+            isPs2 = true;
+        }
+        else
+            path = bink;
         if (path.empty())
         {
-            std::cerr << "[pop:movie] no Bink file for " << name << ", skipping" << std::endl;
+            std::cerr << "[pop:movie] no movie file for " << name << ", skipping" << std::endl;
             callOriginal(kMovieLoadMovie, rdram, ctx, runtime);
             return;
         }
@@ -558,16 +898,28 @@ namespace
         auto movie = std::make_unique<Movie>();
         movie->object = object;
         movie->path = path;
+        movie->ps2 = isPs2;
+        movie->offset = isPs2 && !forceFile ? ps2.offset : 0u;
         movie->track = language;
 
-        // The Bink files were made from the PS2 masters: 640 wide for a 640x448 4:3 screen
+        // The PS2 movies are 640x448 (full screen) or 640x352 (letterboxed) for a 640x448 4:3
+        // screen; the Bink files were made from the PS2 masters: 640 wide for a 640x448 4:3 screen
         // (full-screen movies are 640x448, letterboxed cutscenes 640x346), so their pixels have
         // the PS2's shape. Scale them to this screen's width and height in the same proportion.
         const uint32_t screenW = std::max(guestU32(rdram, kScreenWidth), 16u);
         const uint32_t screenH = std::max(guestU32(rdram, kScreenHeight), 16u);
         AVFormatContext *probe = nullptr;
         int srcW = 640, srcH = 346;
-        if (avformat_open_input(&probe, path.c_str(), nullptr, nullptr) >= 0)
+        if (isPs2)
+        {
+            Ps2MoviePlayer header;
+            if (header.open(path, movie->offset, language))
+            {
+                srcW = static_cast<int>(header.width());
+                srcH = static_cast<int>(header.height());
+            }
+        }
+        else if (avformat_open_input(&probe, path.c_str(), nullptr, nullptr) >= 0)
         {
             if (avformat_find_stream_info(probe, nullptr) >= 0)
             {
