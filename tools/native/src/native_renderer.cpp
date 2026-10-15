@@ -37,6 +37,8 @@ namespace pop_native
         {
             float mvp[16];
             float params[4];
+            float fog[4];
+            float fogColour[4];
         };
 
         bool check(VkResult r, const char *what, std::string &error)
@@ -64,6 +66,7 @@ namespace pop_native
     struct Renderer::Impl
     {
         Options options;
+        Fog fog;
         VkInstance instance = VK_NULL_HANDLE;
         VkPhysicalDevice physical = VK_NULL_HANDLE;
         VkPhysicalDeviceProperties props{};
@@ -323,6 +326,14 @@ namespace pop_native
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? 1.0f : 0.0f;
                     push.params[3] = options.nearW;
+                    push.fog[0] = fog.a;
+                    push.fog[1] = fog.b;
+                    push.fog[2] = fog.enabled ? 1.0f : 0.0f;
+                    push.fog[3] = 0.0f;
+                    push.fogColour[0] = fog.colour[0];
+                    push.fogColour[1] = fog.colour[1];
+                    push.fogColour[2] = fog.colour[2];
+                    push.fogColour[3] = 1.0f;
                     VkDescriptorSet set = mat ? materialSets[r.material] : whiteSet;
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &set, 0, nullptr);
                     vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
@@ -603,6 +614,8 @@ namespace pop_native
     }
 
     std::string Renderer::deviceName() const { return m->props.deviceName; }
+
+    void Renderer::setFog(const Fog &fog) { m->fog = fog; }
 
     bool Renderer::init(const Options &options, std::string &error)
     {

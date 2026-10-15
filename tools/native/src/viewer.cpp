@@ -4,6 +4,7 @@
 //
 // Usage: pop_native_view <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]
 //                        [--depth <file>] (raw float32 view depth per pixel) [--add <more.gltf>]...
+//                        [--fog a,b,R,G,B] (GS fog: F = a + b * depth, FOGCOL)
 //        pop_native_view <scene.gltf> <clip file> <screenshot.png> --window [--scale N]
 //          interactive: starts at the game's camera. Mouse drag (left button) looks around, WASD
 //          moves, Q/E down/up, Shift faster, R back to the game camera, 1-4 internal resolution
@@ -310,6 +311,19 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "upload: %s\n", error.c_str());
         return 1;
     }
+    for (int i = 4; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--fog")) // --fog a,b,R,G,B (GS fog constants and FOGCOL 0..255)
+        {
+            Fog fog;
+            float c[3] = {};
+            if (std::sscanf(argv[i + 1], "%f,%f,%f,%f,%f", &fog.a, &fog.b, &c[0], &c[1], &c[2]) == 5)
+            {
+                fog.enabled = true;
+                for (int k = 0; k < 3; ++k)
+                    fog.colour[k] = c[k] / 255.0f;
+                r.setFog(fog);
+            }
+        }
     const auto t1 = std::chrono::steady_clock::now();
     if (windowed)
     {

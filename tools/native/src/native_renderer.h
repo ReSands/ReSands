@@ -46,6 +46,15 @@ namespace pop_native
         int material = -1;
     };
 
+    // GS fog for the frame (from the VU1 constants the game uploads, e.g. VU 0x10 = (255, 0, a, b)):
+    // F = a + b * w clamped to 0..255 (255 = no fog), colour = (F * Cs + (255 - F) * FOGCOL) / 255
+    struct Fog
+    {
+        bool enabled = false;
+        float a = 255.0f, b = 0.0f;
+        float colour[3] = {0, 0, 0}; // FOGCOL, 0..1
+    };
+
     struct Draw
     {
         int mesh;
@@ -86,6 +95,7 @@ namespace pop_native
         // window (aspect kept, bars around it); recreates the swapchain when the window size changes
         bool present(uint32_t windowWidth, uint32_t windowHeight, uint32_t internalWidth, uint32_t internalHeight,
                      const float clip[16], const std::vector<Draw> &draws, std::string &error);
+        void setFog(const Fog &fog);
         std::string deviceName() const;
 
     private:
