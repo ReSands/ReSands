@@ -6,7 +6,7 @@ everything not yet native. Format knowledge comes from the Python reference conv
 
 ## Steps
 
-1. **Engine-level draw list per frame.** Which elements the game draws, with which matrix and
+1. **Engine-level draw list per frame.** (15 Oct: solved for meshes; see CLAUDE.md "Stage B step 1 solved". Left: Ref packet addresses, particles, shadows, VU driver switches.) Which elements the game draws, with which matrix and
    material, read where the game decides it (the draw manager's element lists), not from the DMA
    chain. Open question first: the frame capture saw only 11 `CJMeshElement::Display` calls while
    the DMA chain held 1,440 geometry uploads, so the static world reaches VU1 by another route
