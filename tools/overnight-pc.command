@@ -2,12 +2,23 @@
 # Double-click before bed: sends the latest commits to the gaming PC, asks which local-model job
 # to run, and starts it THERE (tools/windows/llm-job.ps1 via start-job.ps1), then exits. The Mac
 # can be switched off afterwards; the PC must stay on. Morning: tools/overnight-pc.command --status
-# (or ask Claude). The PC must not be running the game or a build when you press this.
+# (or ask Claude). Stop a running job: tools/overnight-pc.command --stop (or double-click
+# tools/stop-pc-job.command). The PC must not be running the game or a build when you press this.
 cd "${0:A:h}/.."
 PC=10.0.0.202
 REMOTE='C:\dev\PoP_Decomp'
 ps() { ssh -o BatchMode=yes -o ConnectTimeout=10 $PC "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(iconv -f UTF-8 -t UTF-16LE <<<"$1" | base64)" 2>&1 | grep -v 'CLIXML\|<Objs\|post-quantum\|store now\|upgraded'; }
 
+if [[ "$1" == "--stop" ]]; then
+    # Ending the scheduled task stops only its PowerShell wrapper; the job's Python processes
+    # (naming, mesh workers) would keep running, so stop them too.
+    ps "Stop-ScheduledTask -TaskName PoP_Decomp_Job -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -match 'PoP_Decomp|multiprocessing' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
+        Start-Sleep 2
+        'job: ' + (Get-ScheduledTask -TaskName PoP_Decomp_Job).State + '; python processes left: ' + @(Get-Process python -ErrorAction SilentlyContinue).Count"
+    echo "(Press any key to close.)"; read -k1
+    exit 0
+fi
 if [[ "$1" == "--status" ]]; then
     ps "& '$REMOTE\\tools\\windows\\start-job.ps1' -Status | Select-Object -Last 25"
     exit 0

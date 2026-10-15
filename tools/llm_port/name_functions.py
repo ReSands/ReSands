@@ -14,8 +14,7 @@ Usage: python3 -I tools/llm_port/name_functions.py [--url http://127.0.0.1:11434
 16k context with a check that the whole prompt was read, and per-function context from
 tools/ghidra/PoPNamingContext.java (game/analysis/naming/context/<addr>.txt: class, callers,
 callees, strings). Results go to results_v2/. --calib = only the calibration functions.
---stop-at HH:MM: finish the current function and stop at that local time (overnight runs must not
-outlive their job: a killed job leaves this process running on the GPU).
+--stop-at HH:MM (optional): finish the current function and stop at that local time.
 """
 import json
 import re, os, sys, time, urllib.request
