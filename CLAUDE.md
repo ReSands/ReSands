@@ -344,7 +344,7 @@ Nightly validation **built and proven on the PC (14 Oct)**: Mac button `tools/ov
 ## Release roadmap (user, 15 Oct 2026)
 
 - **1.0 = faithful and native.** Plays exactly like the original release, with every hardware layer replaced natively: Vulkan renderer (no GS emulation), native sound (DARE/UbiSound calls, no IOP/SPU2 emulation), a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; this replaces the 13 Oct plan to adapt ps2-web-recomp's IPU). Judged frame by frame against the emulated GS output of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats differ, so residual differences must be measured and explained).
-- **1.1 = resolution.** DLSS upscaling for 4K, still 4:3.
+- **1.1 = modern display.** DLSS upscaling for 4K, plus optional Hor+ widescreen (user, 15 Oct; 4:3 stays the default). Easy once the renderer, HUD and movie display are native: wider projection, widened game culling (findings from the PCSX2 widescreen patch), HUD anchored, movies/loading screen pillarboxed. Check cutscene framing and edge pop-in by playing through.
 - **1.2 = frame rate.** 60/120 fps (fixed game tick with interpolated presentation, or the game's own 60 fps path).
 - Then publish as a base for the community. Publishing is limited to our own code (overrides, tools, runtime patches under their licences, PS2Recomp is GPL-3.0); users supply their own disc and build it. Never ship game data, generated code or prototype-derived material.
 - After that: lighting experiments (ray/path tracing; see the RTX Remix notes for one route).
