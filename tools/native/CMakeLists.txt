@@ -28,6 +28,17 @@ add_library(pop_native STATIC src/native_renderer.cpp)
 target_include_directories(pop_native PUBLIC src)
 target_link_libraries(pop_native PUBLIC volk Vulkan::Headers)
 
+# SDL3 for the window: an installed package if present (Homebrew), otherwise built from source
+find_package(SDL3 3.4 CONFIG QUIET)
+if(NOT SDL3_FOUND)
+  set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+  set(SDL_STATIC ON CACHE BOOL "" FORCE)
+  set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(sdl3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+                       GIT_TAG release-3.4.16 GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(sdl3)
+endif()
+
 add_executable(pop_native_view src/viewer.cpp)
 target_include_directories(pop_native_view PRIVATE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR})
-target_link_libraries(pop_native_view PRIVATE pop_native)
+target_link_libraries(pop_native_view PRIVATE pop_native SDL3::SDL3)

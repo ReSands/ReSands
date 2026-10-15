@@ -4,9 +4,18 @@
 //
 // Usage: pop_native_view <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]
 //                        [--depth <file>] (raw float32 view depth per pixel)
+//        pop_native_view <scene.gltf> <clip file> <screenshot.png> --window [--scale N]
+//          interactive: starts at the game's camera. Mouse drag (left button) looks around, WASD
+//          moves, Q/E down/up, Shift faster, R back to the game camera, 1-4 internal resolution
+//          (640x448 times N), P saves a screenshot at the internal resolution, Esc quits.
+//          --frames N quits after N frames (for tests).
 //   clip file: the game's world -> clip matrix, 16 comma- or space-separated floats (row vectors, as
 //   graphics system +0x240 holds it; POP_CAMLOG / POP_FRAMECAP "capture" lines carry it).
+#include "free_camera.h"
 #include "native_renderer.h"
+
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
@@ -16,6 +25,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -95,10 +105,19 @@ int main(int argc, char **argv)
     }
     Options options;
     uint32_t width = 640, height = 448;
+    bool windowed = false;
+    uint32_t scale = 1;
+    long maxFrames = -1; // --frames N: quit after N presented frames (tests)
     for (int i = 4; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--nearest"))
             options.linearFilter = false;
+        else if (!std::strcmp(argv[i], "--window"))
+            windowed = true;
+        else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc)
+            maxFrames = std::atol(argv[++i]);
+        else if (!std::strcmp(argv[i], "--scale") && i + 1 < argc)
+            scale = static_cast<uint32_t>(std::max(1, std::atoi(argv[++i])));
         else if (!std::strcmp(argv[i], "--width") && i + 1 < argc)
             width = static_cast<uint32_t>(std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--height") && i + 1 < argc)
@@ -119,6 +138,36 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    SDL_Window *window = nullptr;
+    if (windowed)
+    {
+        if (!SDL_Init(SDL_INIT_VIDEO))
+        {
+            std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+            return 1;
+        }
+#if defined(__APPLE__)
+        // Homebrew's vulkan-loader is not on the default dyld search path
+        if (!SDL_Vulkan_LoadLibrary(nullptr))
+            SDL_Vulkan_LoadLibrary("/opt/homebrew/lib/libvulkan.1.dylib");
+#endif
+        window = SDL_CreateWindow("PoP native view", 1280, 896, SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        if (!window)
+        {
+            std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+            return 1;
+        }
+        Uint32 n = 0;
+        const char *const *exts = SDL_Vulkan_GetInstanceExtensions(&n);
+        for (Uint32 i = 0; i < n; ++i)
+            options.instanceExtensions.emplace_back(exts[i]);
+        options.createSurface = [window](void *instance) -> uint64_t {
+            VkSurfaceKHR surface = 0;
+            if (!SDL_Vulkan_CreateSurface(window, static_cast<VkInstance>(instance), nullptr, &surface))
+                std::fprintf(stderr, "SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+            return (uint64_t)surface;
+        };
+    }
     Renderer r;
     std::string error;
     if (!r.init(options, error))
@@ -244,6 +293,99 @@ int main(int argc, char **argv)
         return 1;
     }
     const auto t1 = std::chrono::steady_clock::now();
+    if (windowed)
+    {
+        std::printf("%s: %zu draws, %zu triangles, %zu textures; loaded in %.0f ms\n", r.deviceName().c_str(), draws.size(), triTotal,
+                    data->images_count, std::chrono::duration<double, std::milli>(t1 - t0).count());
+        std::fflush(stdout);
+        FreeCamera cam(clip);
+        long presented = 0;
+        const auto runStart = std::chrono::steady_clock::now();
+        bool running = true, looking = false;
+        int shots = 0, frames = 0;
+        auto last = std::chrono::steady_clock::now(), fpsStart = last;
+        while (running)
+        {
+            SDL_Event e;
+            while (SDL_PollEvent(&e))
+            {
+                if (e.type == SDL_EVENT_QUIT)
+                    running = false;
+                else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT)
+                    looking = true;
+                else if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT)
+                    looking = false;
+                else if (e.type == SDL_EVENT_MOUSE_MOTION && looking)
+                    cam.turn(-e.motion.xrel * 0.004f, -e.motion.yrel * 0.004f);
+                else if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat)
+                {
+                    const SDL_Keycode k = e.key.key;
+                    if (k == SDLK_ESCAPE)
+                        running = false;
+                    else if (k == SDLK_R)
+                        cam.reset();
+                    else if (k >= SDLK_1 && k <= SDLK_4)
+                        scale = static_cast<uint32_t>(k - SDLK_1 + 1);
+                    else if (k == SDLK_P)
+                    {
+                        float c[16];
+                        cam.clip(c);
+                        std::vector<uint8_t> px;
+                        const uint32_t w = 640 * scale, h = 448 * scale;
+                        std::string path = std::string(argv[3]);
+                        const size_t dot = path.rfind('.');
+                        path = (dot == std::string::npos ? path : path.substr(0, dot)) + "_" + std::to_string(++shots) + ".png";
+                        if (r.renderOffscreen(w, h, c, draws, px, error))
+                        {
+                            std::vector<uint8_t> rgb(size_t(w) * h * 3);
+                            for (size_t i = 0; i < size_t(w) * h; ++i)
+                                std::memcpy(&rgb[i * 3], &px[i * 4], 3);
+                            stbi_write_png(path.c_str(), int(w), int(h), 3, rgb.data(), int(w * 3));
+                            std::printf("saved %s (%ux%u)\n", path.c_str(), w, h);
+                        }
+                    }
+                }
+            }
+            const auto now = std::chrono::steady_clock::now();
+            const float dt = std::chrono::duration<float>(now - last).count();
+            last = now;
+            const bool *keys = SDL_GetKeyboardState(nullptr);
+            const float speed = (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT] ? 20.0f : 5.0f) * dt;
+            cam.move(speed * (keys[SDL_SCANCODE_W] - keys[SDL_SCANCODE_S]), speed * (keys[SDL_SCANCODE_D] - keys[SDL_SCANCODE_A]),
+                     speed * (keys[SDL_SCANCODE_E] - keys[SDL_SCANCODE_Q]));
+            int ww = 0, wh = 0;
+            SDL_GetWindowSizeInPixels(window, &ww, &wh);
+            float c[16];
+            cam.clip(c);
+            if (!r.present(uint32_t(ww), uint32_t(wh), 640 * scale, 448 * scale, c, draws, error))
+            {
+                std::fprintf(stderr, "present: %s\n", error.c_str());
+                break;
+            }
+            ++frames;
+            if (maxFrames >= 0 && ++presented >= maxFrames)
+            {
+                const float total = std::chrono::duration<float>(std::chrono::steady_clock::now() - runStart).count();
+                std::printf("%ld frames presented in %.2f s (%.0f fps, vsync), window %dx%d, internal %ux%u\n", presented, total,
+                            presented / total, ww, wh, 640 * scale, 448 * scale);
+                running = false;
+            }
+            const float secs = std::chrono::duration<float>(now - fpsStart).count();
+            if (secs >= 1.0f)
+            {
+                char title[128];
+                std::snprintf(title, sizeof title, "PoP native view - %ux%u - %.0f fps%s", 640 * scale, 448 * scale, frames / secs,
+                              cam.moved() ? "" : " - game camera");
+                SDL_SetWindowTitle(window, title);
+                frames = 0;
+                fpsStart = now;
+            }
+        }
+        cgltf_free(data);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
     std::vector<uint8_t> rgba;
     std::vector<float> depth;
     const char *depthPath = nullptr;

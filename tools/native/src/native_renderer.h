@@ -4,6 +4,7 @@
 // will later draw into the game window. Portable: Vulkan 1.1 via volk, no platform APIs.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -56,6 +57,10 @@ namespace pop_native
         bool linearFilter = true; // bilinear texture filtering (the PS2's usual setting) or nearest
         float nearW = 0.05f;      // near plane in clip w (view depth)
         float clearColour[4] = {24 / 255.0f, 24 / 255.0f, 32 / 255.0f, 1.0f};
+        // windowed use: the instance extensions the window system needs, and a callback that creates
+        // the window's surface for the instance (returns a VkSurfaceKHR handle, 0 on failure)
+        std::vector<std::string> instanceExtensions;
+        std::function<uint64_t(void *instance)> createSurface;
     };
 
     class Renderer
@@ -77,6 +82,10 @@ namespace pop_native
         // depthOut (optional): per-pixel view depth w (0 where nothing was drawn)
         bool renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
                              std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr);
+        // windowed: renders the frame at internalWidth x internalHeight and shows it scaled into the
+        // window (aspect kept, bars around it); recreates the swapchain when the window size changes
+        bool present(uint32_t windowWidth, uint32_t windowHeight, uint32_t internalWidth, uint32_t internalHeight,
+                     const float clip[16], const std::vector<Draw> &draws, std::string &error);
         std::string deviceName() const;
 
     private:
