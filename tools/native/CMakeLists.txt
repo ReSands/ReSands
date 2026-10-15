@@ -1,0 +1,39 @@
+# Native renderer (Stage B): pop_native core library + pop_native_view (offscreen viewer for judging
+# against GS frames). Portable: Vulkan through volk (no SDK needed; the loader comes with the GPU
+# driver on Windows/Linux, MoltenVK + vulkan-loader on macOS), dependencies fetched at pinned
+# versions, shaders embedded as SPIR-V (shaders/build.sh).
+#   cmake -S tools/native -B game/native-build -DCMAKE_BUILD_TYPE=Release && cmake --build game/native-build
+cmake_minimum_required(VERSION 3.20)
+project(pop_native CXX C)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+FetchContent_Declare(vulkan_headers GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
+                     GIT_TAG vulkan-sdk-1.4.341.0 GIT_SHALLOW TRUE)
+FetchContent_Declare(volk GIT_REPOSITORY https://github.com/zeux/volk.git
+                     GIT_TAG vulkan-sdk-1.4.341.0 GIT_SHALLOW TRUE)
+FetchContent_Declare(cgltf GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+                     GIT_TAG v1.15 GIT_SHALLOW TRUE)
+FetchContent_Declare(stb GIT_REPOSITORY https://github.com/nothings/stb.git
+                     GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4)
+FetchContent_MakeAvailable(vulkan_headers)
+set(VOLK_PULL_IN_VULKAN OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(volk)
+FetchContent_GetProperties(cgltf)
+if(NOT cgltf_POPULATED)
+  FetchContent_Populate(cgltf)
+endif()
+FetchContent_GetProperties(stb)
+if(NOT stb_POPULATED)
+  FetchContent_Populate(stb)
+endif()
+target_link_libraries(volk PUBLIC Vulkan::Headers)
+
+add_library(pop_native STATIC src/native_renderer.cpp)
+target_include_directories(pop_native PUBLIC src)
+target_link_libraries(pop_native PUBLIC volk Vulkan::Headers)
+
+add_executable(pop_native_view src/viewer.cpp)
+target_include_directories(pop_native_view PRIVATE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR})
+target_link_libraries(pop_native_view PRIVATE pop_native)

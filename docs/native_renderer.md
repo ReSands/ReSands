@@ -20,7 +20,7 @@ everything not yet native. Format knowledge comes from the Python reference conv
    `CJMeshElement::ReadElement` / the visual loader, producing vertex/index buffers and textures.
    Judge: identical output to the Python converter on every world pack (a natural Gemma job:
    precise spec = the Python code, strict judge = byte comparison).
-3. **Vulkan "native view" window.** A second window in the runtime process that draws the frame's
+3. **Vulkan "native view" window.** (15 Oct: offscreen viewer done, `tools/native/`, 0.870 vs the game frame; next: window + live draw list.) A second window in the runtime process that draws the frame's
    static world from (1) + (2) with the game's camera. No interop yet. Judge: `tools/imgscore.py`
    against the GS frame.
 4. **Composite into the game window.** Draw the native world into the main presentation (Vulkan
