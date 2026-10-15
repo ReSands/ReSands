@@ -30,3 +30,52 @@ everything not yet native. Format knowledge comes from the Python reference conv
 
 Build: Vulkan headers + `volk` (loader) via CMake FetchContent, pinned versions; shaders compiled
 to SPIR-V ahead of time and embedded. No Vulkan SDK install needed on the PC.
+
+## QA plan for 1.0 (draft, 15 Oct 2026)
+
+Status: proposal. The final decision is made once the game can be played end to end natively.
+
+Goal: find the effects that are wrong only in some places (fog in one level, a water type, one
+particle) without relying on someone noticing while playing. The game is played once, normally, on
+one screen; the checks run in the background and leave a list of suspect frames.
+
+Principle: one game, several renderers. While the emulated GS still runs (until step 16), every
+frame is drawn natively and by the emulated GS from the same game state, so differences are
+rendering differences, never timing or random-number drift.
+
+### Tier 1: always on during play (native against the emulated GS)
+- A background thread gets the GS reference image and the native image of every Nth frame, computes
+  a difference score (heat map, perceptual metric, tolerance for float noise at triangle edges) and
+  never slows the game: if it falls behind it skips frames.
+- A frame above the threshold is saved with the world name, player position, draw list, and the
+  GS command stream of the last few seconds (ring buffer). A button combo on the pad does the same
+  by hand (save state + frame capture + both images).
+- **Unsupported-feature log (no pixels needed):** every time the native renderer meets an element
+  type, material flag, blend mode or fog/state it does not handle, it records it with the world
+  name. After one playthrough this gives "fog: levels 9, 14" style lists. Same idea as the nightly
+  coverage counts over the 566 packs.
+
+### Tier 2: second opinion on flagged frames (PCSX2 software renderer)
+- The emulated GS is not the truth (it had the glow/Z-buffer sprite and LoadImage bugs). PCSX2's
+  software GS renderer follows the hardware rules most closely, so it arbitrates:
+  - PCSX2 agrees with the emulated GS, native differs: native is wrong.
+  - PCSX2 agrees with native, the emulated GS differs: the emulated GS has the bug.
+  - PCSX2 differs from both: look closer (our stream, or a case where references disagree).
+- Preferred form: live, as other recomps do (NBA Street V3 feeds PCSX2's GS in a separate process
+  through a ring buffer). Fallback: replay the saved GS command stream through PCSX2's GS dump
+  runner. The software renderer is slow, so it works on a sample or lags behind the game.
+- Licensing: PCSX2 is GPL-3.0. Development tool only; never part of a release.
+- Early check, before committing: how hard is it to build PCSX2's GS as a library or helper
+  process, and can our GS command stream (`PS2X_GS_RECORD` format) be converted into its input.
+
+### Unattended coverage
+- Save states at the start of each level/area, each loaded and run for a few seconds in the overnight
+  job, with the same scores and logs, so levels are covered without playing them.
+- Scripted or recorded input runs for the areas that save states do not reach.
+
+### Limits
+- Tests the renderer against the GS's behaviour, not game logic (physics, AI): that would need a
+  whole-game comparison with PCSX2.
+- Movies and the loading screen are drawn differently and need their own pass.
+- A real PS2 on a capture card is the ultimate reference but not worth the setup; spot checks with
+  real-hardware screenshots are enough.
