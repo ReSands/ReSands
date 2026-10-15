@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(volk)
 FetchContent_MakeAvailable(cgltf stb)
 target_link_libraries(volk PUBLIC Vulkan::Headers)
 
-add_library(pop_native STATIC src/native_renderer.cpp)
+add_library(pop_native STATIC src/native_renderer.cpp src/meshdecode.cpp)
 target_include_directories(pop_native PUBLIC src)
 target_link_libraries(pop_native PUBLIC volk Vulkan::Headers)
 
