@@ -79,3 +79,35 @@ rendering differences, never timing or random-number drift.
 - Movies and the loading screen are drawn differently and need their own pass.
 - A real PS2 on a capture card is the ultimate reference but not worth the setup; spot checks with
   real-hardware screenshots are enough.
+
+## QA plan for sound (draft, 15 Oct 2026)
+
+Same principle as the graphics plan: checks run in the background during one normal playthrough and
+leave a list of flagged moments. Judge sound from WAV files (`PS2X_AUDIO_DUMP`), never through
+Moonlight (it added its own pops).
+
+- **Render twice and compare.** While the IOP/SPU2 emulation exists, the game's sound calls drive
+  both it and the native mixer; both outputs are written to WAV and compared in blocks of about
+  100 ms after alignment by cross-correlation (latency and interpolation differ). Compare levels and
+  spectra per block with a tolerance, not exact samples. Flag blocks that disagree, with the sound
+  being played and the world.
+- **Glitch detectors on one output (no reference needed).** Sudden sample jumps, runs of silence
+  inside a sound (underruns), exact repeats of earlier stretches (stale-buffer replay, how the
+  stream bug was found), clipping, DC offset, the roughness metric used on the music stream. The
+  native mixer also counts late refills and underruns itself: many pops are scheduling, not data.
+- **Every sound alone.** Trigger each sound ID in the banks by itself and compare the native mixer
+  with an offline decode (vgmstream decodes the game's banks correctly). Covers rare one-off sounds.
+  Unattended, overnight. It checks samples, not mixing (volume, pan, reverb).
+- **Limits.** Exact matches are unrealistic (SPU2 interpolation and reverb differ; whether our
+  current emulation does reverb at all is unchecked), so the tolerance needs tuning. Second
+  opinion for disagreements: PCSX2's SPU2 code or the plain vgmstream decode.
+
+## Work order to a full playthrough (user, 15 Oct 2026)
+
+1. Native renderer (Stages A-D above).
+2. Native movie decoder for the PS2 movie files.
+3. Native sound.
+4. Then the game can be played end to end natively with all the QA checks (graphics and sound plans
+   above) running in the background during one playthrough.
+5. Then fix the flagged issues one by one. Decide the final form of the QA tooling (incl. the PCSX2
+   second opinion) at that point.
