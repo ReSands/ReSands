@@ -17,6 +17,7 @@ import json
 import math
 import os
 import struct
+import time
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -32,6 +33,11 @@ def png_bytes(w, h, rgba):
     chunk = lambda t, data: struct.pack('>I', len(data)) + t + data + struct.pack('>I', zlib.crc32(t + data) & 0xFFFFFFFF)
     return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0))
             + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+
+
+# a geometry record the converted loader has not finished after this long is skipped (misread
+# counts made single records run for hours: packs ff022795, ff0d2b19)
+RECORD_SECONDS = float(os.environ.get('POP_GEO_SECONDS', '20'))
 
 
 def capture_elements(pack, errors=None):
@@ -59,12 +65,13 @@ def capture_elements(pack, errors=None):
         cur['off'], cur['found'] = off, []
         rt = c2py_rt.Runtime()
         rt.funcs = rt0.funcs
+        rt.deadline = time.monotonic() + RECORD_SECONDS
         rt.write(0x01000000, pack[off:off + size])
         cell = rt.alloca(8)
         rt.w32(cell, 0x01000000 + 8)
         try:
             obj = create(rt, 0, cell, 0, struct.unpack_from('<I', pack, off + 4)[0])
-        except Exception as e:  # noqa: BLE001 - e.g. c2py_rt.RunawaySize on a misread size
+        except Exception as e:  # noqa: BLE001 - e.g. c2py_rt.RunawaySize/RunawayTime on a misread size or count
             msg = f'{type(e).__name__}: {str(e)[:160]}'
             if errors is not None:
                 errors.append((key, msg))
@@ -239,26 +246,43 @@ def decode_packet(d, o, size, blobs=None):
 
 
 def skinned_batches(d, o, size):
-    """Skinned element packet (CJMeshElement with a bone palette): per batch, keyed by VU address:
-    0x53 V4-32 positions (bind pose), 0x7B V3-16 UVs + strip flag, 0x03 V3-8 bone indices (VU matrix
-    offsets: /4 = bone palette index), 0x2B V3-32 weights, 0xA3 V3-8 signed normals. Returns
-    [(positions, uvs, flags, bones (3 palette indices), weights (3), normals)]."""
+    """Skinned element packet (CJMeshElement with a bone palette), batches keyed by VU address.
+    Layout A (multi-bone): 0x53 positions (bind pose; V4-32 with w = +-1, or V3-32), 0x7B V3-16 UVs +
+    strip flag, 0x03 V3-8 bone slots (VU matrix offsets: /4 = palette slot, 1..N; 0 = unused),
+    0x2B V3-32 weights, 0xA3 either V3-8 signed normals or V4-8 vertex colours (0x80 = 1.0).
+    Layout B (single bone, e.g. rigid parts; also used without a palette): 0x03 V4-32 positions,
+    0x43 V3-16 UVs + strip flag, 0x83 V3-8 signed normals; every vertex uses palette slot 1.
+    Returns [(positions, uvs, flags, bones (3 slots), weights (3), normals, colours)]; normals and
+    colours are None when the batch has none."""
     U = lambda p: struct.unpack_from('<I', d, p)[0]
     out, cur = [], {}
 
     def flush():
         nonlocal cur
         if 0x53 in cur:
-            n, stride = cur[0x53][1], cur[0x53][2]
-            pos = [struct.unpack_from('<3f', cur[0x53][0], stride * i) for i in range(n)]
-            uv, fl = [(0, 0)] * n, [0] * n
-            if 0x7B in cur:
-                raw = [struct.unpack_from('<3h', cur[0x7B][0], 6 * i) for i in range(min(n, cur[0x7B][1]))]
-                uv, fl = [(a, b) for a, b, _ in raw], [c for _, _, c in raw]
+            pk, uk, nk = 0x53, 0x7B, 0xA3
+        elif 0x03 in cur and cur[0x03][2] == 16:
+            pk, uk, nk = 0x03, 0x43, 0x83
+        else:
+            cur = {}
+            return
+        n, stride = cur[pk][1], cur[pk][2]
+        pos = [struct.unpack_from('<3f', cur[pk][0], stride * i) for i in range(n)]
+        uv, fl = [(0, 0)] * n, [0] * n
+        if uk in cur:
+            raw = [struct.unpack_from('<3h', cur[uk][0], 6 * i) for i in range(min(n, cur[uk][1]))]
+            uv, fl = [(a, b) for a, b, _ in raw], [c for _, _, c in raw]
+        if pk == 0x53:
             bones = [tuple(x // 4 for x in cur[0x03][0][3 * i:3 * i + 3]) for i in range(n)] if 0x03 in cur else [(0, 0, 0)] * n
             weights = [struct.unpack_from('<3f', cur[0x2B][0], 12 * i) for i in range(n)] if 0x2B in cur else [(1.0, 0, 0)] * n
-            normals = [struct.unpack_from('<3b', cur[0xA3][0], 3 * i) for i in range(n)] if 0xA3 in cur else [(0, 0, 0)] * n
-            out.append((pos, uv, fl, bones, weights, normals))
+        else:
+            bones, weights = [(1, 0, 0)] * n, [(1.0, 0, 0)] * n
+        normals = colours = None
+        if nk in cur and cur[nk][2] == 3:
+            normals = [struct.unpack_from('<3b', cur[nk][0], 3 * i) for i in range(n)]
+        elif nk in cur and cur[nk][2] == 4:
+            colours = [tuple(min(c / 128.0, 1.0) for c in cur[nk][0][4 * i:4 * i + 4]) for i in range(n)]
+        out.append((pos, uv, fl, bones, weights, normals, colours))
         cur = {}
 
     p, end = o, o + size
@@ -290,10 +314,17 @@ def skinned_batches(d, o, size):
 
 
 def batch_mesh(b, uvscale):
-    if 8 not in b:
+    """(positions, uvs, colours, triangles) of a decode_packet batch, or None without positions.
+    Positions are V3-32 (format 8), or V4-32 at VU 0x03 in the normal-lit layout (format 0xC; the
+    batch's later V4-32 at VU 0 is the bbox, which decode_packet does not keep)."""
+    if 8 in b:
+        _, raw, n = b[8]
+        pos = [struct.unpack_from('<3f', raw, 12 * i) for i in range(n)]
+    elif 0xC in b and b[0xC][0] == 3:
+        _, raw, n = b[0xC]
+        pos = [struct.unpack_from('<3f', raw, 16 * i) for i in range(n)]
+    else:
         return None
-    _, raw, n = b[8]
-    pos = [struct.unpack_from('<3f', raw, 12 * i) for i in range(n)]
     uv, flags = [(0.0, 0.0)] * n, [0] * n
     if 9 in b:
         _, r, m = b[9]
@@ -364,14 +395,14 @@ def main(argv):
         if nb and passes:
             # skinned element: bind-pose positions, bone palette slots 1..N (0 = unused) -> bone ids
             palette = d[o + 40:o + 40 + nb]
-            for pos, uvr, fl, bones, weights, _normals in skinned_batches(d, passes[0][1], passes[0][2]):
+            for pos, uvr, fl, bones, weights, _normals, colours in skinned_batches(d, passes[0][1], passes[0][2]):
                 n = len(pos)
                 tris = [(i - 2, i - 1, i) if i % 2 == 0 else (i - 1, i - 2, i) for i in range(2, n) if not fl[i]]
                 if not tris:
                     continue
                 uv = [(a / uvscale, c / uvscale) for a, c in uvr]
                 ids = [tuple(palette[k - 1] if 0 < k <= len(palette) else 0 for k in b) for b in bones]
-                m = (pos, uv, [(1.0, 1.0, 1.0, 1.0)] * n, tris, None, (ids, weights))
+                m = (pos, uv, colours or [(1.0, 1.0, 1.0, 1.0)] * n, tris, None, (ids, weights))
                 stats['skinned_batches'] = stats.get('skinned_batches', 0) + 1
                 by_record.setdefault(key, []).append((m, matid))
             stats['drawn'] += 1
@@ -396,7 +427,7 @@ def main(argv):
         base_scale = uvscale / 8 if blocks else uvscale
         for b in decode_packet(d, po, ps, blocks):
             m = batch_mesh(b, base_scale)
-            if 8 in b:
+            if 8 in b or (0xC in b and b[0xC][0] == 3):
                 batch_no += 1
             if not m or not m[3]:
                 continue

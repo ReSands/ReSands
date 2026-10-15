@@ -60,7 +60,10 @@ namespace pop_mesh
         std::vector<std::vector<int32_t>> bones; // per vertex: the bytes d[3i:3i+3] of the 0x03 block, each // 4
                                                  // (fewer than 3 if the block is short, as the Python slice; (0, 0, 0) when absent)
         std::vector<float> weights;    // 3 per vertex ((1.0, 0, 0) when absent)
-        std::vector<int32_t> normals;  // 3 per vertex (signed bytes; (0, 0, 0) when absent)
+        bool hasNormals = false;       // Python: normals is not None
+        std::vector<int32_t> normals;  // 3 per vertex (signed bytes) when hasNormals
+        bool hasColours = false;       // Python: colours is not None
+        std::vector<double> colours;   // 4 per vertex (min(byte / 128.0, 1.0); fewer if the data is short) when hasColours
     };
     // skinned_batches(d, o, size)
     bool skinnedBatches(const uint8_t *d, size_t len, uint32_t o, uint32_t size, std::vector<SkinnedBatch> &out);

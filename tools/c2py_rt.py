@@ -10,6 +10,7 @@ import importlib.util
 import os
 import struct
 import sys
+import time
 from collections import Counter
 
 PAGE = 4096
@@ -20,6 +21,7 @@ class Runtime:
     PREF = object()  # where c2py put &P in an argument list
 
     def __init__(self):
+        self.ops, self.deadline = 0, None
         self.pages = {}
         self.heap = 0x02000000
         self.stack = 0x0E000000
@@ -31,7 +33,15 @@ class Runtime:
         self.w32(ALLOC_VT + 0xC, ALLOC_FN)
 
     # --- memory
+    def _tick(self):
+        # time guard (deadline set by the caller): checked every 256K memory operations/calls, so
+        # a loop on a misread count ends with RunawayTime instead of running for hours
+        self.ops += 1
+        if not self.ops & 0x3FFFF and self.deadline and time.monotonic() > self.deadline:
+            raise RunawayTime(f'over the time limit after {self.ops} operations (misread count?)')
+
     def _rb(self, a):
+        self._tick()
         a &= 0xFFFFFFFF
         p = self.pages.get(a // PAGE)
         return p[a % PAGE] if p else 0
@@ -53,6 +63,7 @@ class Runtime:
         return bytes(out)
 
     def write(self, a, data):
+        self._tick()
         if len(self.pages) > (512 << 20) // PAGE:  # 512 MB of simulated memory: runaway
             raise RunawaySize('simulated memory above 512 MB')
         a &= 0xFFFFFFFF
@@ -69,6 +80,7 @@ class Runtime:
     def r16(self, a): return int.from_bytes(self.read(a, 2), 'little')
 
     def r32(self, a):
+        self._tick()
         a &= 0xFFFFFFFF
         off = a % PAGE
         if off <= PAGE - 4:
@@ -119,6 +131,7 @@ class Runtime:
 
     # --- calls
     def call(self, name, *args):
+        self._tick()
         f = self.funcs.get(name)
         if f:
             return f(self, *args)
@@ -145,6 +158,10 @@ MAX_BLOCK = 64 << 20  # a larger memcpy/memset/allocation means a misread size, 
 
 
 class RunawaySize(Exception):
+    pass
+
+
+class RunawayTime(Exception):
     pass
 
 

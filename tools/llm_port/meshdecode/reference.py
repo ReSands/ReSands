@@ -84,13 +84,14 @@ def element_text(d, o):
             lines.append('skin %u X' % po)
             continue
         t = 'skin %u' % po
-        for pos, uv, fl, bones, weights, normals in sk:
+        for pos, uv, fl, bones, weights, normals, colours in sk:
             t += ' B' + ''.join(f32(c) for p in pos for c in p) \
                 + ' |' + ''.join(' %d' % c for u in uv for c in u) \
                 + ' |' + ''.join(' %d' % c for c in fl) \
                 + ' |' + ''.join(' (' + ''.join('%d,' % c for c in bt) + ')' for bt in bones) \
                 + ' |' + ''.join(f32(c) for w in weights for c in w) \
-                + ' |' + ''.join(' %d' % c for nm in normals for c in nm)
+                + ' |' + (''.join(' %d' % c for nm in normals for c in nm) if normals is not None else ' None') \
+                + ' |' + (''.join(f64(c) for k in colours for c in k) if colours is not None else ' None')
         lines.append(t)
     return lines
 

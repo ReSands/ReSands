@@ -127,7 +127,7 @@ def mesh_pack(key):
         nb, lods, passes = jade2gltf.element_parts(pack, o)
         if passes:
             bs = jade2gltf.decode_packet(pack, passes[0][1], passes[0][2], {b: (lo, ls) for b, lo, ls in lods})
-            if any(8 in b for b in bs):
+            if any(jade2gltf.batch_mesh(b, 4096.0) for b in bs) or (nb and jade2gltf.skinned_batches(pack, passes[0][1], passes[0][2])):
                 decoded += 1
             else:
                 empty += 1

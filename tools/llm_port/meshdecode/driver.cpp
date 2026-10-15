@@ -167,8 +167,17 @@ int main(int argc, char **argv)
                 for (float x : b.weights)
                     f32(x);
                 std::printf(" |");
-                for (int32_t x : b.normals)
-                    std::printf(" %d", x);
+                if (b.hasNormals)
+                    for (int32_t x : b.normals)
+                        std::printf(" %d", x);
+                else
+                    std::printf(" None");
+                std::printf(" |");
+                if (b.hasColours)
+                    for (double x : b.colours)
+                        f64(x);
+                else
+                    std::printf(" None");
             }
             std::printf("\n");
         }
