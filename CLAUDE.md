@@ -349,6 +349,10 @@ Nightly validation **built and proven on the PC (14 Oct)**: Mac button `tools/ov
 - **Publish at 1.0** (user, 15 Oct), as a base for the community; 1.1/1.2 follow as updates. Publishing is limited to our own code (overrides, tools, runtime patches under their licences, PS2Recomp is GPL-3.0); users supply their own disc and build it. Never ship game data, generated code or prototype-derived material.
 - After that: lighting experiments (ray/path tracing; see the RTX Remix notes for one route).
 
+## Portability principle (user, 15 Oct 2026)
+
+Windows is the target; Linux and macOS (Apple Silicon, via MoltenVK) should stay cheap to add later. Rules for new native code (renderer, sound, movies): Vulkan only, within what MoltenVK supports for the base path (no geometry shaders etc.); DLSS/ray tracing as optional extensions behind a small upscaler interface (MetalFX/FSR can plug in later); window, input, audio via portable libraries (SDL-class, FFmpeg); standard C++ without x86 intrinsics, or behind a wrapper with a portable fallback; no Windows-only APIs; shaders as ahead-of-time SPIR-V. Expected later effort (estimate): Linux days to ~2 weeks; macOS 1-3 weeks. DLSS frame generation on Linux is unverified. Do not give up a fast x86 path where it matters, but keep a portable one next to it.
+
 ## Renderer task order (agreed 14 Oct 2026)
 
 Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; finish A3 (materials/blend) and A7 (skinning) before B (user, 14 Oct); higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
