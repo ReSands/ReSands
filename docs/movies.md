@@ -114,7 +114,12 @@ SPU ADPCM = VAG, 16-byte blocks, which vgmstream and FFmpeg decode: a second jud
 - `MOVIEPS2.BIG` = the 39 vision movies (`vis_111.int` ... `vis_821.int`, 640x352, 1 PCM track),
   indexed by `MOVIEPS2.FAT` (32-byte entries: index, offset, size, 0, name length, name); each
   entry is a complete movie file, its data start aligned from the movie's own start. The player
-  finds names there too. `DOLBY.INT` exists on no version: the game asks for it and skips it.
+  finds names there too.
+- **No Dolby movie exists (checked 15 Oct):** the boot script in the bigfile ("Play video
+  ubisoft.int", then "dolby", "intro", "pop_in") names it in all four retail versions (PS2, Xbox,
+  GameCube, PC bigfiles), but no version ships a Dolby file, nor the Aug 2003 prototype (whose
+  script has no "Play video" at all). The PS2 image has no unlisted data: its only gaps are ISO
+  9660/UDF structures. The game's own load fails and it moves on, as on the console.
 - In game (Mac play build, 15 Oct): UBISOFT, INTRO, POP_IN, POP_OUT play from the disc files, and
   vis_112 from the archive (forced), no decode errors.
 - `tools/overrides/pop_movies.cpp`: `MoviePlayer` base (frame queue, audio ring, decode thread),
