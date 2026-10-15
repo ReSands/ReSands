@@ -16,6 +16,7 @@ import sys
 
 sys.path.insert(0, __file__.rsplit('/', 1)[0])
 import chaintex  # noqa: E402
+import texcmp  # noqa: E402
 import dmacmp  # noqa: E402
 import gslm  # noqa: E402
 import gsvram  # noqa: E402
@@ -97,12 +98,14 @@ def skinned_draws(chain_path, with_textures=False):
     """[(target, packet bytes, {vu addr: [16 floats] matrices uploaded before the CALL}, texture or None,
     alpha test (ATE, AREF), GS ALPHA blend byte)]; textures decoded from GS memory as the frame's uploads left it at the draw."""
     out, pre, cur = [], {}, None
-    vram, regs, cache = bytearray(4 << 20), {}, {}
+    vram, regs = bytearray(4 << 20), {}
     for pc, tag, da, data in dmacmp.chain_records(chain_path):
         tid = (tag[0] >> 28) & 7
         if with_textures:
-            uploads = len(cache)
             gs_replay(tag, data, vram, regs)
+        else:
+            for reg, val in texcmp.gif_ad(tag, data):
+                regs[reg] = val
         if cur is not None:
             cur['bytes'] += struct.pack('<4I', *tag) + data if tid not in (0, 3, 4) else struct.pack('<4I', *tag)
             cur['ups'] += dmacmp.vif_unpacks(tag, data)
@@ -115,8 +118,12 @@ def skinned_draws(chain_path, with_textures=False):
             cur = {'target': tag[1] & 0x7FFFFFFF, 'bytes': b'', 'ups': [], 'mats': dict(pre),
                    'tex0': regs.get(0x06), 'test': regs.get(0x47, 0), 'alpha': regs.get(0x42, 0)}
         elif tid == 6 and cur is not None:
-            addrs = {(f, a) for f, n, a, p in cur['ups']}
-            if (0xC, 0x53) in addrs or (8, 0x53) in addrs or ((0xC, 0x3) in addrs and (0xA, 0x83) in addrs):
+            # a skinned / normal-lit packet is whatever the skinned decoder reads batches from (VIF
+            # UNPACKs often start in the tag's upper half, which dmacmp.vif_unpacks misreads); DIRECT
+            # packets (VIF 0x50/0x51: GS primitives sent straight to the GS) are not meshes
+            first = struct.unpack_from('<4I', cur['bytes'], 0) if len(cur['bytes']) >= 16 else (0, 0, 0, 0)
+            direct = any((w >> 24) & 0x7F in (0x50, 0x51) for w in first[2:])
+            if not direct and jade2gltf.skinned_batches(cur['bytes'], 0, len(cur['bytes'])):
                 tex = None
                 if with_textures and cur['tex0'] is not None:
                     tex = texture(vram, cur['tex0'])
