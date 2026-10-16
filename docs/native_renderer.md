@@ -187,8 +187,12 @@ there. `~/Desktop/pop_renders/27_live_fog_order_game_vs_native.png`.
 ## Draw paths not converted yet (balcony frame, 16 Oct)
 The frame export now counts the other `CElementList::Render` paths and logs their textures:
 - **`CJIdxMesh::Display` (0x4BDB80, list type 0x10): 18 draws = the palm trees** (frond texture
-  128x64 alpha-tested, flags 0x10117) **and the additive glows** (pink lens blob, bright disc glow,
-  the fire texture behind the curtains; kinds 4/6). Next converter target.
+  128x64, flags 0x10117) **and the torch fires** (additive kinds 4/6). Display CALLs a ready DMA
+  packet (low 28 bits of the mesh object's first word; objects in the table at *(0x6DF870)) with the
+  pool matrix and the static VU1 driver; a UV matrix is set first when the sub-material's +8 is
+  nonzero (UV animation, not modelled yet). **Drawn live since 16 Oct**: the packet decodes like the
+  instanced ones, with **UVs at 1/512** (1/4096 sampled only the texture's corner).
+  `~/Desktop/pop_renders/28_live_idxmesh_palms_game_vs_native.png`: palms, torch fires, fog.
 - `FUN_00458FC0` -> `FUN_004584C0` (types 0-0xF, VU program 4, GFX): 14 draws: rain streaks,
   smoke puffs, the torch flame sprite sheet, sparks, star field.
 - `FUN_00469C00` (type 0x18): 2 draws with a light-shaft texture.

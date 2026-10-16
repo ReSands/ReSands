@@ -436,6 +436,7 @@ namespace pop_native_live
 
         // Other draw paths of CElementList::Render (not drawn natively yet), counted per frame with
         // the current sub-material's texture: the render state is set before each of these calls.
+        const double kIdxUvScale = std::getenv("POP_IDX_UVSCALE") ? std::atof(std::getenv("POP_IDX_UVSCALE")) : 512.0; // CJIdxMesh UVs: 1/512 (V3-16 raw 0..512)
         struct OtherPath
         {
             uint32_t address;
@@ -462,6 +463,27 @@ namespace pop_native_live
                 const uint32_t sub = guestAny(rdram, 0x70000034u);
                 g_frameOther.push_back({N, sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
                                         getRegU32(ctx, 4)});
+                if (N == 0)
+                {
+                    // CJIdxMesh::Display(mesh, matrix index): CALLs the packet at the low 28 bits of the
+                    // mesh's first word with the pool matrix, static driver (VU program 0) like CJMeshElement
+                    const uint32_t mesh = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFF;
+                    const uint32_t packet = guestAny(rdram, mesh) & 0x0FFFFFFFu;
+                    std::vector<pop_assets::Batch> batches;
+                    livePacketBatches(rdram, packet, kIdxUvScale, batches);
+                    std::array<float, 16> model;
+                    const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        const uint32_t bits = guestAny(rdram, m + 4u * k);
+                        std::memcpy(&model[k], &bits, 4);
+                    }
+                    static int logged = 0;
+                    if (logged++ < 4)
+                        std::fprintf(stderr, "[pop:native] CJIdxMesh %08x packet %08x: %zu batches\n", mesh, packet, batches.size());
+                    if (!batches.empty())
+                        g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                }
             }
             g_other[N].original(rdram, ctx, runtime);
         }
