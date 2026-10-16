@@ -1,0 +1,81 @@
+From cc417c398dccb86c2f0bf45f8bb2789537b9ecdc Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 16 Oct 2026 13:58:15 +0100
+Subject: [PATCH] GS trace: report config, first call, window open/close on
+ stderr (PS2X_GS_TRACE wrote nothing on the play build); read VRAM back only
+ at the first draw inside the window, not on every draw before it
+
+---
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp | 25 ++++++++++++++++++++++++-
+ 1 file changed, 24 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index b3b41a8..1164e20 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -23,6 +23,8 @@ namespace
+         uint64_t lastTick = UINT64_MAX;
+         std::FILE *file = nullptr;
+         std::string vramPath;
++        bool seen = false;   // diagnostics: first call reported
++        uint64_t calls = 0;  // traced calls inside the window
+     };
+ 
+     GsTraceConfig &gsTrace()
+@@ -40,6 +42,9 @@ namespace
+                 result.endTick = first + count;
+                 result.file = std::fopen(path, "w");
+                 result.vramPath = std::string(path) + ".vram";
++                std::fprintf(stderr, "[gs-trace] fields %llu..%llu -> %s (%s)\n", first, first + count, path,
++                             result.file ? "opened" : "cannot open");
++                std::fflush(stderr);
+             }
+             return result;
+         }();
+@@ -52,16 +57,31 @@ namespace
+         if (!config.file || !regs)
+             return nullptr;
+         const uint64_t tick = regs->vsyncTick.load(std::memory_order_acquire);
++        if (!config.seen)
++        {
++            config.seen = true;
++            std::fprintf(stderr, "[gs-trace] first traced GS call at field %llu\n", static_cast<unsigned long long>(tick));
++            std::fflush(stderr);
++        }
+         if (tick < config.firstTick)
+             return nullptr;
+         if (tick >= config.endTick)
+         {
++            std::fprintf(stderr, "[gs-trace] closed at field %llu after %llu traced calls\n", static_cast<unsigned long long>(tick),
++                         static_cast<unsigned long long>(config.calls));
++            std::fflush(stderr);
+             std::fclose(config.file);
+             config.file = nullptr;
+             return nullptr;
+         }
++        ++config.calls;
+         if (tick != config.lastTick)
+         {
++            if (config.lastTick == UINT64_MAX)
++            {
++                std::fprintf(stderr, "[gs-trace] window open at field %llu\n", static_cast<unsigned long long>(tick));
++                std::fflush(stderr);
++            }
+             if (config.lastTick == UINT64_MAX && vram && vramSize)
+             {
+                 if (std::FILE *dump = std::fopen(config.vramPath.c_str(), "wb"))
+@@ -1699,7 +1719,10 @@ void GS::vertexKick(bool drawing)
+         GSPrimitiveBatch batch = buildDrawBatch(needed);
+         updatePreferredDisplaySourceForDraw(batch);
+         m_backend->Submit(batch);
+-        if (gsTrace().file && gsTrace().lastTick == UINT64_MAX)
++        // VRAM is read back for the trace's .vram dump at the first draw inside the window only
++        // (this synced the backend on every draw before the window opened)
++        if (gsTrace().file && gsTrace().lastTick == UINT64_MAX && m_privRegs &&
++            m_privRegs->vsyncTick.load(std::memory_order_acquire) >= gsTrace().firstTick)
+         {
+             m_backend->Flush();
+             m_backend->Sync(GSSyncReason::DebugReadback);
+-- 
+2.54.0 (Apple Git-157)
+
