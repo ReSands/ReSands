@@ -25,6 +25,7 @@
 #include "../../../../../../tools/native/src/assets.cpp"
 #include "../../../../../../tools/native/src/meshdecode.cpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <functional>
@@ -54,8 +55,16 @@ namespace pop_native_live
         constexpr uint32_t kMeshDisplay = 0x004C8A80u;
         constexpr uint32_t kDisplay3D = 0x004BC000u; // CJadeDrawManager::Display3DElements
         constexpr uint32_t kRefDisplay = 0x004C7B40u; // CJMeshElementRef::Display (instanced meshes)
+        constexpr uint32_t kGfxDisplay = 0x00458FC0u; // CElementList::Render's default case: GFX (VU program 4, FUN_004584C0)
         constexpr size_t kRam = 32u << 20;
 
+        PS2Runtime::RecompiledFunction g_origGfx = nullptr;
+        // GFX draws of the captured frame (not drawn natively yet): entry type byte, element, texture key, flags
+        struct GfxDraw
+        {
+            uint32_t type, element, textureKey, flags;
+        };
+        std::vector<GfxDraw> g_frameGfx;
         PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr, g_origDisplay3D = nullptr, g_origRefDisplay = nullptr;
 
         // Per converted element: its vertex positions (exact float bits), for the draw check.
@@ -83,7 +92,15 @@ namespace pop_native_live
             // colour and/or its alpha (0x40404040) with a local alpha, both on the 0x80 = 1.0 scale
             int32_t constColour = -1; // 0xBBGGRR, -1: vertex colours
             int32_t constAlpha = -1;  // 0..0x7F, -1: vertex alpha
+            // GS fog of the draw: zone (0x70000084, uploaded by FUN_004B7200 from the table at
+            // 0x70000270 + id * 16 to VU 0x10 = (255, 0, a, b); F = a + b * w) and FOGCOL as the
+            // render state sends it (0x70000024: the zone colour, 0 for additive/darkening blends)
+            float fogA = 255.0f, fogB = 0.0f;
+            uint32_t fogColour = 0;
+            uint32_t zTest = 1; // render state 0x70000038: 0 = ZTST ALWAYS (Display3DElements' +0x78 list)
+            uint32_t seq = 0;   // the draw's position in the frame (game draw order)
         };
+        uint32_t g_frameSeq = 0;
         std::vector<DrawMaterial> g_frameMaterials;
         std::vector<std::pair<std::vector<pop_assets::Batch>, DrawMaterial>> g_framePosed; // skinned draws, posed in world space
         std::unordered_map<uint64_t, uint32_t> g_frameLightmap; // (element, matrix index) -> lightmap texture key (pass 3)
@@ -138,6 +155,7 @@ namespace pop_native_live
         DrawMaterial currentMaterial(uint8_t *rdram)
         {
             DrawMaterial dm;
+            dm.seq = g_frameSeq++;
             const uint32_t sub = guestAny(rdram, 0x70000034u);
             if (!sub)
                 return dm;
@@ -164,6 +182,12 @@ namespace pop_native_live
                 dm.constColour = 0x808080;
             if (dm.flags & 0x400)
                 dm.constAlpha = int32_t(guestAny(rdram, sub) >> 25);
+            const uint32_t zone = guestAny(rdram, 0x70000084u) & 0xFF, fa = guestAny(rdram, 0x70000270u + zone * 16 + 8),
+                           fb = guestAny(rdram, 0x70000270u + zone * 16 + 12);
+            std::memcpy(&dm.fogA, &fa, 4);
+            std::memcpy(&dm.fogB, &fb, 4);
+            dm.fogColour = guestAny(rdram, 0x70000024u) & 0xFFFFFF;
+            dm.zTest = guest8(rdram, 0x70000038u);
             return dm;
         }
 
@@ -393,6 +417,55 @@ namespace pop_native_live
             g_origRefDisplay(rdram, ctx, runtime);
         }
 
+        // FUN_00458FC0(entry): the sub-material is the entry's material (+8) list (+0x10, linked by
+        // +0x20) at index byte +0xC, as the function itself selects it
+        void gfxDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                const uint32_t entry = getRegU32(ctx, 4);
+                const uint32_t material = guestAny(rdram, entry + 8);
+                uint32_t sub = material ? guestAny(rdram, material + 0x10) : 0;
+                for (uint32_t k = 0, n = guest8(rdram, entry + 0xC); sub && k < n; ++k)
+                    sub = guestAny(rdram, sub + 0x20);
+                g_frameGfx.push_back({guest8(rdram, entry + 6), guestAny(rdram, entry) << 4,
+                                      sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u});
+            }
+            g_origGfx(rdram, ctx, runtime);
+        }
+
+        // Other draw paths of CElementList::Render (not drawn natively yet), counted per frame with
+        // the current sub-material's texture: the render state is set before each of these calls.
+        struct OtherPath
+        {
+            uint32_t address;
+            const char *name;
+            PS2Runtime::RecompiledFunction original;
+        };
+        OtherPath g_other[] = {
+            {0x004BDB80u, "CJIdxMesh::Display", nullptr},
+            {0x004C6200u, "CJadeSpriteElement::Display", nullptr},
+            {0x004C77C0u, "CJSmWaterElement::Display", nullptr},
+            {0x00469C00u, "FUN_00469C00 (list type 0x18)", nullptr},
+        };
+        struct OtherDraw
+        {
+            int path;
+            uint32_t textureKey, flags, object;
+        };
+        std::vector<OtherDraw> g_frameOther;
+        template <int N>
+        void otherDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                const uint32_t sub = guestAny(rdram, 0x70000034u);
+                g_frameOther.push_back({N, sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
+                                        getRegU32(ctx, 4)});
+            }
+            g_other[N].original(rdram, ctx, runtime);
+        }
+
         void readElement(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t element = getRegU32(ctx, 4);
@@ -601,9 +674,10 @@ namespace pop_native_live
             FILE *f = std::fopen(g_framePath.c_str(), "wb");
             if (!f)
                 return;
-            // "PNF3": clip[16]; images (count; per image: w, h, RGBA); draws (count; per draw: model[16],
-            // image index (-1: none), render state flags, AREF word, batch count, batches)
-            std::fwrite("PNF3", 1, 4, f);
+            // "PNF4": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
+            // per draw: model[16], image index (-1: none), render state flags, AREF word, fog a, fog b,
+            // FOGCOL, Z test, batch count, batches)
+            std::fwrite("PNF4", 1, 4, f);
             std::fwrite(g_frameClip, 4, 16, f);
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
@@ -612,6 +686,20 @@ namespace pop_native_live
                 allMaterials.push_back(p.second);
             for (const auto &r : g_frameRefs)
                 allMaterials.push_back(r.second.second);
+            for (const OtherDraw &o : g_frameOther) // other paths' textures too (image list only)
+            {
+                DrawMaterial m;
+                m.textureKey = o.textureKey;
+                m.flags = o.flags;
+                allMaterials.push_back(m);
+            }
+            for (const GfxDraw &g : g_frameGfx) // GFX textures too (image list only, for inspection)
+            {
+                DrawMaterial m;
+                m.textureKey = g.textureKey;
+                m.flags = g.flags;
+                allMaterials.push_back(m);
+            }
             for (const DrawMaterial &m : allMaterials)
                 if (m.textureKey && !imageOf.count(m.textureKey))
                 {
@@ -658,62 +746,52 @@ namespace pop_native_live
             const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size() + g_frameRefs.size());
             std::fwrite(&n, 4, 1, f);
             size_t tris = 0, textured = 0;
-            for (size_t di = 0; di < g_frameDraws.size(); ++di)
-            {
-                const auto &[element, model] = g_frameDraws[di];
-                const auto &meshes = g_elements[element].meshes;
-                const uint32_t nb = uint32_t(meshes.size());
-                const DrawMaterial &mat = g_frameMaterials[di];
-                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
-                textured += image >= 0;
-                std::fwrite(model.data(), 4, 16, f);
-                std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.flags, 4, 1, f);
-                std::fwrite(&mat.ref, 4, 1, f);
-                std::fwrite(&nb, 4, 1, f);
-                for (const auto &b : meshes)
-                {
-                    const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
-                    std::fwrite(&nv, 4, 1, f);
-                    std::fwrite(&ni, 4, 1, f);
-                    writeVertices(f, b.vertices, mat);
-                    std::fwrite(b.indices.data(), 4, ni, f);
-                    tris += ni / 3;
-                }
-            }
             static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            for (const auto &[batches, mat] : g_framePosed)
+            // every draw in the game's order: (seq, kind 0 static / 1 skinned / 2 instanced, index)
+            std::vector<std::array<uint32_t, 3>> order;
+            for (size_t i = 0; i < g_frameDraws.size(); ++i)
+                order.push_back({g_frameMaterials[i].seq, 0u, uint32_t(i)});
+            for (size_t i = 0; i < g_framePosed.size(); ++i)
+                order.push_back({g_framePosed[i].second.seq, 1u, uint32_t(i)});
+            for (size_t i = 0; i < g_frameRefs.size(); ++i)
+                order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
+            std::sort(order.begin(), order.end());
+            for (const auto &o : order)
             {
-                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
-                textured += image >= 0;
-                const uint32_t nb = uint32_t(batches.size());
-                std::fwrite(kIdentity, 4, 16, f);
-                std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.flags, 4, 1, f);
-                std::fwrite(&mat.ref, 4, 1, f);
-                std::fwrite(&nb, 4, 1, f);
-                for (const auto &b : batches)
+                const float *model = kIdentity;
+                const DrawMaterial *matp = nullptr;
+                const std::vector<pop_assets::Batch> *batches = nullptr;
+                if (o[1] == 0)
                 {
-                    const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
-                    std::fwrite(&nv, 4, 1, f);
-                    std::fwrite(&ni, 4, 1, f);
-                    writeVertices(f, b.vertices, mat);
-                    std::fwrite(b.indices.data(), 4, ni, f);
-                    tris += ni / 3;
+                    model = g_frameDraws[o[2]].second.data();
+                    matp = &g_frameMaterials[o[2]];
+                    batches = &g_elements[g_frameDraws[o[2]].first].meshes;
                 }
-            }
-            for (const auto &[batches, mm] : g_frameRefs)
-            {
-                const auto &[model, mat] = mm;
+                else if (o[1] == 1)
+                {
+                    matp = &g_framePosed[o[2]].second;
+                    batches = &g_framePosed[o[2]].first;
+                }
+                else
+                {
+                    model = g_frameRefs[o[2]].second.first.data();
+                    matp = &g_frameRefs[o[2]].second.second;
+                    batches = &g_frameRefs[o[2]].first;
+                }
+                const DrawMaterial &mat = *matp;
                 const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
-                const uint32_t nb = uint32_t(batches.size());
-                std::fwrite(model.data(), 4, 16, f);
+                const uint32_t nb = uint32_t(batches->size());
+                std::fwrite(model, 4, 16, f);
                 std::fwrite(&image, 4, 1, f);
                 std::fwrite(&mat.flags, 4, 1, f);
                 std::fwrite(&mat.ref, 4, 1, f);
+                std::fwrite(&mat.fogA, 4, 1, f);
+                std::fwrite(&mat.fogB, 4, 1, f);
+                std::fwrite(&mat.fogColour, 4, 1, f);
+                std::fwrite(&mat.zTest, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
-                for (const auto &b : batches)
+                for (const auto &b : *batches)
                 {
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     std::fwrite(&nv, 4, 1, f);
@@ -748,6 +826,31 @@ namespace pop_native_live
                 for (const auto &kv : kinds)
                     std::fprintf(stderr, " %u x%d", kv.first, kv.second);
                 std::fprintf(stderr, "\n");
+            }
+            {
+                std::map<uint32_t, int> byKey;
+                for (const GfxDraw &g : g_frameGfx)
+                    ++byKey[g.textureKey];
+                std::fprintf(stderr, "[pop:native] GFX draws (FUN_00458FC0, not drawn natively): %zu;", g_frameGfx.size());
+                for (const auto &kv : byKey)
+                {
+                    pop_native::Image img;
+                    const bool ok = kv.first && findTexture(kv.first, img);
+                    std::fprintf(stderr, " tex %08x (%ux%u, image %d) x%d", kv.first, ok ? img.width : 0u, ok ? img.height : 0u,
+                                 imageOf.count(kv.first) ? imageOf[kv.first] : -1, kv.second);
+                }
+                std::fprintf(stderr, "\n");
+                for (size_t i = 0; i < g_frameGfx.size() && i < 24; ++i)
+                    std::fprintf(stderr, "[pop:native]   gfx %zu: type %02x element %08x tex %08x flags %08x\n", i, g_frameGfx[i].type,
+                                 g_frameGfx[i].element, g_frameGfx[i].textureKey, g_frameGfx[i].flags);
+            }
+            for (const OtherDraw &o : g_frameOther)
+            {
+                pop_native::Image img;
+                const bool ok = o.textureKey && findTexture(o.textureKey, img);
+                std::fprintf(stderr, "[pop:native]   %s: object %08x tex %08x (%ux%u, image %d) flags %08x\n", g_other[o.path].name, o.object,
+                             o.textureKey, ok ? img.width : 0u, ok ? img.height : 0u,
+                             imageOf.count(o.textureKey) ? imageOf[o.textureKey] : -1, o.flags);
             }
             std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu instanced, %zu textured, %u images), %zu triangles\n",
                          g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
@@ -831,6 +934,18 @@ namespace pop_native_live
             g_origRefDisplay = runtime.lookupFunction(kRefDisplay);
             if (g_origRefDisplay)
                 runtime.replaceFunction(kRefDisplay, refDisplay);
+            auto hookOther = [&](int n, PS2Runtime::RecompiledFunction f) {
+                g_other[n].original = runtime.lookupFunction(g_other[n].address);
+                if (g_other[n].original)
+                    runtime.replaceFunction(g_other[n].address, f);
+            };
+            hookOther(0, otherDisplay<0>);
+            hookOther(1, otherDisplay<1>);
+            hookOther(2, otherDisplay<2>);
+            hookOther(3, otherDisplay<3>);
+            g_origGfx = runtime.lookupFunction(kGfxDisplay);
+            if (g_origGfx)
+                runtime.replaceFunction(kGfxDisplay, gfxDisplay);
         }
         g_lastReport = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[pop:native] live conversion check on\n");

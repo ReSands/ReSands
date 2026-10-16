@@ -52,6 +52,7 @@ namespace pop_native
         bool alphaTestLess = false; // ATST LESS instead of GREATER (flag 0x80 with the test)
         bool destAlpha = false;     // blend with the destination alpha (flag 0x1000)
         bool depthWrite = true;     // false: ZBUF ZMSK (flag 0x200)
+        bool depthTest = true;      // false: ZTST ALWAYS (render state 0x70000038 = 0)
         float fix = 1.0f;           // FIX / 128 for Subtract
         bool legacyBlend = false;   // glTF BLEND: no depth write, nearly transparent texels dropped
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
@@ -115,11 +116,14 @@ namespace pop_native
         float model[16]; // object -> world, column-major (glTF order)
         bool ownFog = false;           // far layers (sky) use their own GS fog constants
         float fogA = 255.0f, fogB = 0.0f;
+        bool ownFogColour = false;     // per draw FOGCOL (live frames: the render state's, 0 for additive blends)
+        float fogColour[3] = {0, 0, 0};
     };
 
     struct Options
     {
         bool linearFilter = true; // bilinear texture filtering (the PS2's usual setting) or nearest
+        bool gameOrder = false;   // one pass in the given draw order (live frames, already in the game's order)
         float nearW = 0.05f;      // near plane in clip w (view depth)
         int cull = 0;             // experiment: 0 none, 1 cull clockwise, 2 cull counter-clockwise (all draws)
         bool cullClockwise = true; // single-sided materials: which screen winding is the back face

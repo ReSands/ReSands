@@ -147,6 +147,14 @@ int main(int argc, char **argv)
             packPath = argv[i + 1];
         else if (!std::strcmp(argv[i], "--frame"))
             framePath = true;
+    if (framePath)
+    {
+        // PNF4 frames list the draws in the game's own order: draw them in one pass in that order
+        std::ifstream peek(argv[1], std::ios::binary);
+        char magic[4] = {};
+        peek.read(magic, 4);
+        options.gameOrder = std::memcmp(magic, "PNF4", 4) == 0;
+    }
     cgltf_options opt{};
     cgltf_data *data = nullptr;
     if (!packPath && !framePath && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
@@ -475,7 +483,8 @@ int main(int argc, char **argv)
         char magic[4] = {};
         f.read(magic, 4);
         // PNF3: per draw the render state flags + AREF word instead of PNF2's alpha mode + cutoff
-        const bool v3 = std::memcmp(magic, "PNF3", 4) == 0;
+        const bool v4 = std::memcmp(magic, "PNF4", 4) == 0; // + fog a, b, FOGCOL, Z test per draw
+        const bool v3 = v4 || std::memcmp(magic, "PNF3", 4) == 0;
         const bool v2 = v3 || std::memcmp(magic, "PNF2", 4) == 0;
         if (!v2 && std::memcmp(magic, "PNF1", 4) != 0)
             return false;
@@ -496,7 +505,7 @@ int main(int argc, char **argv)
                 ++imageTotal;
             }
         }
-        std::map<std::tuple<int, uint32_t, uint32_t>, int> materials;
+        std::map<std::tuple<int, uint32_t, uint32_t, uint32_t>, int> materials;
         uint32_t n = 0;
         f.read(reinterpret_cast<char *>(&n), 4);
         for (uint32_t i = 0; i < n && f; ++i)
@@ -511,16 +520,30 @@ int main(int argc, char **argv)
                 f.read(reinterpret_cast<char *>(&image), 4);
                 f.read(reinterpret_cast<char *>(&mode), 4);
                 f.read(reinterpret_cast<char *>(&word), 4);
+                uint32_t fogColour = 0, zTest = 1;
+                if (v4)
+                {
+                    f.read(reinterpret_cast<char *>(&d.fogA), 4);
+                    f.read(reinterpret_cast<char *>(&d.fogB), 4);
+                    f.read(reinterpret_cast<char *>(&fogColour), 4);
+                    f.read(reinterpret_cast<char *>(&zTest), 4);
+                    d.ownFog = d.ownFogColour = true;
+                    for (int k = 0; k < 3; ++k)
+                        d.fogColour[k] = float((fogColour >> (8 * k)) & 0xFF) / 255.0f;
+                }
                 const bool hasImage = image >= 0 && size_t(image) < imageIndex.size();
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word);
+                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest);
                     if (!materials.count(key))
                     {
                         Material mat;
                         mat.baseImage = hasImage ? imageIndex[size_t(image)] : -1;
                         if (v3)
+                        {
                             pop_native::materialFromGsFlags(mode, word, mat);
+                            mat.depthTest = zTest != 0;
+                        }
                         else
                         {
                             mat.alphaMode = static_cast<AlphaMode>(mode);

@@ -308,7 +308,8 @@ namespace pop_native
             VkDeviceSize zero = 0;
             vkCmdBindVertexBuffers(cb, 0, 1, &vertexBuffer.buffer, &zero);
             vkCmdBindIndexBuffer(cb, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-            for (int pass = 0; pass < 2; ++pass) // opaque + alpha-tested, then blended in draw order
+            // opaque + alpha-tested, then blended in draw order; or one pass in the given order
+            for (int pass = 0; pass < (options.gameOrder ? 1 : 2); ++pass)
             {
                 VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
@@ -318,7 +319,7 @@ namespace pop_native
                     const MeshRange &r = ranges[d.mesh];
                     const Material *mat = r.material >= 0 && static_cast<size_t>(r.material) < materials.size() ? &materials[r.material] : nullptr;
                     const AlphaMode mode = mat ? mat->alphaMode : AlphaMode::Opaque;
-                    if (isBlended(mode) != (pass == 1) || r.indexCount == 0)
+                    if ((!options.gameOrder && isBlended(mode) != (pass == 1)) || r.indexCount == 0)
                         continue;
                     std::string perr;
                     const VkPipeline want = pipeline(pipelineKey(mat), perr);
@@ -341,11 +342,12 @@ namespace pop_native
                     push.params[3] = options.nearW;
                     push.fog[0] = d.ownFog ? d.fogA : fog.a;
                     push.fog[1] = d.ownFog ? d.fogB : fog.b;
-                    push.fog[2] = fog.enabled ? 1.0f : 0.0f;
+                    push.fog[2] = fog.enabled || d.ownFog ? 1.0f : 0.0f;
                     push.fog[3] = 0.0f;
-                    push.fogColour[0] = fog.colour[0];
-                    push.fogColour[1] = fog.colour[1];
-                    push.fogColour[2] = fog.colour[2];
+                    const float *fc = d.ownFogColour ? d.fogColour : fog.colour;
+                    push.fogColour[0] = fc[0];
+                    push.fogColour[1] = fc[1];
+                    push.fogColour[2] = fc[2];
                     push.fogColour[3] = 1.0f;
                     VkDescriptorSet set = mat ? materialSets[r.material] : whiteSet;
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &set, 0, nullptr);
@@ -506,7 +508,7 @@ namespace pop_native
         }
 
         // Pipelines per blend state, made on first use: key = blend kind (bits 0-3), destination
-        // alpha (4), back-face culling (5), depth write (6).
+        // alpha (4), back-face culling (5), depth write (6), no depth test (7: GS ZTST ALWAYS).
         std::unordered_map<uint32_t, VkPipeline> pipelines;
         VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
 
@@ -516,7 +518,8 @@ namespace pop_native
                 return 1u << 6;
             const AlphaMode mode = mat->alphaMode == AlphaMode::Mask ? AlphaMode::Opaque : mat->alphaMode;
             const bool depthWrite = isBlended(mode) ? mat->depthWrite && !mat->legacyBlend : mat->depthWrite;
-            return uint32_t(mode) | (mat->destAlpha ? 1u << 4 : 0u) | (!mat->doubleSided ? 1u << 5 : 0u) | (depthWrite ? 1u << 6 : 0u);
+            return uint32_t(mode) | (mat->destAlpha ? 1u << 4 : 0u) | (!mat->doubleSided ? 1u << 5 : 0u) | (depthWrite ? 1u << 6 : 0u) |
+                   (!mat->depthTest ? 1u << 7 : 0u);
         }
 
         VkPipeline pipeline(uint32_t key, std::string &error)
@@ -566,7 +569,8 @@ namespace pop_native
             VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
             ds.depthTestEnable = VK_TRUE;
             ds.depthWriteEnable = (key & (1u << 6)) ? VK_TRUE : VK_FALSE;
-            ds.depthCompareOp = VK_COMPARE_OP_GREATER; // depth = near / w: nearer is larger
+            // depth = near / w: nearer is larger
+            ds.depthCompareOp = (key & (1u << 7)) ? VK_COMPARE_OP_ALWAYS : VK_COMPARE_OP_GREATER;
             VkPipelineColorBlendAttachmentState ba{};
             ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
             // GS (A - B) * C + D as src * S + dst * D; C = As (shader alpha) or Ad (destination alpha)

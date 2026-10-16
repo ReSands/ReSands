@@ -168,3 +168,33 @@ blend, 2 additive halos (torch, lamp), 1 additive rain sheet (kind 6, drawn came
 an identity pool matrix: an effect for Stage D); the curtains now get their warm constant colour.
 Not modelled: FBMSK, Ad blends against our framebuffer alpha (no 0x1000 materials seen), AFAIL
 RGB_ONLY (approximated: no test, no depth write), ZTST off lists.
+
+## Fog, Z test and draw order in the live export (16 Oct)
+`Display3DElements` (0x4BC000) first builds the fog table: `FUN_004BAE80(start, end, 255|127,
+.., table 0x70000270, id, colour)` -> per zone id 16 bytes (255, 0, a, b) with F = a + b * w
+(zone 0xF / 0x1F: start 100 km = no fog), colours at 0x70000470 + id * 4. Each list entry carries
+its zone, `(u16 at +4 & 0x3FF) >> 6`; `FUN_004B7200` uploads the zone to VU 0x10 and keeps it at
+0x70000084; `DoChangeFogColor` puts the zone colour in render state +0x20 and `SetBlending`
+copies it to +0x24 (FOGCOL), or 0 for kinds 4/5/6/0xF (additive and darkening blends fog to black).
+List order: +200, +0x2C, +0x3C, then (when both used) +0x68 and +0x78 with `SetZTest(0)` (render
+state byte 0x70000038 = 0: GS ZTST ALWAYS), +0x4C, lightmaps +0x5C, shadows, +0x88, +0x98, +0xA8.
+Frame format **PNF4** records per draw fog a/b, FOGCOL and the Z-test byte, all draws in the
+game's order (the viewer then draws one pass in that order, `Options::gameOrder`).
+Balcony frame: world fog (300.3 - 5.667 w), sky dome and backdrop (2643 - 6.467 w), FOGCOL
+RGB 52,78,95. Clear sky pixel: game (50,78,94), native (54,82,97). No draw used the no-Z-test list
+there. `~/Desktop/pop_renders/27_live_fog_order_game_vs_native.png`.
+
+## Draw paths not converted yet (balcony frame, 16 Oct)
+The frame export now counts the other `CElementList::Render` paths and logs their textures:
+- **`CJIdxMesh::Display` (0x4BDB80, list type 0x10): 18 draws = the palm trees** (frond texture
+  128x64 alpha-tested, flags 0x10117) **and the additive glows** (pink lens blob, bright disc glow,
+  the fire texture behind the curtains; kinds 4/6). Next converter target.
+- `FUN_00458FC0` -> `FUN_004584C0` (types 0-0xF, VU program 4, GFX): 14 draws: rain streaks,
+  smoke puffs, the torch flame sprite sheet, sparks, star field.
+- `FUN_00469C00` (type 0x18): 2 draws with a light-shaft texture.
+- `CJadeSpriteElement::Display` (0x4C6200, types 0x1C/0x20) and `CJSmWaterElement::Display`
+  (0x4C77C0, type 0x14): none in this frame.
+The moon disc itself was not found among these; candidates: the additive disc glow above, or the
+after-effect halos (`docs/postfx.md`).
+The rain sheet (CJMeshElement, kind 6, identity pool matrix, vertices around the origin) is drawn
+camera-relative: effect work.
