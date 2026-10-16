@@ -56,3 +56,19 @@ Not a model job:
 - Reverse-engineering new formats/paths (GFX particles `FUN_004584C0`, after-effect halos, UV
   animation matrices): discovery is where the model is weak (14 Oct tests); do it ourselves, then
   hand the volume work over with a spec.
+
+## Status 16 Oct evening
+- Candidate 4 (GPU ports of the post effects) is done by Claude, not Qwen: the kernels were small
+  (`tools/native/shaders/gs_sprite.comp`, `color_diffusion.comp`), and the judge
+  (`pop_postfx_gpu_judge`) needed a known-good shader to be validated anyway. The judge is reusable
+  for further GPU post effects.
+- Candidate 1 (live packet decoders) proved its point the same day: the hand-written decoder had a
+  batch-order bug (colours after positions -> wrong colours, white fronds). Fixed by hand; a
+  standalone tested decoder is still worth having, judged on recorded packets.
+- No Qwen job of real value was ready for the night of 16 Oct: the remaining 1.0 work is mostly
+  discovery. Next big Qwen candidate: **VU1 driver programs (0x4CDE80, 0x4D5480, 0x4D9480,
+  0x4DD300, 0x4E0F00) to readable C++**, judged by recorded inputs/outputs: a capture hook at each
+  VU1 kick (VU1 data memory + registers before, XGKICK GIF output after), a standalone harness, then
+  staged ports per entry point/path. Gives exact lighting (point lights), shading-pass UVs, sky,
+  water and particles for the native renderer. Needs the capture hook first (Claude, ~half a day).
+

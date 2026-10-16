@@ -321,6 +321,13 @@ namespace pop_native_live
                         e.col[i][c] = guestF(rdram, cm + 4u * (4 * i + c));
                     }
             }
+            else if (pointFlag && !std::getenv("POP_NATIVE_PTLIGHTS"))
+            {
+                // Point-light sets (flag at +1; DoSetSkinLightEnv takes another path for them, retail
+                // 0x4B6A40): their light slots hold floats (positions, a matrix), not RGB colours, so
+                // reading them as directional lights gave huge colours (the light-grey palm fronds).
+                // Ambient only until that path is decoded; POP_NATIVE_PTLIGHTS=1 = the old reading.
+            }
             else
             {
                 for (int i = 0; i < count && i < 4; ++i)
@@ -494,7 +501,55 @@ namespace pop_native_live
                 pc = next;
             }
             static const uint8_t kElementBytes[16] = {4, 2, 1, 0, 8, 4, 2, 0, 12, 6, 3, 0, 16, 8, 4, 2};
-            std::vector<uint8_t> uv, col;
+            static int unpackLogs = std::getenv("POP_NATIVE_UNPACKLOG") ? 6 : 0;
+            std::string unpackLog;
+            // A batch is the group of uploads between two uploads of the same format: packets send a
+            // batch's V3-16 UVs, V3-32 positions and V4-8 colours (and a V4-32 x3 bounding box) in
+            // either order, e.g. bbox, UVs, positions, colours (the palm fronds of the title scene)
+            // or colours, UVs, positions, bbox. Closing each batch at its positions upload gave the
+            // first order the previous batch's colours, and white for the first batch.
+            std::vector<uint8_t> uv, col, pos;
+            uint32_t posNum = 0;
+            unsigned have = 0; // bit per format seen in the current group (1 << format)
+            auto flush = [&]() {
+                if (posNum)
+                {
+                    const uint32_t num = posNum;
+                    pop_assets::Batch b;
+                    b.vertices.resize(num);
+                    std::vector<int32_t> flags(num, 0);
+                    for (uint32_t v = 0; v < num; ++v)
+                    {
+                        pop_native::Vertex &vx = b.vertices[v];
+                        std::memcpy(vx.pos, &pos[12 * v], 12);
+                        int16_t st[3] = {0, 0, 0};
+                        if (6 * v + 6 <= uv.size())
+                            std::memcpy(st, &uv[6 * v], 6);
+                        vx.uv[0] = float(st[0] / uvscale);
+                        vx.uv[1] = float(st[1] / uvscale);
+                        flags[v] = st[2];
+                        for (int k = 0; k < 4; ++k)
+                            vx.colour[k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
+                        vx.uv2[0] = vx.uv2[1] = 0;
+                    }
+                    for (uint32_t v = 2; v < num; ++v)
+                    {
+                        if (flags[v])
+                            continue;
+                        if (v % 2 == 0)
+                            b.indices.insert(b.indices.end(), {v - 2, v - 1, v});
+                        else
+                            b.indices.insert(b.indices.end(), {v - 1, v - 2, v});
+                    }
+                    if (!b.indices.empty())
+                        out.push_back(std::move(b));
+                }
+                uv.clear();
+                col.clear();
+                pos.clear();
+                posNum = 0;
+                have = 0;
+            };
             for (size_t i = 0; i < words.size();)
             {
                 const uint32_t w = words[i++];
@@ -505,40 +560,23 @@ namespace pop_native_live
                     if (i + n > words.size())
                         break;
                     const uint8_t *raw = reinterpret_cast<const uint8_t *>(&words[i]);
-                    if ((cmd & 0xF) == 9)
-                        uv.assign(raw, raw + bytes);
-                    else if ((cmd & 0xF) == 0xE)
-                        col.assign(raw, raw + bytes);
-                    else if ((cmd & 0xF) == 8)
+                    const unsigned fmt = cmd & 0xF;
+                    if (unpackLogs > 0)
+                        unpackLog += " " + std::to_string(fmt) + "@" + std::to_string(w & 0x3FF) + "x" + std::to_string(num);
+                    if (fmt == 8 || fmt == 9 || fmt == 0xC || fmt == 0xE)
                     {
-                        pop_assets::Batch b;
-                        b.vertices.resize(num);
-                        std::vector<int32_t> flags(num, 0);
-                        for (uint32_t v = 0; v < num; ++v)
+                        if (have & (1u << fmt))
+                            flush();
+                        have |= 1u << fmt;
+                        if (fmt == 9)
+                            uv.assign(raw, raw + bytes);
+                        else if (fmt == 0xE)
+                            col.assign(raw, raw + bytes);
+                        else if (fmt == 8)
                         {
-                            pop_native::Vertex &vx = b.vertices[v];
-                            std::memcpy(vx.pos, raw + 12 * v, 12);
-                            int16_t st[3] = {0, 0, 0};
-                            if (6 * v + 6 <= uv.size())
-                                std::memcpy(st, &uv[6 * v], 6);
-                            vx.uv[0] = float(st[0] / uvscale);
-                            vx.uv[1] = float(st[1] / uvscale);
-                            flags[v] = st[2];
-                            for (int k = 0; k < 4; ++k)
-                                vx.colour[k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
-                            vx.uv2[0] = vx.uv2[1] = 0;
+                            pos.assign(raw, raw + bytes);
+                            posNum = num;
                         }
-                        for (uint32_t v = 2; v < num; ++v)
-                        {
-                            if (flags[v])
-                                continue;
-                            if (v % 2 == 0)
-                                b.indices.insert(b.indices.end(), {v - 2, v - 1, v});
-                            else
-                                b.indices.insert(b.indices.end(), {v - 1, v - 2, v});
-                        }
-                        if (!b.indices.empty())
-                            out.push_back(std::move(b));
                     }
                     i += n;
                 }
@@ -550,6 +588,12 @@ namespace pop_native_live
                     i += 1;
                 else if (cmd == 0x30 || cmd == 0x31)
                     i += 4;
+            }
+            flush();
+            if (unpackLogs > 0 && !unpackLog.empty())
+            {
+                --unpackLogs;
+                std::fprintf(stderr, "[pop:unpack] packet %08x (format@addr x num):%s\n", packet, unpackLog.c_str());
             }
         }
 
@@ -814,6 +858,38 @@ namespace pop_native_live
             }
             g_origGlow(rdram, ctx, runtime);
         }
+        // CAfterEffect::AE_ProcessSmartBlur (retail 0x4A93C0; prototype 0x466240): the haze. Reads only
+        // at entry (code after calling the original may run mid-call on the SotC runtime). It draws
+        // when +0x128 == 0 or a fade runs (+0x140); colour/strength at +0x124, fade factor at +0x144
+        // (updated by the function itself first: approximated from +0x14C/+0x148 as it does).
+        PS2Runtime::RecompiledFunction g_origHaze = nullptr;
+        uint32_t g_hazeCalls = 0, g_haze[2] = {}; // colour, fade (float bits)
+        void smartBlur(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing || g_frameDone)
+            {
+                const uint32_t self = getRegU32(ctx, 4);
+                const uint32_t fading = guestAny(rdram, self + 0x140u), off = guestAny(rdram, self + 0x128u);
+                if ((!g_hazeCalls || g_frameCapturing) && (off == 0u || fading != 0u))
+                {
+                    float fade = 0.0f;
+                    if (fading)
+                    {
+                        const int32_t n = int32_t(guestAny(rdram, self + 0x14Cu)), total = int32_t(guestAny(rdram, self + 0x148u));
+                        if (total != 0 && n != total)
+                        {
+                            const float t = 1.0f - float(n) / float(total);
+                            fade = t * t;
+                        }
+                    }
+                    g_haze[0] = guestAny(rdram, self + 0x124u);
+                    std::memcpy(&g_haze[1], &fade, 4);
+                    if (g_hazeCalls++ < 4)
+                        std::fprintf(stderr, "[pop:native] SmartBlur colour %08x fade %.3f\n", g_haze[0], double(fade));
+                }
+            }
+            g_origHaze(rdram, ctx, runtime);
+        }
         struct OtherDraw
         {
             int path;
@@ -980,6 +1056,37 @@ namespace pop_native_live
                     const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
                     if (poseSkinned(rdram, element, index, sk->second, posed, &light))
                     {
+                        static const bool skinLog = std::getenv("POP_NATIVE_SKINLOG") != nullptr;
+                        if (skinLog)
+                        {
+                            // per skinned draw: normals or colours, the light set, the mean vertex colour
+                            double mean[3] = {0, 0, 0};
+                            size_t nv = 0, withNormals = 0;
+                            for (const auto &b : sk->second)
+                                withNormals += b.normals.empty() ? 0 : 1;
+                            for (const auto &b : posed)
+                                for (const auto &v : b.vertices)
+                                {
+                                    for (int c = 0; c < 3; ++c)
+                                        mean[c] += v.colour[c];
+                                    ++nv;
+                                }
+                            const uint32_t set = guestAny(rdram, 0x700004F0u) + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
+                            std::fprintf(stderr,
+                                         "[pop:skin] el %08x idx %u pass %u batches %zu normals %zu | set %u amb %08x n %u pt %u | const %u %08x | "
+                                         "lit %d amb %.0f %.0f %.0f lights %d | mean colour %.3f %.3f %.3f\n",
+                                         element, index, pass, sk->second.size(), withNormals, guestAny(rdram, 0x70000088u) & 0xFF,
+                                         guestAny(rdram, set + 4), guest8(rdram, set + 8), guest8(rdram, set + 1), guest8(rdram, 0x70000039u),
+                                         guestAny(rdram, 0x7000003Cu), int(light.valid), double(light.amb[0]), double(light.amb[1]),
+                                         double(light.amb[2]), light.count, nv ? mean[0] / nv : 0, nv ? mean[1] / nv : 0, nv ? mean[2] / nv : 0);
+                            static int setDumps = 0;
+                            if (setDumps++ < 3)
+                                for (int l = 0; l < 4; ++l)
+                                    std::fprintf(stderr, "[pop:skin]   light %d type %08x colour %08x dir/pos %.3f %.3f %.3f %.3f\n", l,
+                                                 guestAny(rdram, set + 0xE0 + 4 * l), guestAny(rdram, set + 0xD0 + 4 * l), double(guestF(rdram, set + 0x10 + 16 * l)),
+                                                 double(guestF(rdram, set + 0x14 + 16 * l)), double(guestF(rdram, set + 0x18 + 16 * l)),
+                                                 double(guestF(rdram, set + 0x1C + 16 * l)));
+                        }
                         DrawMaterial dm = currentMaterial(rdram);
                         dm.hasUvm = false; // the skin driver has no UV matrix
                         g_framePosed.emplace_back(std::move(posed), dm);
@@ -1155,8 +1262,31 @@ namespace pop_native_live
             for (size_t i = 0; i < g_frameRefs.size(); ++i)
                 order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
             std::sort(order.begin(), order.end());
+            // side file: per written draw its kind, source index, render state, texture key and mean
+            // vertex colour (0x80 = 1.0), to identify draws found by bisecting a frame in the viewer
+            FILE *dl = std::fopen((g_framePath + ".draws.txt").c_str(), "w");
+            uint32_t drawNo = 0;
             for (const auto &o : order)
             {
+                if (dl)
+                {
+                    const DrawMaterial &m = o[1] == 0 ? g_frameMaterials[o[2]] : o[1] == 1 ? g_framePosed[o[2]].second : g_frameRefs[o[2]].second.second;
+                    const auto &bs = o[1] == 0 ? g_elements[g_frameDraws[o[2]].first].meshes : o[1] == 1 ? g_framePosed[o[2]].first : g_frameRefs[o[2]].first;
+                    double c[4] = {0, 0, 0, 0};
+                    size_t nv = 0;
+                    for (const auto &b : bs)
+                        for (const auto &v : b.vertices)
+                        {
+                            for (int k = 0; k < 4; ++k)
+                                c[k] += v.colour[k];
+                            ++nv;
+                        }
+                    std::fprintf(dl, "%u %s %u element %08x flags %08x ref %08x tex %08x batches %zu verts %zu colour %.3f %.3f %.3f %.3f\n", drawNo,
+                                 o[1] == 0 ? "static" : o[1] == 1 ? "skinned" : "instanced", o[2],
+                                 o[1] == 0 ? g_frameDraws[o[2]].first : 0u, m.flags, m.ref, m.textureKey, bs.size(), nv, nv ? c[0] / nv : 0,
+                                 nv ? c[1] / nv : 0, nv ? c[2] / nv : 0, nv ? c[3] / nv : 0);
+                }
+                ++drawNo;
                 const float *model = kIdentity;
                 const DrawMaterial *matp = nullptr;
                 const std::vector<pop_assets::Batch> *batches = nullptr;
@@ -1201,9 +1331,14 @@ namespace pop_native_live
                     tris += ni / 3;
                 }
             }
+            if (dl)
+                std::fclose(dl);
             std::fwrite("GLOW", 1, 4, f);
             std::fwrite(&g_glowCalls, 4, 1, f);
             std::fwrite(g_glow, 4, 5, f);
+            std::fwrite("HAZE", 1, 4, f);
+            std::fwrite(&g_hazeCalls, 4, 1, f);
+            std::fwrite(g_haze, 4, 2, f);
             std::fclose(f);
             // side file for identifying the sub-material layout: per draw, the sub-material object's
             // first 0x30 bytes and the key that word +4 maps to as a texture index
@@ -1394,6 +1529,9 @@ namespace pop_native_live
             g_origGlow = runtime.lookupFunction(0x004AE100u);
             if (g_origGlow)
                 runtime.replaceFunction(0x004AE100u, colorDiffusion);
+            g_origHaze = runtime.lookupFunction(0x004A93C0u);
+            if (g_origHaze)
+                runtime.replaceFunction(0x004A93C0u, smartBlur);
             g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
             if (g_origAddHalo)
                 runtime.replaceFunction(0x004AB1C0u, addHalo);

@@ -46,3 +46,12 @@ target_link_libraries(pop_native_view PRIVATE pop_native SDL3::SDL3)
 # pop_assets_test: lists every texture record of a pack decoded by pop_assets (judge: tools/native/assets_check.py)
 add_executable(pop_assets_test src/assets_test.cpp)
 target_link_libraries(pop_assets_test PRIVATE pop_native)
+
+# pop_postfx_check: judges postfx.h against the game's per-pass framebuffer dumps (POP_PASSDUMP_AT)
+add_executable(pop_postfx_check src/postfx_check.cpp)
+target_include_directories(pop_postfx_check PRIVATE src ${stb_SOURCE_DIR})
+
+# pop_postfx_gpu_judge: GPU (compute) ports of the post effects vs the CPU references in postfx.h
+add_executable(pop_postfx_gpu_judge src/postfx_gpu_judge.cpp src/gpu_compute.cpp)
+target_include_directories(pop_postfx_gpu_judge PRIVATE src ${stb_SOURCE_DIR})
+target_link_libraries(pop_postfx_gpu_judge PRIVATE volk Vulkan::Headers)

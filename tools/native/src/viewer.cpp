@@ -481,9 +481,15 @@ int main(int argc, char **argv)
     // clip file's
     uint32_t glow[5] = {};
     bool glowOn = false, noGlow = false; // ColorDiffusion ran in the captured frame (PNF5); --noglow skips it
+    uint32_t haze[2] = {};
+    bool hazeOn = false, noHaze = false; // SmartBlur ran in the captured frame (HAZE trailer); --nohaze skips it
     for (int i = 4; i < argc; ++i)
+    {
+        if (!std::strcmp(argv[i], "--nohaze"))
+            noHaze = true;
         if (!std::strcmp(argv[i], "--noglow"))
             noGlow = true;
+    }
     auto addFrame = [&](const char *path) -> bool {
         std::ifstream f(path, std::ios::binary);
         char magic[4] = {};
@@ -582,8 +588,15 @@ int main(int argc, char **argv)
                 vertexTotal += nv;
                 triTotal += ni / 3;
                 d.mesh = r.addMesh(std::move(mesh));
-                draws.push_back(d);
+                // debug: POP_VIEW_ONLY=<first>-<last> keeps only those element draws (bisecting a frame)
+                static const char *only = std::getenv("POP_VIEW_ONLY");
+                if (!only || (int(i) >= std::atoi(only) && int(i) <= std::atoi(std::strchr(only, '-') ? std::strchr(only, '-') + 1 : only)))
+                    draws.push_back(d);
             }
+            static const bool listDraws = std::getenv("POP_VIEW_LIST") != nullptr;
+            if (listDraws)
+                std::printf("draw %u: %u batches, material %d, model t (%.1f %.1f %.1f)\n", i, nb, material, double(d.model[12]),
+                            double(d.model[13]), double(d.model[14]));
         }
         if (v5)
         {
@@ -595,6 +608,14 @@ int main(int argc, char **argv)
                 glowOn = calls > 0;
                 std::printf("glow (ColorDiffusion): %u calls, levels %u FIX %u mask %u convolution %u strength %d\n", calls, glow[0], glow[1],
                             glow[2], glow[3], int(glow[4]));
+            }
+            if (f.read(tag, 4) && std::memcmp(tag, "HAZE", 4) == 0 && f.read(reinterpret_cast<char *>(&calls), 4))
+            {
+                f.read(reinterpret_cast<char *>(haze), sizeof haze);
+                hazeOn = calls > 0;
+                float fade = 0;
+                std::memcpy(&fade, &haze[1], 4);
+                std::printf("haze (SmartBlur): %u calls, colour %08X fade %.3f\n", calls, haze[0], double(fade));
             }
         }
         std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
@@ -757,6 +778,17 @@ int main(int argc, char **argv)
     }
     if (glowOn && !noGlow)
         pop_postfx::colorDiffusion(rgba, int(width), int(height), int(glow[0]), int(glow[1]), glow[2] != 0, glow[3] != 0, int(glow[4]));
+    if (hazeOn && !noHaze)
+    {
+        pop_postfx::Surface frame, work;
+        frame.w = int(width);
+        frame.h = int(height);
+        frame.rgba = std::move(rgba);
+        float fade = 0;
+        std::memcpy(&fade, &haze[1], 4);
+        pop_postfx::smartBlur(frame, work, haze[0], fade, 11, false, int(width) / 640);
+        rgba = std::move(frame.rgba);
+    }
     const auto t2 = std::chrono::steady_clock::now();
     // opaque output (the colour target's alpha is not meaningful for the comparison)
     std::vector<uint8_t> rgb(size_t(width) * height * 3);

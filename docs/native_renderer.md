@@ -290,12 +290,53 @@ Two causes, both modelled exactly now:
 Left: the flame colour is still more saturated orange at its edges than the game's; some near palm
 fronds render light grey where the game's stay dark (present before these fixes; next to look at).
 
-## The haze (found 16 Oct, not implemented)
-After ColorDiffusion the balcony frame runs a second effect (pass dump passes 57-67, limit now 200):
-the frame is copied to the work buffer (FBP 280) and reduced into ever smaller blurred copies with
-borders (half, quarter, eighth; flat-colour sprite passes around them), then one full-screen ALPHA
-0x44 blit blends the blurred copy back over the frame. This is the game's soft/hazy look. Matches
-`AE_ProcessSmartBlur` (prototype 0x466240, `game/analysis/post/decomp/00466240.c`: blend 0x44, alpha
-from effect object +0x124 top byte times 1 - fade) -> `AE_BlurBackBufferIntoZBuffer` (prototype
-0x4666C0, decompile in `game/analysis/post/decomp_proto/004666c0.c`). Next: port it into
-`tools/native/src/postfx.h`, capture +0x124 live, judge against `pass_056` -> `pass_067`.
+## The haze (16 Oct, implemented)
+After ColorDiffusion the frame runs `AE_ProcessSmartBlur` (retail **0x4A93C0**, prototype 0x466240,
+`game/analysis/post/decomp/00466240.c`) -> `AE_BlurBackBufferIntoZBuffer` (retail **0x4A9740**,
+prototype 0x4666C0, `decomp_proto/004666c0.c`), the game's soft/hazy look. Eleven GS sprites, all
+`DrawRectToScreen` with 12.4 positions (XYOFFSET 1728, 1824) and 12.4 texel UVs; blitter args
+(src, dst, FBMSK 0xFF000000 = alpha never written, bilinear, TCC 0):
+1. frame 640x448 -> work buffer (FBP 280) 256x256 at (0,0), ALPHA 0x29 (Cs);
+2. black border (256..448, 0..192), untextured, colour 0;
+3. 256 -> 128x128 at (288,32); 4. black border (288..384, 192..288); 5. 128 -> 64x64 at (303,207);
+6-10. ALPHA 0x44 with vertex alpha 0x40 (half strength): the 128 square into the 64 one shifted
+   (+2,+1) and (+1,+2), the 64 one back over the 128 one at (-1,-1) (half-texel inset), and the
+   128 square onto itself shifted (+1,0) and (0,+1);
+11. the 128 square (half-texel inset) over the whole frame (-10,-10)..(639,447), ALPHA 0x44,
+   vertex colour = effect object **+0x124** (RGB, strength in the top byte) with the strength
+   times (1 - fade); fade (+0x144) = (1 - n/total)^2 while a fade runs (+0x140, +0x148/+0x14C).
+   It draws when +0x128 == 0 or a fade runs.
+`tools/native/src/postfx.h` `smartBlur()` (blit table `smartBlurBlits()`, generic `gsSprite()` =
+the reference CPU rasteriser's sprite rules), judged by `pop_postfx_check smartblur
+game/recomp/screens 56 51 57 [colour]` against the balcony pass dumps: blits 1-8 within rounding
+(mean <= 1.4/255, max 3); blits 9-10 read their own target: with a snapshot of the source (what a
+GPU does) mean 1.7/2.4, reading already-written pixels 2.5/3.3 (the reference rasteriser is in
+between; the real GS's texture cache differs again). The final blit alone from the game's own work
+buffer, with the live colour **0x35808080** (title/balcony): **mean 0.2, max 2**; the whole chain
+vs the game's frame: mean 1.2 (no haze at all: 3.9). Live export: hook at 0x4A93C0 (reads at
+entry only), `HAZE` trailer after `GLOW` in PNF5 (calls, colour, fade bits); the viewer applies it
+after the glow (`--nohaze` to skip; scales with the render size).
+GPU versions: `tools/native/shaders/gs_sprite.comp` (one sprite per dispatch, self-reads get a
+copy) and `color_diffusion.comp` (RESAMPLE / MASK / CONVOLVE / ADD_UP on float planes), run by
+`src/gpu_compute.{h,cpp}` (minimal Vulkan compute: storage buffers, push constants). Judge:
+`pop_postfx_gpu_judge sprite|diffusion <spv> <frame.png>...` = **bit-identical to the CPU
+references** on MoltenVK (and it fails deliberately broken shaders; a frame with an empty glow mask
+hides convolution errors, hence the extra no-mask and synthetic-mask cases).
+
+## Light-grey palm fronds: instanced packets with colours after positions (16 Oct, fixed)
+The bright fronds and hanging net of the title scene (and the "near palm fronds light grey" on the
+balcony) were one bug in the live packet decoder (`livePacketBatches`, instanced and CJIdxMesh
+draws): it closed each batch at its V3-32 positions upload with the UVs/colours seen so far, but
+packets send a batch's uploads in either order: `bbox(V4-32 x3 @0), UVs(@67), positions(@3),
+colours(@131)` or `colours, UVs, positions, bbox` (`POP_NATIVE_UNPACKLOG=1` logs them). In the
+first order every batch got the previous batch's colours and the first batch none (white). Now a
+batch is the group of uploads between two uploads of the same format. Found by bisecting the
+frame's draws in the viewer (`POP_VIEW_ONLY=<a>-<b>`, `POP_VIEW_LIST=1`) with the export's new side
+file `<frame>.draws.txt` (per draw: kind, element, flags, texture, mean vertex colour).
+Point-light sets (light set +1 != 0) take another path in `DoSetSkinLightEnv` (retail 0x4B6A40,
+also for sets with no lights): it uploads `count` slots from +0x10 (vectors) and +0xD0 (colour
+bytes) without checking types; the title scene's set 0 holds floats there (a position and a
+matrix), not colours, so reading them as directional lights gave huge colours. The export now
+uses the ambient alone for point-light sets (unverified approximation; `POP_NATIVE_PTLIGHTS=1` =
+the old reading); the VU1 side of point lights is still to decode.
+

@@ -1,0 +1,63 @@
+#version 450
+// One GS sprite as pop_postfx::gsSprite draws it (postfx.h): pixel i covered when x0 <= i < x1,
+// UVs interpolated at the integer pixel position and rounded to 1/16 texel, bilinear with texel
+// centres at +0.5 (clamped to the source), MODULATE (T * V >> 7), TCC 0, then ALPHA 0x29 (copy) or
+// 0x44 ((Cs - Cd) * As >> 7 + Cd), clamped. Buffers hold packed RGBA8 (r = bits 0-7); the
+// destination's alpha is never written (FBMSK 0xFF000000). A blit that reads its own target gets a
+// copy of it as `src` from the host.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer Src { uint src[]; };
+layout(std430, binding = 1) buffer Dst { uint dst[]; };
+layout(push_constant) uniform Push
+{
+    vec4 xy;     // x0, y0, x1, y1 (pixels)
+    vec4 uv;     // u0, v0, u1, v1 (texels)
+    ivec4 size;  // src w, h, dst w, h
+    uint colour; // vertex RGBA, 0x80 = 1.0
+    uint flags;  // bit 0 textured, bit 1 blend 0x44
+} p;
+
+float lround16(float v) // std::lround(v * 16) / 16
+{
+    precise float s = v * 16.0;
+    return (s >= 0.0 ? floor(s + 0.5) : -floor(-s + 0.5)) / 16.0;
+}
+
+uvec4 texel(int x, int y)
+{
+    x = clamp(x, 0, p.size.x - 1);
+    y = clamp(y, 0, p.size.y - 1);
+    uint t = src[y * p.size.x + x];
+    return uvec4(t & 0xFFu, (t >> 8) & 0xFFu, (t >> 16) & 0xFFu, t >> 24);
+}
+
+void main()
+{
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    int px0 = max(0, int(ceil(p.xy.x))), px1 = min(p.size.z - 1, int(ceil(p.xy.z)) - 1);
+    int py0 = max(0, int(ceil(p.xy.y))), py1 = min(p.size.w - 1, int(ceil(p.xy.w)) - 1);
+    if (pix.x < px0 || pix.x > px1 || pix.y < py0 || pix.y > py1)
+        return;
+    ivec4 vc = ivec4(p.colour & 0xFFu, (p.colour >> 8) & 0xFFu, (p.colour >> 16) & 0xFFu, p.colour >> 24);
+    ivec3 cs = vc.rgb;
+    if ((p.flags & 1u) != 0u)
+    {
+        precise float du = p.xy.z > p.xy.x ? (p.uv.z - p.uv.x) / (p.xy.z - p.xy.x) : 0.0;
+        precise float dv = p.xy.w > p.xy.y ? (p.uv.w - p.uv.y) / (p.xy.w - p.xy.y) : 0.0;
+        precise float tu = lround16(p.uv.x + (float(pix.x) - p.xy.x) * du) - 0.5;
+        precise float tv = lround16(p.uv.y + (float(pix.y) - p.xy.y) * dv) - 0.5;
+        int tx = int(floor(tu)), ty = int(floor(tv));
+        precise float fx = tu - float(tx), fy = tv - float(ty);
+        uvec4 a = texel(tx, ty), b = texel(tx + 1, ty), c = texel(tx, ty + 1), d = texel(tx + 1, ty + 1);
+        for (int k = 0; k < 3; ++k)
+        {
+            precise float t = (float(a[k]) * (1.0 - fx) + float(b[k]) * fx) * (1.0 - fy) + (float(c[k]) * (1.0 - fx) + float(d[k]) * fx) * fy;
+            cs[k] = min(255, (int(t) * cs[k]) >> 7);
+        }
+    }
+    uint i = uint(pix.y * p.size.z + pix.x);
+    uint old = dst[i];
+    ivec3 cd = ivec3(old & 0xFFu, (old >> 8) & 0xFFu, (old >> 16) & 0xFFu);
+    ivec3 o = (p.flags & 2u) != 0u ? clamp(((cs - cd) * vc.a >> 7) + cd, 0, 255) : cs;
+    dst[i] = uint(o.r) | (uint(o.g) << 8) | (uint(o.b) << 16) | (old & 0xFF000000u);
+}

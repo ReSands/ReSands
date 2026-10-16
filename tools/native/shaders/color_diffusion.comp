@@ -1,0 +1,61 @@
+#version 450
+// CAfterEffect::ColorDiffusion's kernels (postfx.h colorDiffusion) on float RGBA planes (0..255).
+// The host runs the sequence: half-res RESAMPLE (+ MASK by the resampled frame alpha), then per
+// level RESAMPLE to half size (+ CONVOLVE), then ADD_UP of each level onto the frame, smallest first.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, binding = 0) readonly buffer Src { vec4 src[]; };
+layout(std430, binding = 1) buffer Dst { vec4 dst[]; };
+layout(std430, binding = 2) readonly buffer Aux { vec4 aux[]; };
+layout(push_constant) uniform Push
+{
+    int op; // 0 RESAMPLE, 1 MASK, 2 CONVOLVE, 3 ADD_UP
+    int sw, sh, dw, dh;
+    int strength;
+    float k;
+} p;
+
+vec3 at(int x, int y)
+{
+    x = clamp(x, 0, p.sw - 1);
+    y = clamp(y, 0, p.sh - 1);
+    return src[y * p.sw + x].rgb;
+}
+
+// GS bilinear at texel coordinates (texel centres at +0.5), as Plane::bilinear
+vec3 bilinear(float u, float v)
+{
+    precise float uu = u - 0.5, vv = v - 0.5;
+    int x0 = int(floor(uu)), y0 = int(floor(vv));
+    precise float fx = uu - float(x0), fy = vv - float(y0);
+    precise vec3 r = (at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx) * (1.0 - fy) + (at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx) * fy;
+    return r;
+}
+
+void main()
+{
+    ivec2 pix = ivec2(gl_GlobalInvocationID.xy);
+    if (pix.x >= p.dw || pix.y >= p.dh)
+        return;
+    int i = pix.y * p.dw + pix.x;
+    if (p.op == 0 || p.op == 3)
+    {
+        precise float sx = float(p.sw) / float(p.dw), sy = float(p.sh) / float(p.dh);
+        vec3 s = bilinear((float(pix.x) + 0.5) * sx, (float(pix.y) + 0.5) * sy);
+        if (p.op == 0)
+            dst[i] = vec4(s, 0.0);
+        else
+            dst[i].rgb = min(vec3(255.0), dst[i].rgb + s * p.k);
+    }
+    else if (p.op == 1)
+        dst[i].rgb = min(vec3(255.0), dst[i].rgb * aux[i].r / 255.0);
+    else
+    {
+        // every tap weight 15 + strength on the 0x80 = 1.0 scale; centre copied, neighbours added
+        float wgt = float(clamp(15 + p.strength, 0, 255)) / 128.0;
+        precise vec3 sum = vec3(0.0);
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx)
+                sum += at(pix.x + dx, pix.y + dy) * wgt;
+        dst[i] = vec4(min(vec3(255.0), sum), 0.0);
+    }
+}
