@@ -17,6 +17,12 @@ namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#if __has_include("runtime/ps2_save_state.h") // the SotC runtime's save states (F5/F9)
+#include "runtime/ps2_save_state.h"
+#define POP_HAVE_QUICKSAVE 1
+#else
+#define POP_HAVE_QUICKSAVE 0
+#endif
 #include <ctime>
 #include <condition_variable>
 #include <deque>
@@ -1515,6 +1521,29 @@ namespace
         active = true;
     }
 
+    // Controller quick-save: both stick buttons (L3 + R3) pressed together do what F5 does
+    // (PoP never needs both at once). Needs a runtime with save states (the SotC base); a no-op
+    // elsewhere. Every quick-save is also kept as states/play_<date>_<time>.state (keepQuickSaves).
+    void maybePadQuickSave()
+    {
+#if POP_HAVE_QUICKSAVE
+        static bool was = false;
+        static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+        bool combo = false;
+        for (int g = 0; g < 4; ++g)
+            if (IsGamepadAvailable(g) && IsGamepadButtonDown(g, GAMEPAD_BUTTON_LEFT_THUMB) && IsGamepadButtonDown(g, GAMEPAD_BUTTON_RIGHT_THUMB))
+                combo = true;
+        const auto now = std::chrono::steady_clock::now();
+        if (combo && !was && now - last > std::chrono::seconds(2))
+        {
+            last = now;
+            ps2x::savestate::requestQuickSave();
+            std::cerr << "[pop] quick-save requested from the controller (L3 + R3)" << std::endl;
+        }
+        was = combo;
+#endif
+    }
+
     // Scripted pad input for unattended boots: POP_INPUT="start@75,cross@95,lup@120:4" presses each
     // button (or pushes the left stick: lup/ldown/lleft/lright) at that many seconds after boot,
     // for 0.8 s or the given :seconds. Between inputs the real keyboard / gamepad is used.
@@ -1600,6 +1629,7 @@ namespace
         maybeDumpFrame(runtime);
         maybeSampleRenderPath(runtime);
         maybeScriptedInput();
+        maybePadQuickSave();
         const uint32_t caller = getRegU32(ctx, 31);
         if (kDebugTracing)
             heapWalkCheck(rdram, g_watched[I].name, caller);
