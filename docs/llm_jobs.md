@@ -37,7 +37,11 @@ what Qwen needs (staged, medium-sized functions; 1-4 rounds each in the 15 Oct r
 2. **`tools/chainfar.py` (sky) and the character lighting bake in `tools/chainskin.py` -> C++**,
    judged against the Python output (noted 16 Oct morning; still valid).
 3. **The 18 remaining wrong MMI instructions** (spec harness exists, 18/18 with specs on 14 Oct).
-4. **GS blend/state table unit test**: from `docs/native_renderer.md` "Blend state" (the game's
+4. **GPU ports of the post effects** (`tools/native/src/postfx.h`: ColorDiffusion now, SmartBlur
+   next): the CPU code is the spec, judge = image difference of the GPU output against the CPU
+   reference on captured frames (PNF5 + renders). Needs a small image-judge driver (the generic
+   harness compares text); worth building once SmartBlur is in.
+5. **GS blend/state table unit test**: from `docs/native_renderer.md` "Blend state" (the game's
    SetBlending table), write a table-driven test that feeds every flags combination through
    `pop_native::materialFromGsFlags` and checks the GS ALPHA value it implies against the table
    (judge = the table transcribed from the decompile by us). Small; catches regressions.
