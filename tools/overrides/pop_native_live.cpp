@@ -124,7 +124,7 @@ namespace pop_native_live
         }
 
         // The render state's current sub-material (0x70000034, set by CElementList::Render before
-        // Display): word 0 = texture index, word 1 = the record's +0x1C flags (0x10: alpha test),
+        // Display): word 0 = texture index (low 16 bits; flags in the top byte), word 1 = the record's +0x1C flags (0x10: alpha test),
         // +0x10 = its +0x28 (AREF in the top byte), word 11 = its +0x14 (0x80: blending); 16 Oct.
         DrawMaterial currentMaterial(uint8_t *rdram)
         {
@@ -132,7 +132,16 @@ namespace pop_native_live
             const uint32_t sub = guestAny(rdram, 0x70000034u);
             if (!sub)
                 return dm;
-            dm.textureKey = popTextureKey(guestAny(rdram, sub));
+            // word 0: texture index in the low bits, flags in the top byte (0x88/0xB8/0xC0/0xF8.. seen)
+            dm.textureKey = popTextureKey(guestAny(rdram, sub) & 0xFFFFu);
+            static int logged = 0;
+            if (!dm.textureKey && logged++ < 16)
+            {
+                std::fprintf(stderr, "[pop:native] no texture key: sub %08x words", sub);
+                for (uint32_t k = 0; k < 12; ++k)
+                    std::fprintf(stderr, " %08x", guestAny(rdram, sub + 4 * k));
+                std::fprintf(stderr, "\n");
+            }
             const uint32_t f1c = guestAny(rdram, sub + 4), f28 = guestAny(rdram, sub + 0x10), f14 = guestAny(rdram, sub + 0x2C);
             if (f14 & 0x80)
                 dm.mode = uint32_t(pop_native::AlphaMode::Blend);
@@ -464,6 +473,20 @@ namespace pop_native_live
                     std::fprintf(stderr, " %08x x%d (%s %ux%u)", kv.first, kv.second, ok ? "decoded" : "not found", img.width, img.height);
                 }
                 std::fprintf(stderr, "\n");
+            }
+            {
+                // unresolved texture keys, and whether each is a bigfile entry of its own
+                const char *env = std::getenv("POP_PS2_BIGFILE");
+                const std::string bf = env && *env ? env : "DATA/PRINCE.BF";
+                int shown = 0;
+                for (const auto &kv : imageOf)
+                    if (kv.second < 0 && shown++ < 12)
+                    {
+                        std::vector<uint8_t> entry;
+                        const bool own = pop_hdtex::readEntry(bf, kv.first, entry);
+                        std::fprintf(stderr, "[pop:native] texture %08x not found in the loaded packs; own bigfile entry: %s (%zu bytes)\n",
+                                     kv.first, own ? "yes" : "no", entry.size());
+                    }
             }
             const uint32_t ni0 = uint32_t(images.size());
             std::fwrite(&ni0, 4, 1, f);
