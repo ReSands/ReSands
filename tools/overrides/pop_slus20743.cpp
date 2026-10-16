@@ -754,7 +754,7 @@ namespace
             return;
         static auto start = std::chrono::steady_clock::now();
         static int dumped = 0;
-        if (dumped >= 60)
+        if (dumped >= 200)
             return;
         const PassInfo info = classifyPacket(data, size); // always, to track FRAME/TEX0/ALPHA state
         if (!info.interesting || std::chrono::steady_clock::now() - start < std::chrono::seconds(std::atoi(env)))

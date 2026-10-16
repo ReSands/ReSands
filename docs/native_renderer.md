@@ -289,3 +289,13 @@ Two causes, both modelled exactly now:
    compare). `~/Desktop/pop_renders/33-35_*`.
 Left: the flame colour is still more saturated orange at its edges than the game's; some near palm
 fronds render light grey where the game's stay dark (present before these fixes; next to look at).
+
+## The haze (found 16 Oct, not implemented)
+After ColorDiffusion the balcony frame runs a second effect (pass dump passes 57-67, limit now 200):
+the frame is copied to the work buffer (FBP 280) and reduced into ever smaller blurred copies with
+borders (half, quarter, eighth; flat-colour sprite passes around them), then one full-screen ALPHA
+0x44 blit blends the blurred copy back over the frame. This is the game's soft/hazy look. Matches
+`AE_ProcessSmartBlur` (prototype 0x466240, `game/analysis/post/decomp/00466240.c`: blend 0x44, alpha
+from effect object +0x124 top byte times 1 - fade) -> `AE_BlurBackBufferIntoZBuffer` (prototype
+0x4666C0, decompile in `game/analysis/post/decomp_proto/004666c0.c`). Next: port it into
+`tools/native/src/postfx.h`, capture +0x124 live, judge against `pass_056` -> `pass_067`.
