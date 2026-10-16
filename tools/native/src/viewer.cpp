@@ -221,7 +221,8 @@ int main(int argc, char **argv)
                             : gm.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
                                                                       : AlphaMode::Opaque;
             mat.cutoff = gm.alpha_cutoff;
-        mat.doubleSided = gm.double_sided;
+            mat.legacyBlend = mat.alphaMode == AlphaMode::Blend;
+            mat.doubleSided = gm.double_sided;
             materialIndex[i] = r.addMaterial(mat);
         }
 
@@ -394,8 +395,8 @@ int main(int argc, char **argv)
                 mat.baseImage = image(sub.texture);
                 if (mat.baseImage >= 0)
                 {
-                    mat.alphaMode = sub.mode;
-                    mat.cutoff = sub.cutoff;
+                    // the game's own blend table (render state flags, record +0x1C / +0x28)
+                    pop_native::materialFromGsFlags(sub.flags, sub.ref, mat);
                     if (lm)
                         mat.lightmapImage = image(lm);
                     idx = r.addMaterial(mat);
@@ -473,7 +474,9 @@ int main(int argc, char **argv)
         std::ifstream f(path, std::ios::binary);
         char magic[4] = {};
         f.read(magic, 4);
-        const bool v2 = std::memcmp(magic, "PNF2", 4) == 0;
+        // PNF3: per draw the render state flags + AREF word instead of PNF2's alpha mode + cutoff
+        const bool v3 = std::memcmp(magic, "PNF3", 4) == 0;
+        const bool v2 = v3 || std::memcmp(magic, "PNF2", 4) == 0;
         if (!v2 && std::memcmp(magic, "PNF1", 4) != 0)
             return false;
         f.read(reinterpret_cast<char *>(clip), 64);
@@ -493,7 +496,7 @@ int main(int argc, char **argv)
                 ++imageTotal;
             }
         }
-        std::map<std::tuple<int, uint32_t, float>, int> materials;
+        std::map<std::tuple<int, uint32_t, uint32_t>, int> materials;
         uint32_t n = 0;
         f.read(reinterpret_cast<char *>(&n), 4);
         for (uint32_t i = 0; i < n && f; ++i)
@@ -504,20 +507,26 @@ int main(int argc, char **argv)
             if (v2)
             {
                 int32_t image = -1;
-                uint32_t mode = 0;
-                float cutoff = 0.5f;
+                uint32_t mode = 0, word = 0; // PNF2: alpha mode, cutoff (float bits); PNF3: flags, AREF word
                 f.read(reinterpret_cast<char *>(&image), 4);
                 f.read(reinterpret_cast<char *>(&mode), 4);
-                f.read(reinterpret_cast<char *>(&cutoff), 4);
-                if (image >= 0 && size_t(image) < imageIndex.size())
+                f.read(reinterpret_cast<char *>(&word), 4);
+                const bool hasImage = image >= 0 && size_t(image) < imageIndex.size();
+                if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(image, mode, cutoff);
+                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word);
                     if (!materials.count(key))
                     {
                         Material mat;
-                        mat.baseImage = imageIndex[size_t(image)];
-                        mat.alphaMode = static_cast<AlphaMode>(mode);
-                        mat.cutoff = cutoff;
+                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : -1;
+                        if (v3)
+                            pop_native::materialFromGsFlags(mode, word, mat);
+                        else
+                        {
+                            mat.alphaMode = static_cast<AlphaMode>(mode);
+                            std::memcpy(&mat.cutoff, &word, 4);
+                            mat.legacyBlend = mat.alphaMode == AlphaMode::Blend;
+                        }
                         materials[key] = r.addMaterial(mat);
                     }
                     material = materials[key];

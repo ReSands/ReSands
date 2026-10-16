@@ -35,6 +35,7 @@ namespace pop_assets
         uint32_t texture = 0;
         pop_native::AlphaMode mode = pop_native::AlphaMode::Opaque;
         float cutoff = 0.5f; // MASK: (+0x28 top byte) / 255 on the doubled alpha scale
+        uint32_t flags = 0, ref = 0; // +0x1C (the game's render state flags) and +0x28: pop_native::materialFromGsFlags
     };
     bool subMaterial(const Pack &pack, uint32_t multiMaterial, uint32_t index, SubMaterial &out);
 

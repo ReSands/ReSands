@@ -4,7 +4,7 @@
 // cleared to 0, compare GREATER), so Vulkan's 0 <= z <= w clip does the near-plane clipping.
 layout(push_constant) uniform Push {
     mat4 mvp;          // game clip matrix * object matrix (column-major)
-    vec4 params;       // x: alpha mode (0 opaque, 1 mask, 2 blend), y: cutoff, z: has lightmap, w: near
+    vec4 params;       // x: flags (1 alpha test, 2 blended, 4 test LESS, 8 legacy blend), y: cutoff, z: lightmap strength, w: near
     vec4 fog;          // x, y: GS fog factor F = x + y * w (clamped 0..255, 255 = no fog), z: enabled
     vec4 fogColour;    // FOGCOL (0..1)
 } pc;

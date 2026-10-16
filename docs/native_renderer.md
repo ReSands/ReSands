@@ -143,3 +143,28 @@ ff02b51e (in the local test set), 27 are in packs not unpacked locally; 9 draws 
 Next: a PS2 pack cache (load + LZO-unpack the world pack the game looks up, as
 `pop_hdtextures.cpp` does for the PC bigfile; `BIG_ul_SearchKeyToPos` hook), then
 `pop_assets::decodeTexture` by key, and the sub-material's blend flags.
+
+## Blend state from the game's own table (16 Oct)
+The sub-material's flags word (record +0x1C; sub-material object word 1 at draw time, which
+`CElementList::Render` compares with 0x70000000 before calling `FUN_004B2000`) drives all GS state
+(decompiles in `game/analysis/native/decomp/`: 004b2000, 004b2500 `SetBlending`, 004b23c0
+`ExtractLocalAlphaAndConstantColor`):
+- bits 16-19, blend kind -> GS ALPHA: 0 opaque (0x29, FIX 0), 1 blend 0x44 (0x01 with 0x80; Ad
+  variants 0x54/0x11 with 0x1000), 2 Cd*As+Cs (0x09/0x19), 3 Cd*As (0x89/0x99; 0x46/0x56 with 0x80),
+  4 additive Cs+Cd (0x68, FIX 0x80), 5 Cd-Cs*0.375 (0x62, FIX 0x30), 6 Cs*As+Cd (0x48/0x58), 0xF
+  Cd*(1-As) (0x46, lightmaps), others opaque.
+- 0x10 alpha test, AREF = (+0x10 word top byte) / 2, ATST GREATER (LESS with 0x80); 0x100 AFAIL
+  RGB_ONLY; 0x200 ZMSK (no depth write); 0x1 / 0x2 clamp; 0x8 / 0x20 / 0x40 FBMSK (alpha / colour
+  write masks).
+- bits 13-15: 2 = constant colour = current material (0x70000030) +8 (RGB, 0x80 = 1.0), 4 =
+  0x808080; 0x400 = local alpha = sub-material word 0 >> 25. `CJMeshElement::Display` and
+  `CJMeshElementRef::Display` (passes 0 and 2) then send VIF STROW + STMASK (0x15151515 RGB,
+  0x40404040 alpha), so the packet's vertex colours are replaced.
+Fight area survey (1,051 sub-materials): kind 0 x713, 1 x220, 4 x19, 6 x13, 2 x1.
+Implemented: `pop_native::materialFromGsFlags` (shared by the offline `--pack` path and the live
+export), per-state pipelines in the renderer, frame format PNF3 (flags + AREF word per draw;
+constant colour / local alpha applied to the exported vertices). Balcony frame: 88 opaque, 20
+blend, 2 additive halos (torch, lamp), 1 additive rain sheet (kind 6, drawn camera-relative with
+an identity pool matrix: an effect for Stage D); the curtains now get their warm constant colour.
+Not modelled: FBMSK, Ad blends against our framebuffer alpha (no 0x1000 materials seen), AFAIL
+RGB_ONLY (approximated: no test, no depth write), ZTST off lists.

@@ -24,11 +24,21 @@ namespace pop_native
         std::vector<uint8_t> rgba; // width * height * 4
     };
 
+    // Blend kinds: the GS ALPHA settings the game's CJadeRenderStateManager::SetBlending (retail
+    // 0x4B2500) chooses, (A - B) * C + D with As = source alpha (Ad with Material::destAlpha) on the
+    // PS2 scale (0x80 = 1.0).
     enum class AlphaMode
     {
-        Opaque = 0,
-        Mask = 1,  // GS alpha test (AREF)
-        Blend = 2, // GS ALPHA (Cs - Cd) * As + Cd, drawn after the opaque pass in draw order
+        Opaque = 0,      // 0x29 (FIX 0): Cs
+        Mask = 1,        // opaque with the alpha test (legacy form of Opaque + alphaTest)
+        Blend = 2,       // 0x44: (Cs - Cd) * As + Cd
+        Add = 3,         // 0x68 FIX 0x80: Cs + Cd
+        AddAlpha = 4,    // 0x48: Cs * As + Cd
+        Subtract = 5,    // 0x62 FIX 0x30: Cd - Cs * fix
+        Multiply = 6,    // 0x89: Cd * As
+        InvMultiply = 7, // 0x46: Cd * (1 - As)
+        InvBlend = 8,    // 0x01: (Cd - Cs) * As + Cs
+        AddDest = 9,     // 0x09: Cd * As + Cs
     };
 
     struct Material
@@ -38,8 +48,50 @@ namespace pop_native
         float lightmapStrength = 1.0f; // darkening = texel * strength (world lightmaps 1; characters' shading pass Af / 128)
         AlphaMode alphaMode = AlphaMode::Opaque;
         float cutoff = 0.5f;
+        bool alphaTest = false;     // GS alpha test (always on for Mask): texel alpha > cutoff
+        bool alphaTestLess = false; // ATST LESS instead of GREATER (flag 0x80 with the test)
+        bool destAlpha = false;     // blend with the destination alpha (flag 0x1000)
+        bool depthWrite = true;     // false: ZBUF ZMSK (flag 0x200)
+        float fix = 1.0f;           // FIX / 128 for Subtract
+        bool legacyBlend = false;   // glTF BLEND: no depth write, nearly transparent texels dropped
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
     };
+
+    inline bool isBlended(AlphaMode m) { return m != AlphaMode::Opaque && m != AlphaMode::Mask; }
+
+    // A sub-material's flags word (record +0x1C; the render state's 0x70000000 at draw time) and its
+    // +0x28 word (AREF in the top byte), as the game turns them into GS state (FUN_004B2000 and
+    // SetBlending): bits 16-19 = blend kind, 0x10 alpha test (AREF = top byte / 2 on the PS2 scale,
+    // ATST GREATER, LESS with 0x80), 0x80 inverse blend, 0x100 AFAIL RGB_ONLY, 0x200 no depth write,
+    // 0x1000 destination alpha.
+    inline void materialFromGsFlags(uint32_t flags, uint32_t ref, Material &m)
+    {
+        const bool inv = (flags & 0x80) != 0, dest = (flags & 0x1000) != 0;
+        m.destAlpha = false;
+        m.fix = 1.0f;
+        switch ((flags >> 16) & 0xF)
+        {
+        case 1: m.alphaMode = inv ? AlphaMode::InvBlend : AlphaMode::Blend; m.destAlpha = dest; break;
+        case 2: m.alphaMode = AlphaMode::AddDest; m.destAlpha = dest; break;
+        case 3: m.alphaMode = inv ? AlphaMode::InvMultiply : AlphaMode::Multiply; m.destAlpha = dest; break;
+        case 4: m.alphaMode = AlphaMode::Add; break;
+        case 5: m.alphaMode = AlphaMode::Subtract; m.fix = 0x30 / 128.0f; break;
+        case 6: m.alphaMode = AlphaMode::AddAlpha; m.destAlpha = dest; break;
+        case 0xF: m.alphaMode = AlphaMode::InvMultiply; break;
+        default: m.alphaMode = AlphaMode::Opaque; break;
+        }
+        m.depthWrite = (flags & 0x200) == 0;
+        m.alphaTest = (flags & 0x10) != 0;
+        m.alphaTestLess = inv;
+        m.cutoff = float((ref >> 24) / 255.0);
+        // AFAIL RGB_ONLY: pixels failing the test still write colour, only not depth; approximated
+        // as no test and no depth write for the whole draw
+        if (m.alphaTest && (flags & 0x100))
+        {
+            m.alphaTest = false;
+            m.depthWrite = false;
+        }
+    }
 
     struct Mesh
     {

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
 #if defined(__APPLE__)
 #include <dlfcn.h>
 #endif
@@ -79,8 +80,6 @@ namespace pop_native
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkRenderPass renderPass = VK_NULL_HANDLE;
-        VkPipeline pipelineOpaque = VK_NULL_HANDLE, pipelineBlend = VK_NULL_HANDLE;
-        VkPipeline pipelineOpaqueCull = VK_NULL_HANDLE, pipelineBlendCull = VK_NULL_HANDLE;
         Buffer vertexBuffer, indexBuffer;
 
         std::vector<Image> images;
@@ -319,10 +318,12 @@ namespace pop_native
                     const MeshRange &r = ranges[d.mesh];
                     const Material *mat = r.material >= 0 && static_cast<size_t>(r.material) < materials.size() ? &materials[r.material] : nullptr;
                     const AlphaMode mode = mat ? mat->alphaMode : AlphaMode::Opaque;
-                    if ((mode == AlphaMode::Blend) != (pass == 1) || r.indexCount == 0)
+                    if (isBlended(mode) != (pass == 1) || r.indexCount == 0)
                         continue;
-                    const bool cull = mat && !mat->doubleSided;
-                    const VkPipeline want = pass ? (cull ? pipelineBlendCull : pipelineBlend) : (cull ? pipelineOpaqueCull : pipelineOpaque);
+                    std::string perr;
+                    const VkPipeline want = pipeline(pipelineKey(mat), perr);
+                    if (!want)
+                        continue;
                     if (want != bound)
                     {
                         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, want);
@@ -330,7 +331,11 @@ namespace pop_native
                     }
                     Push push;
                     mul(clip, d.model, push.mvp);
-                    push.params[0] = static_cast<float>(static_cast<int>(mode));
+                    // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
+                    // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels)
+                    const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
+                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (mat && mat->alphaTestLess ? 4 : 0) |
+                                           (mat && mat->legacyBlend ? 8 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW;
@@ -495,9 +500,29 @@ namespace pop_native
             if (!check(vkCreatePipelineLayout(device, &pl, nullptr, &pipelineLayout), "vkCreatePipelineLayout", error))
                 return false;
 
-            VkShaderModule vs = shader(kMeshVert, sizeof(kMeshVert), error), fs = shader(kMeshFrag, sizeof(kMeshFrag), error);
-            if (!vs || !fs)
-                return false;
+            vs = shader(kMeshVert, sizeof(kMeshVert), error);
+            fs = shader(kMeshFrag, sizeof(kMeshFrag), error);
+            return vs && fs;
+        }
+
+        // Pipelines per blend state, made on first use: key = blend kind (bits 0-3), destination
+        // alpha (4), back-face culling (5), depth write (6).
+        std::unordered_map<uint32_t, VkPipeline> pipelines;
+        VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
+
+        static uint32_t pipelineKey(const Material *mat)
+        {
+            if (!mat)
+                return 1u << 6;
+            const AlphaMode mode = mat->alphaMode == AlphaMode::Mask ? AlphaMode::Opaque : mat->alphaMode;
+            const bool depthWrite = isBlended(mode) ? mat->depthWrite && !mat->legacyBlend : mat->depthWrite;
+            return uint32_t(mode) | (mat->destAlpha ? 1u << 4 : 0u) | (!mat->doubleSided ? 1u << 5 : 0u) | (depthWrite ? 1u << 6 : 0u);
+        }
+
+        VkPipeline pipeline(uint32_t key, std::string &error)
+        {
+            if (const auto it = pipelines.find(key); it != pipelines.end())
+                return it->second;
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType = stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
@@ -525,20 +550,62 @@ namespace pop_native
             vp.viewportCount = vp.scissorCount = 1;
             VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
             rs.polygonMode = VK_POLYGON_MODE_FILL;
-            rs.cullMode = options.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE; // converter: all double-sided
-            rs.frontFace = options.cull == 2 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
             rs.lineWidth = 1.0f;
+            if (key & (1u << 5))
+            {
+                rs.cullMode = VK_CULL_MODE_BACK_BIT;
+                rs.frontFace = options.cullClockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+            }
+            else
+            {
+                rs.cullMode = options.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE; // converter: all double-sided
+                rs.frontFace = options.cull == 2 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+            }
             VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
             ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
             ds.depthTestEnable = VK_TRUE;
-            ds.depthWriteEnable = VK_TRUE;
+            ds.depthWriteEnable = (key & (1u << 6)) ? VK_TRUE : VK_FALSE;
             ds.depthCompareOp = VK_COMPARE_OP_GREATER; // depth = near / w: nearer is larger
             VkPipelineColorBlendAttachmentState ba{};
             ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            // GS (A - B) * C + D as src * S + dst * D; C = As (shader alpha) or Ad (destination alpha)
+            const AlphaMode mode = AlphaMode(key & 0xF);
+            const bool dest = (key & (1u << 4)) != 0;
+            const VkBlendFactor c = dest ? VK_BLEND_FACTOR_DST_ALPHA : VK_BLEND_FACTOR_SRC_ALPHA;
+            const VkBlendFactor c1 = dest ? VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA : VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            float constants[4] = {0, 0, 0, 0};
+            if (isBlended(mode))
+            {
+                ba.blendEnable = VK_TRUE;
+                ba.colorBlendOp = VK_BLEND_OP_ADD;
+                // destination alpha is kept (blended draws do not change it)
+                ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+                ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                ba.alphaBlendOp = VK_BLEND_OP_ADD;
+                switch (mode)
+                {
+                case AlphaMode::Blend: ba.srcColorBlendFactor = c; ba.dstColorBlendFactor = c1; break;
+                case AlphaMode::InvBlend: ba.srcColorBlendFactor = c1; ba.dstColorBlendFactor = c; break;
+                case AlphaMode::Add: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+                case AlphaMode::AddAlpha: ba.srcColorBlendFactor = c; ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+                case AlphaMode::AddDest: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; ba.dstColorBlendFactor = c; break;
+                case AlphaMode::Multiply: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO; ba.dstColorBlendFactor = c; break;
+                case AlphaMode::InvMultiply: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO; ba.dstColorBlendFactor = c1; break;
+                case AlphaMode::Subtract:
+                    // Cd - Cs * FIX: FIX 0x30 is the only value the game uses (SetBlending kind 5)
+                    ba.colorBlendOp = VK_BLEND_OP_REVERSE_SUBTRACT;
+                    ba.srcColorBlendFactor = VK_BLEND_FACTOR_CONSTANT_COLOR;
+                    ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                    constants[0] = constants[1] = constants[2] = constants[3] = 0x30 / 128.0f;
+                    break;
+                default: break;
+                }
+            }
             VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
             cbs.attachmentCount = 1;
             cbs.pAttachments = &ba;
+            std::memcpy(cbs.blendConstants, constants, sizeof constants);
             VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
             VkPipelineDynamicStateCreateInfo dy{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
             dy.dynamicStateCount = 2;
@@ -556,28 +623,11 @@ namespace pop_native
             gp.pDynamicState = &dy;
             gp.layout = pipelineLayout;
             gp.renderPass = renderPass;
-            bool ok = check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineOpaque), "opaque pipeline", error);
-            VkPipelineRasterizationStateCreateInfo rsCull = rs;
-            rsCull.cullMode = VK_CULL_MODE_BACK_BIT;
-            rsCull.frontFace = options.cullClockwise ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
-            gp.pRasterizationState = &rsCull;
-            ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineOpaqueCull), "opaque cull pipeline", error);
-            gp.pRasterizationState = &rs;
-            // blend: GS ALPHA (Cs - Cd) * As + Cd, depth tested but not written
-            ds.depthWriteEnable = VK_FALSE;
-            ba.blendEnable = VK_TRUE;
-            ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-            ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-            ba.colorBlendOp = VK_BLEND_OP_ADD;
-            ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-            ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-            ba.alphaBlendOp = VK_BLEND_OP_ADD;
-            ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineBlend), "blend pipeline", error);
-            gp.pRasterizationState = &rsCull;
-            ok = ok && check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipelineBlendCull), "blend cull pipeline", error);
-            vkDestroyShaderModule(device, vs, nullptr);
-            vkDestroyShaderModule(device, fs, nullptr);
-            return ok;
+            VkPipeline p = VK_NULL_HANDLE;
+            if (!check(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &p), "pipeline", error))
+                return VK_NULL_HANDLE;
+            pipelines[key] = p;
+            return p;
         }
     };
 
@@ -606,14 +656,12 @@ namespace pop_native
                 m->destroyImage(t);
             if (m->descriptorPool)
                 vkDestroyDescriptorPool(m->device, m->descriptorPool, nullptr);
-            if (m->pipelineOpaque)
-                vkDestroyPipeline(m->device, m->pipelineOpaque, nullptr);
-            if (m->pipelineBlend)
-                vkDestroyPipeline(m->device, m->pipelineBlend, nullptr);
-            if (m->pipelineOpaqueCull)
-                vkDestroyPipeline(m->device, m->pipelineOpaqueCull, nullptr);
-            if (m->pipelineBlendCull)
-                vkDestroyPipeline(m->device, m->pipelineBlendCull, nullptr);
+            for (const auto &kv : m->pipelines)
+                vkDestroyPipeline(m->device, kv.second, nullptr);
+            if (m->vs)
+                vkDestroyShaderModule(m->device, m->vs, nullptr);
+            if (m->fs)
+                vkDestroyShaderModule(m->device, m->fs, nullptr);
             if (m->pipelineLayout)
                 vkDestroyPipelineLayout(m->device, m->pipelineLayout, nullptr);
             if (m->setLayout)

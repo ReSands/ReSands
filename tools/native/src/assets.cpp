@@ -250,6 +250,8 @@ namespace pop_assets
             !u32(pack, sm->second.first + 0x2C, out.texture) || !u32(pack, sm->second.first + 0x14, f14) ||
             !u32(pack, sm->second.first + 0x1C, f1c) || !u32(pack, sm->second.first + 0x28, f28))
             return false;
+        out.flags = f1c;
+        out.ref = f28;
         // +0x14 bit 0x80: alpha blending; else +0x1C bit 0x10: alpha test, AREF = (+0x28 top byte) / 2
         // on the PS2 scale = the top byte on the doubled 0..255 alpha
         if (f14 & 0x80)

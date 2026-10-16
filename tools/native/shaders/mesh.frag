@@ -20,9 +20,11 @@ layout(location = 0) out vec4 outColour;
 void main()
 {
     vec4 t = texture(baseTex, vUv);
-    if (pc.params.x == 1.0 && t.a < pc.params.y)
+    // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4), 2 blended, 8 legacy glTF blend
+    int flags = int(pc.params.x + 0.5);
+    if ((flags & 1) != 0 && ((flags & 4) != 0 ? t.a >= pc.params.y : t.a < pc.params.y))
         discard;
-    if (pc.params.x == 2.0 && t.a < 0.02)
+    if ((flags & 8) != 0 && t.a < 0.02)
         discard;
     vec3 base = t.rgb * vColour.rgb;
     // params.z: lightmap strength (0 = none); characters' shading pass uses the same blend with
@@ -33,5 +35,7 @@ void main()
     }
     // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending
     base = mix(pc.fogColour.rgb, base, vFog);
-    outColour = vec4(base, pc.params.x == 2.0 ? t.a : 1.0);
+    // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
+    // (pipeline) uses it as the GS ALPHA C term
+    outColour = vec4(base, (flags & 2) != 0 ? t.a * min(vColour.a, 1.0) : 1.0);
 }

@@ -28,6 +28,7 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -75,8 +76,13 @@ namespace pop_native_live
         struct DrawMaterial
         {
             uint32_t textureKey = 0;
-            uint32_t mode = 0;   // pop_native::AlphaMode
-            float cutoff = 0.5f;
+            uint32_t flags = 0; // render state flags (sub-material word 1 = record +0x1C): pop_native::materialFromGsFlags
+            uint32_t ref = 0;   // sub-material +0x10 (record +0x28): AREF in the top byte
+            // ExtractLocalAlphaAndConstantColor (0x4B23C0) + CJMeshElement::Display (passes 0 and 2):
+            // VIF STROW/STMASK replace the vertex colour's RGB (mask 0x15151515) with a constant
+            // colour and/or its alpha (0x40404040) with a local alpha, both on the 0x80 = 1.0 scale
+            int32_t constColour = -1; // 0xBBGGRR, -1: vertex colours
+            int32_t constAlpha = -1;  // 0..0x7F, -1: vertex alpha
         };
         std::vector<DrawMaterial> g_frameMaterials;
         std::vector<std::pair<std::vector<pop_assets::Batch>, DrawMaterial>> g_framePosed; // skinned draws, posed in world space
@@ -125,8 +131,10 @@ namespace pop_native_live
         }
 
         // The render state's current sub-material (0x70000034, set by CElementList::Render before
-        // Display): word 0 = texture index (low 16 bits; flags in the top byte), word 1 = the record's +0x1C flags (0x10: alpha test),
-        // +0x10 = its +0x28 (AREF in the top byte), word 11 = its +0x14 (0x80: blending); 16 Oct.
+        // Display): word 0 = texture index (low 16 bits; flags in the top byte), word 1 = the record's
+        // +0x1C = the render state flags (blend kind in bits 16-19, 0x10 alpha test, 0x200 no depth
+        // write; decoded by pop_native::materialFromGsFlags as SetBlending 0x4B2500 does), +0x10 = its
+        // +0x28 (AREF in the top byte); 16 Oct.
         DrawMaterial currentMaterial(uint8_t *rdram)
         {
             DrawMaterial dm;
@@ -143,14 +151,19 @@ namespace pop_native_live
                     std::fprintf(stderr, " %08x", guestAny(rdram, sub + 4 * k));
                 std::fprintf(stderr, "\n");
             }
-            const uint32_t f1c = guestAny(rdram, sub + 4), f28 = guestAny(rdram, sub + 0x10), f14 = guestAny(rdram, sub + 0x2C);
-            if (f14 & 0x80)
-                dm.mode = uint32_t(pop_native::AlphaMode::Blend);
-            else if (f1c & 0x10)
-            {
-                dm.mode = uint32_t(pop_native::AlphaMode::Mask);
-                dm.cutoff = float((f28 >> 24) / 255.0);
-            }
+            // what FUN_004B2000 receives as the render state (flags, AREF word): CElementList::Render
+            // compares exactly these two words with 0x70000000 / 0x70000004 before calling it
+            dm.flags = guestAny(rdram, sub + 4);
+            dm.ref = guestAny(rdram, sub + 0x10);
+            // flags bits 13-15: 2 = constant colour from the current material's (0x70000030) +8 word,
+            // 4 = 0x808080; 0x400: local alpha = (u16 at sub + 2) << 15 >> 24 = word 0 >> 25
+            const uint32_t cc = (dm.flags & 0xE000) >> 13, material = guestAny(rdram, 0x70000030u);
+            if (cc == 2 && material)
+                dm.constColour = int32_t(guestAny(rdram, material + 8) & 0xFFFFFF);
+            else if (cc == 4)
+                dm.constColour = 0x808080;
+            if (dm.flags & 0x400)
+                dm.constAlpha = int32_t(guestAny(rdram, sub) >> 25);
             return dm;
         }
 
@@ -560,6 +573,26 @@ namespace pop_native_live
 
     namespace
     {
+        // the draw's vertex colours as the VIF delivers them (constant colour / local alpha masks)
+        void writeVertices(FILE *f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
+        {
+            if (m.constColour < 0 && m.constAlpha < 0)
+            {
+                std::fwrite(vertices.data(), sizeof(pop_native::Vertex), vertices.size(), f);
+                return;
+            }
+            std::vector<pop_native::Vertex> v = vertices;
+            for (pop_native::Vertex &x : v)
+            {
+                if (m.constColour >= 0)
+                    for (int k = 0; k < 3; ++k)
+                        x.colour[k] = float((uint32_t(m.constColour) >> (8 * k)) & 0xFF) / 128.0f;
+                if (m.constAlpha >= 0)
+                    x.colour[3] = float(m.constAlpha) / 128.0f;
+            }
+            std::fwrite(v.data(), sizeof(pop_native::Vertex), v.size(), f);
+        }
+
         // File: "PNF1", clip[16], draw count; per draw: model[16], batch count; per batch: vertex
         // count, index count, vertices (pop_native::Vertex), indices (u32).
         std::function<uint32_t(uint32_t)> g_rdramForDump;
@@ -568,9 +601,9 @@ namespace pop_native_live
             FILE *f = std::fopen(g_framePath.c_str(), "wb");
             if (!f)
                 return;
-            // "PNF2": clip[16]; images (count; per image: w, h, RGBA); draws (count; per draw: model[16],
-            // image index (-1: none), alpha mode, cutoff, batch count, batches)
-            std::fwrite("PNF2", 1, 4, f);
+            // "PNF3": clip[16]; images (count; per image: w, h, RGBA); draws (count; per draw: model[16],
+            // image index (-1: none), render state flags, AREF word, batch count, batches)
+            std::fwrite("PNF3", 1, 4, f);
             std::fwrite(g_frameClip, 4, 16, f);
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
@@ -635,15 +668,15 @@ namespace pop_native_live
                 textured += image >= 0;
                 std::fwrite(model.data(), 4, 16, f);
                 std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.mode, 4, 1, f);
-                std::fwrite(&mat.cutoff, 4, 1, f);
+                std::fwrite(&mat.flags, 4, 1, f);
+                std::fwrite(&mat.ref, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
                 for (const auto &b : meshes)
                 {
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     std::fwrite(&nv, 4, 1, f);
                     std::fwrite(&ni, 4, 1, f);
-                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    writeVertices(f, b.vertices, mat);
                     std::fwrite(b.indices.data(), 4, ni, f);
                     tris += ni / 3;
                 }
@@ -656,15 +689,15 @@ namespace pop_native_live
                 const uint32_t nb = uint32_t(batches.size());
                 std::fwrite(kIdentity, 4, 16, f);
                 std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.mode, 4, 1, f);
-                std::fwrite(&mat.cutoff, 4, 1, f);
+                std::fwrite(&mat.flags, 4, 1, f);
+                std::fwrite(&mat.ref, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
                 for (const auto &b : batches)
                 {
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     std::fwrite(&nv, 4, 1, f);
                     std::fwrite(&ni, 4, 1, f);
-                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    writeVertices(f, b.vertices, mat);
                     std::fwrite(b.indices.data(), 4, ni, f);
                     tris += ni / 3;
                 }
@@ -677,15 +710,15 @@ namespace pop_native_live
                 const uint32_t nb = uint32_t(batches.size());
                 std::fwrite(model.data(), 4, 16, f);
                 std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.mode, 4, 1, f);
-                std::fwrite(&mat.cutoff, 4, 1, f);
+                std::fwrite(&mat.flags, 4, 1, f);
+                std::fwrite(&mat.ref, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
                 for (const auto &b : batches)
                 {
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     std::fwrite(&nv, 4, 1, f);
                     std::fwrite(&ni, 4, 1, f);
-                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    writeVertices(f, b.vertices, mat);
                     std::fwrite(b.indices.data(), 4, ni, f);
                     tris += ni / 3;
                 }
@@ -705,6 +738,16 @@ namespace pop_native_live
                                  sub ? popTextureKey(g_rdramForDump(sub)) : 0u);
                 }
                 std::fclose(t);
+            }
+            {
+                // draws per render state blend kind (flags bits 16-19, SetBlending's table)
+                std::map<uint32_t, int> kinds;
+                for (const DrawMaterial &m : allMaterials)
+                    ++kinds[(m.flags >> 16) & 0xF];
+                std::fprintf(stderr, "[pop:native] blend kinds:");
+                for (const auto &kv : kinds)
+                    std::fprintf(stderr, " %u x%d", kv.first, kv.second);
+                std::fprintf(stderr, "\n");
             }
             std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu instanced, %zu textured, %u images), %zu triangles\n",
                          g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
