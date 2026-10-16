@@ -3,6 +3,10 @@
 // offline viewer uses), and checks each element the game then draws against its conversion: every
 // position the draw's DMA packet uploads (UNPACK V3-32) must be one of the converted vertices.
 // Prints "[pop:native]" statistics every 5 s. Nothing is drawn natively yet.
+// POP_NATIVE_FRAME=<file>:<seconds>: after that many seconds, writes the next frame's static world as
+// the native renderer would draw it (camera = world -> clip at Display3DElements, then per drawn
+// element and matrix: the matrix pool entry and the converted batches); render it with
+// pop_native_view <file> <any> <out.png> --frame.
 //
 // Hooks: CJMeshElement::ReadElement (0x4C9500, this, char **cursor): the element's bytes start at
 // *cursor in the pack buffer, in file form (block indices in the packet tags, patched to pointers by
@@ -21,7 +25,9 @@
 #include "../../../../../../tools/native/src/assets.cpp"
 #include "../../../../../../tools/native/src/meshdecode.cpp"
 
+#include <array>
 #include <chrono>
+#include <string>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,16 +41,33 @@ namespace pop_native_live
     {
         constexpr uint32_t kReadElement = 0x004C9500u;
         constexpr uint32_t kMeshDisplay = 0x004C8A80u;
+        constexpr uint32_t kDisplay3D = 0x004BC000u; // CJadeDrawManager::Display3DElements
         constexpr size_t kRam = 32u << 20;
 
-        PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr;
+        PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr, g_origDisplay3D = nullptr;
 
         // Per converted element: its vertex positions (exact float bits), for the draw check.
         struct Converted
         {
             std::unordered_set<uint64_t> positions; // hash of (x, y, z) bits
             size_t batches = 0, vertices = 0, triangles = 0;
+            std::vector<pop_assets::Batch> meshes;  // kept for the frame export
         };
+        // frame export (POP_NATIVE_FRAME)
+        std::string g_framePath;
+        double g_frameAfter = -1.0;
+        bool g_frameCapturing = false, g_frameDone = false;
+        std::chrono::steady_clock::time_point g_start;
+        float g_frameClip[16];
+        std::vector<std::pair<uint32_t, std::array<float, 16>>> g_frameDraws; // element, model matrix
+        std::unordered_set<uint64_t> g_frameSeen;                               // (element, matrix index)
+
+        uint32_t guestAny(uint8_t *rdram, uint32_t addr) // main RAM or scratchpad
+        {
+            uint32_t v;
+            std::memcpy(&v, getConstMemPtr(rdram, addr), 4);
+            return v;
+        }
         std::unordered_map<uint32_t, Converted> g_elements; // element object address -> conversion
         // why an element was not converted: 's' skinned, 'i' instanced (variant 3), 'n' no pass packet, 'f' failed
         std::unordered_map<uint32_t, char> g_skipped;
@@ -110,6 +133,7 @@ namespace pop_native_live
                     c.triangles += b.indices.size() / 3;
                 }
                 c.batches = batches.size();
+                c.meshes = std::move(batches);
                 g_stats.converted++;
                 g_stats.batches += c.batches;
                 g_stats.vertices += c.vertices;
@@ -199,7 +223,7 @@ namespace pop_native_live
 
         void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            const uint32_t pass = getRegU32(ctx, 6) & 0xFF;
+            const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
             uint32_t element = getRegU32(ctx, 4);
             for (unsigned link = 0; element && link < 4096; ++link)
             {
@@ -224,11 +248,84 @@ namespace pop_native_live
                     g_stats.positionsFound += found;
                     if (found == pos.size() / 3 && !pos.empty())
                         ++g_stats.drawsExact;
+                    if (g_frameCapturing && g_frameSeen.insert((uint64_t(element) << 16) | index).second)
+                    {
+                        // matrix pool: base pointer at scratchpad 0x70000260, 0x40 bytes per index
+                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                        std::array<float, 16> model;
+                        for (int k = 0; k < 16; ++k)
+                        {
+                            const uint32_t bits = guestAny(rdram, m + 4u * k);
+                            std::memcpy(&model[k], &bits, 4);
+                        }
+                        g_frameDraws.emplace_back(element, model);
+                    }
                 }
                 element = guest32(rdram, element + 0x4C);
             }
             report();
             g_origDisplay(rdram, ctx, runtime);
+        }
+    }
+
+    namespace
+    {
+        // File: "PNF1", clip[16], draw count; per draw: model[16], batch count; per batch: vertex
+        // count, index count, vertices (pop_native::Vertex), indices (u32).
+        void writeFrame()
+        {
+            FILE *f = std::fopen(g_framePath.c_str(), "wb");
+            if (!f)
+                return;
+            std::fwrite("PNF1", 1, 4, f);
+            std::fwrite(g_frameClip, 4, 16, f);
+            const uint32_t n = uint32_t(g_frameDraws.size());
+            std::fwrite(&n, 4, 1, f);
+            size_t tris = 0;
+            for (const auto &[element, model] : g_frameDraws)
+            {
+                const auto &meshes = g_elements[element].meshes;
+                const uint32_t nb = uint32_t(meshes.size());
+                std::fwrite(model.data(), 4, 16, f);
+                std::fwrite(&nb, 4, 1, f);
+                for (const auto &b : meshes)
+                {
+                    const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
+                    std::fwrite(&nv, 4, 1, f);
+                    std::fwrite(&ni, 4, 1, f);
+                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    std::fwrite(b.indices.data(), 4, ni, f);
+                    tris += ni / 3;
+                }
+            }
+            std::fclose(f);
+            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws, %zu triangles\n", g_framePath.c_str(), n, tris);
+        }
+
+        void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                g_frameCapturing = false;
+                g_frameDone = true;
+                writeFrame();
+            }
+            if (!g_frameDone && g_frameAfter >= 0 &&
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count() >= g_frameAfter)
+            {
+                // world -> clip of the graphics system object (pointer at 0x675148, gp+0x758; +0x240)
+                const uint32_t gs = guestAny(rdram, 0x00675148u);
+                if (gs)
+                {
+                    for (int k = 0; k < 16; ++k)
+                    {
+                        const uint32_t bits = guestAny(rdram, gs + 0x240u + 4u * k);
+                        std::memcpy(&g_frameClip[k], &bits, 4);
+                    }
+                    g_frameCapturing = true;
+                }
+            }
+            g_origDisplay3D(rdram, ctx, runtime);
         }
     }
 
@@ -246,6 +343,17 @@ namespace pop_native_live
         }
         runtime.replaceFunction(kReadElement, readElement);
         runtime.replaceFunction(kMeshDisplay, display);
+        g_start = std::chrono::steady_clock::now();
+        if (const char *f = std::getenv("POP_NATIVE_FRAME"); f && *f)
+        {
+            const std::string spec = f;
+            const auto colon = spec.rfind(':');
+            g_framePath = spec.substr(0, colon);
+            g_frameAfter = colon != std::string::npos ? std::atof(spec.c_str() + colon + 1) : 60.0;
+            g_origDisplay3D = runtime.lookupFunction(kDisplay3D);
+            if (g_origDisplay3D)
+                runtime.replaceFunction(kDisplay3D, display3D);
+        }
         g_lastReport = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[pop:native] live conversion check on\n");
     }

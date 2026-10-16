@@ -141,12 +141,15 @@ int main(int argc, char **argv)
     }
     const auto t0 = std::chrono::steady_clock::now();
     const char *packPath = nullptr;
-    for (int i = 4; i + 1 < argc; ++i)
-        if (!std::strcmp(argv[i], "--pack"))
+    bool framePath = false; // --frame: argv[1] is a frame exported by the runtime (POP_NATIVE_FRAME)
+    for (int i = 4; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--pack") && i + 1 < argc)
             packPath = argv[i + 1];
+        else if (!std::strcmp(argv[i], "--frame"))
+            framePath = true;
     cgltf_options opt{};
     cgltf_data *data = nullptr;
-    if (!packPath && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
+    if (!packPath && !framePath && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
     {
         std::fprintf(stderr, "cannot load %s\n", argv[1]);
         return 1;
@@ -463,7 +466,52 @@ int main(int argc, char **argv)
         std::printf("pack %s: %zu objects, %zu geometry records, %zu materials\n", packPath, objects.size(), elements.size(), materials.size());
         return true;
     };
-    if (packPath)
+    // --frame: "PNF1", world -> clip[16], draws (model[16], batches: vertex/index counts, Vertex[],
+    // u32[]), written by tools/overrides/pop_native_live.cpp; the frame's own camera replaces the
+    // clip file's
+    auto addFrame = [&](const char *path) -> bool {
+        std::ifstream f(path, std::ios::binary);
+        char magic[4] = {};
+        f.read(magic, 4);
+        if (std::memcmp(magic, "PNF1", 4) != 0)
+            return false;
+        f.read(reinterpret_cast<char *>(clip), 64);
+        uint32_t n = 0;
+        f.read(reinterpret_cast<char *>(&n), 4);
+        for (uint32_t i = 0; i < n && f; ++i)
+        {
+            Draw d;
+            f.read(reinterpret_cast<char *>(d.model), 64);
+            uint32_t nb = 0;
+            f.read(reinterpret_cast<char *>(&nb), 4);
+            for (uint32_t b = 0; b < nb && f; ++b)
+            {
+                uint32_t nv = 0, ni = 0;
+                f.read(reinterpret_cast<char *>(&nv), 4);
+                f.read(reinterpret_cast<char *>(&ni), 4);
+                Mesh mesh;
+                mesh.vertices.resize(nv);
+                mesh.indices.resize(ni);
+                f.read(reinterpret_cast<char *>(mesh.vertices.data()), std::streamsize(nv) * sizeof(Vertex));
+                f.read(reinterpret_cast<char *>(mesh.indices.data()), std::streamsize(ni) * 4);
+                vertexTotal += nv;
+                triTotal += ni / 3;
+                d.mesh = r.addMesh(std::move(mesh));
+                draws.push_back(d);
+            }
+        }
+        std::printf("frame %s: %u element draws\n", path, n);
+        return bool(f) || f.eof();
+    };
+    if (framePath)
+    {
+        if (!addFrame(argv[1]))
+        {
+            std::fprintf(stderr, "cannot read frame %s\n", argv[1]);
+            return 1;
+        }
+    }
+    else if (packPath)
     {
         if (!addPackScene(argv[1]))
             return 1;
