@@ -15,6 +15,17 @@
 // winsock2.h clashes with a windows.h included earlier (which brings winsock.h); the calls used here
 // are in both, so take whichever is already there
 #if !defined(_WINSOCKAPI_) && !defined(_WINSOCK2API_)
+// the runtime's precompiled header brings raylib into every file: keep windows.h's clashing parts
+// (CloseWindow, ShowCursor in winuser.h; Rectangle in wingdi.h; PlaySound) out
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOUSER
+#define NOUSER
+#endif
 #include <winsock2.h>
 #endif
 #pragma comment(lib, "ws2_32.lib")
