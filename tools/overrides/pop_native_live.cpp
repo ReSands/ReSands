@@ -361,6 +361,7 @@ namespace pop_native_live
         // bone: every vertex uses it (VU 0). Matrices are world space, row vectors.
         uint64_t g_skinnedNoPalette = 0; // skinned draws without a bone palette (posed by the object matrix)
         uint64_t g_passDraws[8][2] = {};  // CJMeshElement::Display calls per pass, static / skinned
+        uint64_t g_refPassDraws[8] = {};   // CJMeshElementRef::Display calls per pass
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
                          std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr)
         {
@@ -492,6 +493,10 @@ namespace pop_native_live
             for (int pp = 0; pp < 8; ++pp)
                 if (g_passDraws[pp][0] || g_passDraws[pp][1])
                     std::fprintf(stderr, " %d: %llu/%llu", pp, (unsigned long long)g_passDraws[pp][0], (unsigned long long)g_passDraws[pp][1]);
+            std::fprintf(stderr, "; instanced per pass:");
+            for (int pp = 0; pp < 8; ++pp)
+                if (g_refPassDraws[pp])
+                    std::fprintf(stderr, " %d: %llu", pp, (unsigned long long)g_refPassDraws[pp]);
             std::fprintf(stderr, "\n");
             std::fprintf(stderr, "[pop:native] unknown draws: skinned %llu, instanced %llu, no pass %llu, failed %llu, never loaded %llu\n",
                          (unsigned long long)g_unknownBy['s'], (unsigned long long)g_unknownBy['i'], (unsigned long long)g_unknownBy['n'],
@@ -631,11 +636,13 @@ namespace pop_native_live
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
         void refDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            ++g_refPassDraws[getRegU32(ctx, 6) & 7];
             if (g_frameCapturing)
             {
                 const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
                 uint32_t ref = getRegU32(ctx, 4);
-                for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 4); ++link)
+                // passes 0, 1, 4 (main) and 2 (second layer); 3 is the lightmap pass
+                for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 2 || pass == 4); ++link)
                 {
                     if (g_frameSeen.insert((uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram)).second)
                     {

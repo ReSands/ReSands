@@ -10,9 +10,9 @@
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') native scenes"
-& "$Root\tools\windows\native-scenes.ps1"
+try { & "$Root\tools\windows\native-scenes.ps1" } catch { "native scenes failed: $_" }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') live native window"
-& "$Root\tools\windows\live-window.ps1" -State gameplay1
+try { & "$Root\tools\windows\live-window.ps1" -State gameplay1 } catch { "live window test failed: $_" }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') nightly checks"
 & "$Root\tools\windows\llm-job.ps1" -Job nightly
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') tonight done"

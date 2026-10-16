@@ -388,7 +388,11 @@ a balcony run, all dropped before) are now captured from their own packets (elem
 balcony 3.3-4.0 / 0.3-1.2%. The fire glow at the window base is ~10-15% wider than the GS one
 (brightness profile), not a big error. The torch bracket is drawn by no captured path (not a
 skinned draw without a palette: 0 of those; not pass 2; the CJIdxMesh draws with its texture are
-the birds): next, find its path.
+the birds; not an alpha-tested draw failing its test either): next, find its path. Rain: the two
+rain draws (texture 2e005781, ~66 streaks each, AddAlpha) are degenerate (all four corners of a
+streak at one point, i.e. zero axes) and their positions project far below the view: the rain
+generator's axes/positions are read wrongly (flags 0x8000000: generator-matrix axes). Cutscenes:
+the game's letterbox bars are 2D (not native yet), so those frames score ~15.
 Fixes it found, in order: light sets read as `DoSetSkinLightEnv`'s point-light path does (no type
 check; the ambient-only guess left a backlit curtain panel black), PAG_GetGeneratorAxis sizes
 (fixed sizes pre-scale the axes, otherwise per particle), oriented particles (FUN_004584C0's other

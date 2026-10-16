@@ -38,6 +38,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
@@ -592,6 +593,9 @@ int main(int argc, char **argv)
                         if (v3)
                         {
                             pop_native::materialFromGsFlags(mode, word, mat);
+                            static const bool noTest = std::getenv("POP_VIEW_NOTEST") != nullptr; // debug: alpha test off
+                            if (noTest)
+                                mat.alphaTest = false;
                             mat.depthTest = zTest != 0;
                             mat.writeRgb = (fbmsk & 0xFFFFFFu) != 0xFFFFFFu;
                             mat.writeAlpha = (fbmsk & 0xFF000000u) == 0;

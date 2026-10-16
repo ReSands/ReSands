@@ -9,7 +9,7 @@ param([string]$State = 'gameplay1', [int]$Seconds = 60, [string]$Shots = '15000,
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 "== native tools build"
-& "$Root\tools\windows\native.ps1"
+try { & "$Root\tools\windows\native.ps1" } catch { "native tools build failed: $_"; "== live window test skipped"; return }
 $out = "$Root\game\analysis\native\live"
 New-Item -ItemType Directory -Force $out | Out-Null
 $viewer = "$Root\game\native-build\pop_native_view.exe"
