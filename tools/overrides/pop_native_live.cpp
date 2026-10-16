@@ -101,6 +101,7 @@ namespace pop_native_live
             uint32_t seq = 0;   // the draw's position in the frame (game draw order)
         };
         uint32_t g_frameSeq = 0;
+        uint8_t *g_rdramPtr = nullptr;
         std::vector<DrawMaterial> g_frameMaterials;
         std::vector<std::pair<std::vector<pop_assets::Batch>, DrawMaterial>> g_framePosed; // skinned draws, posed in world space
         std::unordered_map<uint64_t, uint32_t> g_frameLightmap; // (element, matrix index) -> lightmap texture key (pass 3)
@@ -400,7 +401,7 @@ namespace pop_native_live
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
                         std::vector<pop_assets::Batch> batches;
-                        livePacketBatches(rdram, packet, 4096.0, batches);
+                        livePacketBatches(rdram, packet, 512.0, batches); // texture UVs 1/512 (VU1 drivers: ITOF4 * 1/32)
                         std::array<float, 16> model;
                         const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
                         for (int k = 0; k < 16; ++k)
@@ -449,6 +450,17 @@ namespace pop_native_live
             {0x004C77C0u, "CJSmWaterElement::Display", nullptr},
             {0x00469C00u, "FUN_00469C00 (list type 0x18)", nullptr},
         };
+        // Halos (AE_AddHaloToDisplay 0x4AB1C0 -> array 0x6DF2C0, 0x20 bytes each, count 0x67518C):
+        // position (x, y, z, 1), half sizes (world units), colour 0x808080 | (alpha / 2) << 24, material
+        PS2Runtime::RecompiledFunction g_origAddHalo = nullptr;
+        uint32_t g_haloAdds = 0, g_haloAddsInWindow = 0;
+        void addHalo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            ++g_haloAdds;
+            if (g_frameCapturing)
+                ++g_haloAddsInWindow;
+            g_origAddHalo(rdram, ctx, runtime);
+        }
         struct OtherDraw
         {
             int path;
@@ -874,12 +886,34 @@ namespace pop_native_live
                              o.textureKey, ok ? img.width : 0u, ok ? img.height : 0u,
                              imageOf.count(o.textureKey) ? imageOf[o.textureKey] : -1, o.flags);
             }
+            {
+                const uint32_t count = guestAny(g_rdramPtr, 0x0067518Cu);
+                std::fprintf(stderr, "[pop:native] halos: %u in the array at the frame's end, %u adds in the window, %u adds in all\n", count,
+                             g_haloAddsInWindow, g_haloAdds);
+                for (uint32_t h = 0; h < count && h < 32; ++h)
+                {
+                    const uint32_t e = 0x006DF2C0u + h * 0x20;
+                    float v[6];
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        const uint32_t bits = guestAny(g_rdramPtr, e + 4 * k);
+                        std::memcpy(&v[k], &bits, 4);
+                    }
+                    const uint32_t colour = guestAny(g_rdramPtr, e + 0x18), material = guestAny(g_rdramPtr, e + 0x1C);
+                    const uint32_t list = material ? guestAny(g_rdramPtr, material + 0x20) : 0;
+                    const uint32_t texIndex = list ? guest16(g_rdramPtr, list) : 0xFFFF;
+                    std::fprintf(stderr, "[pop:native]   halo %u: pos (%.2f %.2f %.2f) half size %.2f x %.2f colour %08x material %08x tex index %04x key %08x\n",
+                                 h, v[0], v[1], v[2], v[4], v[5], colour, material, texIndex,
+                                 texIndex != 0xFFFF ? popTextureKey(texIndex) : 0u);
+                }
+            }
             std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu instanced, %zu textured, %u images), %zu triangles\n",
                          g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
         }
 
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            g_rdramPtr = rdram;
             if (g_frameCapturing)
             {
                 g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
@@ -965,6 +999,9 @@ namespace pop_native_live
             hookOther(1, otherDisplay<1>);
             hookOther(2, otherDisplay<2>);
             hookOther(3, otherDisplay<3>);
+            g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
+            if (g_origAddHalo)
+                runtime.replaceFunction(0x004AB1C0u, addHalo);
             g_origGfx = runtime.lookupFunction(kGfxDisplay);
             if (g_origGfx)
                 runtime.replaceFunction(kGfxDisplay, gfxDisplay);

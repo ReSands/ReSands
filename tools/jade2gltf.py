@@ -435,9 +435,10 @@ def main(argv):
                             uv2 = [(a / (8 * uvscale), c / (8 * uvscale)) for a, c, _f in (struct.unpack_from('<3h', r9, 6 * i) for i in range(n9))]
                         lm_uv.append(uv2)
         batch_no = -1
-        # elements whose packets reference data blocks (LOD blocks present) store texture UVs at 1/512
-        # (8x coarser than inline packets): t spans exactly 0..1/8 at 1/4096
-        base_scale = uvscale / 8 if blocks else uvscale
+        # texture UVs are 1/512 for every element: the VU1 drivers compute ST = ITOF4(raw) * 1/32
+        # (static driver 0x4CDE80 at 0x0F08; no driver uses ITOF12). Earlier only block-referencing
+        # elements were taken at 1/512 and inline packets at 1/4096, which sampled 1/8 of the texture.
+        base_scale = uvscale / 8
         for b in decode_packet(d, po, ps, blocks):
             m = batch_mesh(b, base_scale)
             if 8 in b or (0xC in b and b[0xC][0] == 3):
@@ -635,7 +636,7 @@ def main(argv):
                     lo = [min(q[a] for q in pos) for a in range(3)]
                     hi = [max(q[a] for q in pos) for a in range(3)]
                     prim = {'attributes': {'POSITION': add(b''.join(struct.pack('<3f', *q) for q in pos), 5126, 'VEC3', n, 34962, (lo, hi)),
-                                           'TEXCOORD_0': add(b''.join(struct.pack('<2f', a / uvscale, b / uvscale) for a, b in uv), 5126, 'VEC2', n, 34962),
+                                           'TEXCOORD_0': add(b''.join(struct.pack('<2f', a / (uvscale / 8), b / (uvscale / 8)) for a, b in uv), 5126, 'VEC2', n, 34962),
                                            'COLOR_0': add(b''.join(struct.pack('<4f', *c) for c in col), 5126, 'VEC4', n, 34962)},
                             'indices': add(b''.join(struct.pack('<3H', *t) for t in tris), 5123, 'SCALAR', 3 * len(tris), 34963)}
                     m = material(mm, matid)

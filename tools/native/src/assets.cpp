@@ -301,8 +301,9 @@ namespace pop_assets
                 lmUv.push_back(std::move(uv2));
             }
         }
-        // elements whose packets reference data blocks store texture UVs at 1/512 (8x coarser)
-        const double baseScale = blocks.empty() ? uvscale : uvscale / 8;
+        // texture UVs are 1/512 for every element (the VU1 drivers compute ST = ITOF4(raw) * 1/32,
+        // e.g. static driver 0x4CDE80 at 0x0F08; no driver uses ITOF12), lightmap UVs 1/32768 (ITOF15)
+        const double baseScale = uvscale / 8;
         std::vector<pop_mesh::Batch> batches;
         if (!pop_mesh::decodePacket(pack.d, pack.len, parts.passes[0].offset, parts.passes[0].size, &blocks, batches))
             return false;
@@ -406,8 +407,8 @@ namespace pop_assets
             {
                 pop_native::Vertex &v = o.vertices[i];
                 std::memcpy(v.pos, &b.positions[3 * i], sizeof v.pos);
-                v.uv[0] = float(b.uvs[2 * i] / uvscale);
-                v.uv[1] = float(b.uvs[2 * i + 1] / uvscale);
+                v.uv[0] = float(b.uvs[2 * i] / (uvscale / 8)); // texture UVs 1/512 (see convertElement)
+                v.uv[1] = float(b.uvs[2 * i + 1] / (uvscale / 8));
                 const size_t c = 4 * (vbase + i);
                 for (int k = 0; k < 4; ++k)
                     v.colour[k] = colours && c + 4 <= colourBytes ? std::min(colours[c + k] / 128.0f, 1.0f) : 1.0f;

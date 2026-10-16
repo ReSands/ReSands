@@ -202,3 +202,17 @@ The moon disc itself was not found among these; candidates: the additive disc gl
 after-effect halos (`docs/postfx.md`).
 The rain sheet (CJMeshElement, kind 6, identity pool matrix, vertices around the origin) is drawn
 camera-relative: effect work.
+
+## Texture UVs are always 1/512 (16 Oct)
+The VU1 drivers compute texture ST as `ITOF4(raw) * I` with `LOI 0.03125` (static driver 0x4CDE80
+at 0x0EE8/0x0F08; the character drivers likewise); no driver uses ITOF12. Lightmap UVs use ITOF15
+(1/32768). The earlier rule "inline packets 1/4096, block-referencing 1/512" sampled 1/8 of the
+texture for inline, instanced and CJIdxMesh draws (the balcony's moon was drawn, but from the corner
+of its atlas, the gradient strip). Fixed in `assets.cpp` (convertElement, convertInstanced),
+`jade2gltf.py` and the live instanced path. Balcony frame:
+`~/Desktop/pop_renders/29_live_uv512_game_vs_native.png` (moon, dome texture, arch filigree,
+curtains). The 0102 judge frame scores the same (brightness correlation 0.976 either way; the
+changed areas there sit under the HUD text).
+Halos: `AE_AddHaloToDisplay` (0x4AB1C0; array 0x6DF2C0, 32 bytes each, count 0x67518C; drawn by
+`AE_ProcessOneHalo` as additive screen quads, ALPHA 0x58 = Cs*Ad + Cd with Ad an occlusion mask
+written by `ProcessLensFlare`) is not called in the balcony scene at all.
