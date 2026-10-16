@@ -538,6 +538,167 @@ namespace pop_native_live
             g_origRefDisplay(rdram, ctx, runtime);
         }
 
+        // GFX particles, FUN_004584C0(element) (called by FUN_00458FC0 once the render state, fog and
+        // material are set): element +0x14 -> particle object P; description D = *P (+0x14 flags,
+        // +0x60/+0x68 axis sizes, +0xE0..+0xEC colour keys, +0xF0/+0xF1 sprite-sheet columns/rows,
+        // +0xF5/+0xF6 axis choice); generators = P[10] (array, count), 0xD0 bytes each: +0xC2 u16
+        // particle count, +0xC4 particles, 0x30 bytes each: +0 flags (bits 8-14 sheet frame), +4 xyz
+        // position, +0x20 * +0x24 life, +0x28/+0x2C size. Billboard mode only (description flag
+        // 0x1000 clear, first particle without flag 8): quad = position +- axis1 * sx +- axis2 * sy,
+        // axes from PAG_GetGeneratorAxis (0x459840): camera right/up (*(gp+0x110) +0x160/+0x170)
+        // unless the description's flags pick the generator matrix rows; colour = lerp of the keys
+        // over the life (FUN_00460100), alpha faded (FUN_00460040). Calibrated against the GS frame.
+        PS2Runtime::RecompiledFunction g_origParticles = nullptr;
+        const float kParticleHalf = std::getenv("POP_PARTICLE_FULL") ? 1.0f : 0.5f; // size = full or half extent
+        uint32_t lerpColour(float t, uint32_t a, uint32_t b)
+        {
+            if (t >= 0.98f)
+                return b;
+            if (t <= 0.02f)
+                return a;
+            uint32_t o = 0;
+            for (int k = 0; k < 4; ++k)
+            {
+                const float ca = float((a >> (8 * k)) & 0xFF), cb = float((b >> (8 * k)) & 0xFF);
+                o |= uint32_t(int(ca + (cb - ca) * t) & 0xFF) << (8 * k);
+            }
+            return o;
+        }
+        void particles(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                const uint32_t element = getRegU32(ctx, 4);
+                const uint32_t p1 = guestAny(rdram, element + 0x14);
+                const uint32_t P = p1 ? guestAny(rdram, p1) : 0;
+                const uint32_t D = P ? guestAny(rdram, P) : 0;
+                const uint32_t gens = P ? guestAny(rdram, P + 0x28) : 0;
+                if (D && gens)
+                {
+                    const uint32_t flags = guestAny(rdram, D + 0x14), genArray = guestAny(rdram, gens), genCount = guestAny(rdram, gens + 4);
+                    const uint32_t firstParts = genCount ? guestAny(rdram, genArray + 0xC4) : 0;
+                    const bool billboard = !(flags & 0x1000) && !(firstParts && (guestAny(rdram, firstParts) & 8));
+                    if (billboard)
+                    {
+                        // axis choice (PAG_GetGeneratorAxis, the common branch)
+                        const uint32_t cam = guestAny(rdram, 0x006749F0u + 0x110u);
+                        uint32_t g0 = genArray, src = guestAny(rdram, g0 + 0x40) ? g0 : guestAny(rdram, P + 0xC);
+                        uint32_t ax1 = cam + 0x160, ax2 = cam + 0x170;
+                        if (flags & 0x4000000)
+                            ax1 = src + 0x10, ax2 = src + 0x20;
+                        else if (flags & 0x80000)
+                            ax1 = src, ax2 = src + 0x20;
+                        else if (flags & 0x8000000)
+                            ax1 = src, ax2 = src + 0x10;
+                        const float s1 = guestF(rdram, D + 0x60), s2 = (flags & 4) ? s1 : guestF(rdram, D + 0x68);
+                        float a1[3], a2[3];
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            a1[k] = guestF(rdram, ax1 + 4 * k) * s1;
+                            a2[k] = guestF(rdram, ax2 + 4 * k) * ((flags & 4) ? 1.0f : 1.0f) * s2;
+                        }
+                        if (flags & 4)
+                            for (int k = 0; k < 3; ++k)
+                                a2[k] = guestF(rdram, ax1 + 4 * k) * s1;
+                        const uint32_t cols = std::max(1u, guest8(rdram, D + 0xF0)), rows = std::max(1u, guest8(rdram, D + 0xF1));
+                        const uint32_t cA = guestAny(rdram, D + 0xE0), cB = guestAny(rdram, D + 0xE4), cC = guestAny(rdram, D + 0xE8),
+                                       cD = guestAny(rdram, D + 0xEC);
+                        pop_assets::Batch b;
+                        for (uint32_t g = 0; g < genCount && g < 64; ++g)
+                        {
+                            const uint32_t gen = genArray + g * 0xD0, count = guest16(rdram, gen + 0xC2), parts = guestAny(rdram, gen + 0xC4);
+                            for (uint32_t i = 0; parts && i < count && i < 4096; ++i)
+                            {
+                                const uint32_t q = parts + i * 0x30, pf = guestAny(rdram, q);
+                                const float life = guestF(rdram, q + 0x20) * guestF(rdram, q + 0x24);
+                                float sx = guestF(rdram, q + 0x28), sy = guestF(rdram, q + 0x2C);
+                                uint32_t colour;
+                                if (!(pf & 1))
+                                {
+                                    if (!(pf & 2))
+                                        colour = lerpColour(life, cB, cA);
+                                    else
+                                    {
+                                        const uint32_t c7 = lerpColour(life, cD, cB);
+                                        colour = c7;
+                                        if (flags & 8)
+                                        {
+                                            const uint32_t faded = lerpColour(life, 0, c7); // c7 * life (FUN_00460040)
+                                            colour = (flags & 2) ? faded : ((faded & 0xFF000000u) | (c7 & 0xFFFFFF));
+                                        }
+                                        if (flags & 0x10)
+                                            sx *= life, sy *= life;
+                                        else if (flags & 0x20)
+                                        {
+                                            const float k = (1.0f - life) * guestF(rdram, D + 0x88) + 1.0f;
+                                            sx *= k, sy *= k;
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    const float t = 1.0f - life;
+                                    const uint32_t c7 = lerpColour(t, cC, cA);
+                                    colour = c7;
+                                    if (flags & 0x100)
+                                    {
+                                        const uint32_t faded = lerpColour(t, 0, c7);
+                                        colour = (flags & 2) ? faded : ((faded & 0xFF000000u) | (c7 & 0xFFFFFF));
+                                    }
+                                    if (flags & 0x200)
+                                        sx *= t, sy *= t;
+                                }
+                                const float px = guestF(rdram, q + 4), py = guestF(rdram, q + 8), pz = guestF(rdram, q + 12);
+                                float u0 = 0, v0 = 0, du = 1, dv = 1;
+                                if (cols * rows >= 2)
+                                {
+                                    const uint32_t idx = (pf >> 8) & 0x7F;
+                                    du = 1.0f / cols;
+                                    dv = 1.0f / rows;
+                                    u0 = float(idx % cols) * du;
+                                    v0 = float(idx / cols) * dv;
+                                }
+                                const uint32_t base = uint32_t(b.vertices.size());
+                                const float cx[4] = {-1, 1, 1, -1}, cy[4] = {-1, -1, 1, 1};
+                                for (int c = 0; c < 4; ++c)
+                                {
+                                    pop_native::Vertex v{};
+                                    const float hx = cx[c] * sx * kParticleHalf, hy = cy[c] * sy * kParticleHalf;
+                                    v.pos[0] = px + a1[0] * hx + a2[0] * hy;
+                                    v.pos[1] = py + a1[1] * hx + a2[1] * hy;
+                                    v.pos[2] = pz + a1[2] * hx + a2[2] * hy;
+                                    v.uv[0] = u0 + (cx[c] > 0 ? du : 0);
+                                    v.uv[1] = v0 + (cy[c] > 0 ? 0 : dv);
+                                    for (int k = 0; k < 4; ++k)
+                                        v.colour[k] = float((colour >> (8 * k)) & 0xFF) / 128.0f;
+                                    b.vertices.push_back(v);
+                                }
+                                b.indices.insert(b.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+                            }
+                        }
+                        static int logged = 0;
+                        if (logged++ < 6)
+                            std::fprintf(stderr, "[pop:native] particles element %08x: %u generators, %zu quads, flags %08x sheet %ux%u axes %.2f/%.2f\n",
+                                         element, genCount, b.vertices.size() / 4, flags, cols, rows, s1, s2);
+                        if (!b.indices.empty())
+                        {
+                            // the particles' matrix: pool entry 0x70000090 (FUN_00458FC0 sets it from the list entry)
+                            std::array<float, 16> model;
+                            const uint32_t m = guestAny(rdram, 0x70000260u) + (guestAny(rdram, 0x70000090u) & 0xFFFF) * 0x40u;
+                            for (int k = 0; k < 16; ++k)
+                                model[k] = guestF(rdram, m + 4u * k);
+                            if (std::getenv("POP_PARTICLE_WORLD"))
+                                model = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                            std::vector<pop_assets::Batch> bs;
+                            bs.push_back(std::move(b));
+                            g_frameRefs.emplace_back(std::move(bs), std::make_pair(model, currentMaterial(rdram)));
+                        }
+                    }
+                }
+            }
+            g_origParticles(rdram, ctx, runtime);
+        }
+
         // FUN_00458FC0(entry): the sub-material is the entry's material (+8) list (+0x10, linked by
         // +0x20) at index byte +0xC, as the function itself selects it
         void gfxDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1176,6 +1337,9 @@ namespace pop_native_live
             g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
             if (g_origAddHalo)
                 runtime.replaceFunction(0x004AB1C0u, addHalo);
+            g_origParticles = runtime.lookupFunction(0x004584C0u);
+            if (g_origParticles)
+                runtime.replaceFunction(0x004584C0u, particles);
             g_origGfx = runtime.lookupFunction(kGfxDisplay);
             if (g_origGfx)
                 runtime.replaceFunction(kGfxDisplay, gfxDisplay);

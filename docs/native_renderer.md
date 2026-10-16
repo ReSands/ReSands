@@ -253,3 +253,20 @@ its own draw, and `tools/native/src/postfx.h` = CPU reference of ColorDiffusion 
 `--noglow` to skip). `~/Desktop/pop_renders/31_live_glow_game_vs_native.png`.
 Next: the same pass as shaders (a CPU reference to judge a GPU version against: Qwen-sized), the
 other effects when a scene uses them (DepthBlur, BrightnessContrast, SmartBlur, halos).
+
+## GFX particles (16 Oct, first version)
+`FUN_004584C0(element)` (called by `FUN_00458FC0` after it sets render state, fog zone and the
+matrix index 0x70000090 from the list entry): element +0x14 -> particle object P, description
+D = *P (+0x14 flags, +0x60/+0x68 axis sizes, +0x88 growth, +0xE0..+0xEC colour keys, +0xF0/+0xF1
+sheet columns/rows, +0xF5/+0xF6 axis choice), generators P[10] = (array, count) of 0xD0 bytes
+(+0x40 matrix, +0xC2 u16 count, +0xC4 particles of 0x30 bytes: +0 flags (bit 0/1 colour key pair,
+bit 3 oriented, bits 8-14 sheet frame), +4 position, +0x10 quaternion, +0x1C rotation, +0x20 *
++0x24 life, +0x28/+0x2C size). Colours: `FUN_00460100(t, a, b)` = byte-wise lerp (a below 0.02, b
+above 0.98); `FUN_00460040(t, c)` = c * t (alpha fade). Axes: `PAG_GetGeneratorAxis` (0x459840):
+camera right/up (`*(gp+0x110)` +0x160/+0x170) or the generator/object matrix rows by flags
+0x4000000/0x80000/0x8000000. The frame export builds billboard quads (position +- axis1 * sx/2
++- axis2 * sy/2; `POP_PARTICLE_FULL=1` for full extents; positions through matrix-pool entry
+0x70000090, `POP_PARTICLE_WORLD=1` to skip it). Balcony: rain (2 x ~65 streaks), smoke puffs, the
+torch flame sheet (4x2): flames now sit on the torches. Not done: oriented particles (flag 0x1000 /
+particle flag 8, quaternions), sizes with random ranges (+0x64/+0x6C), sprite-sheet V direction and
+half/full extent unverified, rain visibility. `~/Desktop/pop_renders/32_live_full_game_vs_native.png`.
