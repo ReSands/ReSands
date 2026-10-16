@@ -1,0 +1,58 @@
+From 03fb8e1986cdd40c538a720052de58e62080a210 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 16 Oct 2026 08:46:43 +0100
+Subject: [PATCH] EE FPU: run EE code with round toward zero and denormals as
+ zero (PS2X_EE_FLOAT_NEAREST=1 keeps the host default); MAX.S/MIN.S order as
+ the EE (exponent 255 is not inf/NaN)
+
+---
+ ps2xRecomp/src/lib/fpu_translator.cpp |  6 ++++--
+ ps2xRuntime/src/lib/ps2_runtime.cpp   | 13 +++++++++++++
+ 2 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRecomp/src/lib/fpu_translator.cpp b/ps2xRecomp/src/lib/fpu_translator.cpp
+index ae3cfd9..03d0d2b 100644
+--- a/ps2xRecomp/src/lib/fpu_translator.cpp
++++ b/ps2xRecomp/src/lib/fpu_translator.cpp
+@@ -88,10 +88,12 @@ namespace ps2recomp
+                 return fmt::format("FPU_SET_ACC(ctx, FPU_ADD_S(ctx->f_acc, FPU_MUL_S(ctx->f[{}], ctx->f[{}])));", fs, ft);
+             case COP1_S_MSUBA:
+                 return fmt::format("FPU_SET_ACC(ctx, FPU_SUB_S(ctx->f_acc, FPU_MUL_S(ctx->f[{}], ctx->f[{}])));", fs, ft);
++            // EE ordering (as the compares): exponent 255 is an ordinary large exponent, not
++            // infinity/NaN, so host float comparisons (std::max/min) get it wrong.
+             case COP1_S_MAX:
+-                return fmt::format("ctx->f[{}] = std::max(ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
++                return fmt::format("ctx->f[{}] = ps2FpuCompareKey(ctx->f[{}]) >= ps2FpuCompareKey(ctx->f[{}]) ? ctx->f[{}] : ctx->f[{}];", fd, fs, ft, fs, ft);
+             case COP1_S_MIN:
+-                return fmt::format("ctx->f[{}] = std::min(ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
++                return fmt::format("ctx->f[{}] = ps2FpuCompareKey(ctx->f[{}]) <= ps2FpuCompareKey(ctx->f[{}]) ? ctx->f[{}] : ctx->f[{}];", fd, fs, ft, fs, ft);
+             case COP1_S_C_F:
+                 return fmt::format("ctx->fcr31 &= ~0x800000;");
+             case COP1_S_C_UN:
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 6fce9a1..aade6c4 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2543,6 +2543,19 @@ void PS2Runtime::run()
+                            {
+         ThreadNaming::SetCurrentThreadName("GameThread");
+         ThreadPriority::RaiseCurrentThread(ThreadPriority::Level::Highest);
++        // The EE FPU rounds toward zero and reads and writes denormals as zero; the host's default
++        // is round to nearest with denormals kept, which changes the last bit of ADD/SUB/MUL/MADD
++        // and CVT.S.W results and keeps tiny values the EE drops (measured instruction by
++        // instruction against an EE FPU model). Every EE thread runs on this host thread, so set
++        // it once here; the division and square-root helpers switch to nearest themselves, and
++        // the VIF1/VU1 worker copies this mode with each packet. PS2X_EE_FLOAT_NEAREST=1 keeps
++        // the host default (for comparisons).
++        if (const char *nearest = std::getenv("PS2X_EE_FLOAT_NEAREST"); !nearest || std::strcmp(nearest, "1") != 0)
++        {
++            _MM_SET_ROUNDING_MODE(_MM_ROUND_TOWARD_ZERO);
++            _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
++            _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
++        }
+         try
+         {
+             m_eeScheduler->reset(m_memory.getRDRAM(), m_cpuContext);
+-- 
+2.54.0 (Apple Git-157)
+

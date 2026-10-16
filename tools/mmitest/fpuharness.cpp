@@ -19,6 +19,7 @@
 #include "ps2_runtime_macros.h"
 
 #include <cfenv>
+#include <cstdlib>
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
@@ -42,6 +43,7 @@ namespace
     float fl(uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; }
 
     bool isDenormOrZero(uint32_t b) { return (b & 0x7F800000u) == 0u; }
+    bool isExp255(uint32_t b) { return (b & 0x7F800000u) == 0x7F800000u; }
     uint32_t daz(uint32_t b) { return isDenormOrZero(b) ? (b & 0x80000000u) : b; }
 
     // Finishes a host result: infinity -> largest float, denormal -> zero (signs kept).
@@ -117,10 +119,16 @@ namespace
         return finish(withRounding(FE_TONEAREST, [&] { const float s = std::sqrt(y); return x / s; }));
     }
 
-    // Ordering of floats with denormals as zero and -0 == +0.
+    // Ordering of EE floats: sign-magnitude over all 32 bits (exponent 255 is an ordinary, larger
+    // exponent, not infinity or NaN), denormals as zero, -0 == +0.
     int compare(uint32_t a, uint32_t b)
     {
-        const float x = fl(daz(a)), y = fl(daz(b));
+        auto key = [](uint32_t v) -> int64_t {
+            v = daz(v);
+            const int64_t mag = v & 0x7FFFFFFFu;
+            return (v & 0x80000000u) ? -mag : mag;
+        };
+        const int64_t x = key(a), y = key(b);
         return x < y ? -1 : x > y ? 1 : 0;
     }
 
@@ -199,6 +207,8 @@ namespace
     // Classifies a difference for the summary.
     const char *kind(uint32_t got, uint32_t want, uint32_t fs, uint32_t ft, uint32_t acc)
     {
+        if (isExp255(fs) || isExp255(ft) || isExp255(acc))
+            return "exp255";
         if (isDenormOrZero(fs) || isDenormOrZero(ft) || isDenormOrZero(acc) || isDenormOrZero(got) || isDenormOrZero(want))
             if (!(got & 0x7F800000u) || !(want & 0x7F800000u) || (isDenormOrZero(fs) && fs & 0x7FFFFFu) ||
                 (isDenormOrZero(ft) && ft & 0x7FFFFFu) || (isDenormOrZero(acc) && acc & 0x7FFFFFu))
@@ -215,9 +225,13 @@ namespace
 int main(int argc, char **argv)
 {
     const int iterations = argc > 1 ? std::atoi(argv[1]) : 20000;
+    // FPU_MODE=ee: simulate the EE float mode (see above); default: the host's mode, as the runtime runs.
+    const char *mode = std::getenv("FPU_MODE");
+    const bool eeMode = mode && std::string(mode) == "ee";
+    std::printf("host float mode: %s\n", eeMode ? "round toward zero, denormals flushed (simulated fix)" : "default (as the runtime runs today)");
     std::mt19937 rng(12345);
     int failed = 0, unknown = 0;
-    std::printf("%-9s %8s %8s %8s %8s %8s   first difference (fs ft acc: got / want)\n", "", "cases", "wrong", "lastbit", "denorm", "other");
+    std::printf("%-9s %8s %8s %8s %8s %8s %8s   first difference (fs ft acc: got / want)\n", "", "cases", "wrong", "lastbit", "denorm", "exp255", "other");
     for (const TestCase &tc : kCases)
     {
         std::map<std::string, int> kinds;
@@ -240,7 +254,19 @@ int main(int argc, char **argv)
             ctx.f[3] = fl(0xDEADBEEFu);
             ctx.f_acc = fl(acc);
             ctx.fcr31 = (i & 1) ? 0x800000u : 0u;
-            tc.fn(&ctx, nullptr, nullptr);
+            if (eeMode)
+            {
+                // The candidate runtime fix: the EE thread runs with round toward zero and
+                // denormals flushed (inputs and results); the div/sqrt helpers switch to nearest.
+                const unsigned saved = _mm_getcsr();
+                _MM_SET_ROUNDING_MODE(_MM_ROUND_TOWARD_ZERO);
+                _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+                _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_ON);
+                tc.fn(&ctx, nullptr, nullptr);
+                _mm_setcsr(saved);
+            }
+            else
+                tc.fn(&ctx, nullptr, nullptr);
             const uint32_t gotFd = bits(ctx.f[3]), gotAcc = bits(ctx.f_acc);
             const bool gotC = (ctx.fcr31 & 0x800000u) != 0;
             const char *k = nullptr;
@@ -266,8 +292,8 @@ int main(int argc, char **argv)
         }
         if (wrong)
             ++failed;
-        std::printf("%-9s %8d %8d %8d %8d %8d   %s\n", tc.name, iterations, wrong, kinds["last bit"], kinds["denormal"],
-                    kinds["other"] + kinds["inf/nan"], first.c_str());
+        std::printf("%-9s %8d %8d %8d %8d %8d %8d   %s\n", tc.name, iterations, wrong, kinds["last bit"], kinds["denormal"],
+                    kinds["exp255"], kinds["other"] + kinds["inf/nan"], first.c_str());
     }
     std::printf("%zu instructions, %d differ from the model, %d without reference\n", std::size(kCases), failed, unknown);
     return failed ? 1 : 0;
