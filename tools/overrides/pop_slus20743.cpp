@@ -17,6 +17,7 @@ namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -369,6 +370,53 @@ namespace
     // kFrameDumpSeconds of real time (up to kFrameDumpMax), into game/recomp/screens/.
     // Driven from the instrumented kernel calls, which run constantly. ExportImage is
     // CPU-only, so this is safe off the render thread.
+    // Every F5 quick-save overwrites states/quick.state; keep a copy of each one as
+    // states/play_<date>_<time>.state (checked about once a second, copied once the file has stopped
+    // changing), so a play session leaves one save state per F5. POP_KEEP_SAVES=0 turns it off.
+    void keepQuickSaves()
+    {
+        namespace fs = std::filesystem;
+        static const bool on = [] { const char *v = std::getenv("POP_KEEP_SAVES"); return !(v && *v == '0'); }();
+        static auto next = std::chrono::steady_clock::now();
+        static fs::file_time_type lastTime{};
+        static uintmax_t lastSize = 0;
+        static bool pending = false, primed = false;
+        if (!on || std::chrono::steady_clock::now() < next)
+            return;
+        next = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        std::error_code ec;
+        const fs::path quick = "states/quick.state";
+        if (!fs::exists(quick, ec))
+            return;
+        const auto t = fs::last_write_time(quick, ec);
+        const uintmax_t size = fs::file_size(quick, ec);
+        if (ec)
+            return;
+        if (!primed)
+        {
+            // a quick.state from an earlier session is not a new save
+            primed = true;
+            lastTime = t;
+            lastSize = size;
+            return;
+        }
+        if (t != lastTime || size != lastSize)
+        {
+            lastTime = t;
+            lastSize = size;
+            pending = true; // still being written, maybe: copy on the next check if unchanged
+            return;
+        }
+        if (!pending || size == 0)
+            return;
+        pending = false;
+        const std::time_t now = std::time(nullptr);
+        char name[64];
+        std::strftime(name, sizeof name, "states/play_%Y%m%d_%H%M%S.state", std::localtime(&now));
+        fs::copy_file(quick, name, fs::copy_options::overwrite_existing, ec);
+        std::cerr << "[pop] quick-save kept as " << name << (ec ? " (copy FAILED)" : "") << std::endl;
+    }
+
     constexpr bool kFrameDump = true;
     constexpr int kFrameDumpSeconds = 15, kFrameDumpMax = 40;
     void maybeDumpFrame(PS2Runtime *runtime)
@@ -1875,6 +1923,7 @@ namespace
             const uint32_t one = 1u;
             std::memcpy(rdram + 0x0066D044u, &one, sizeof(one));
         }
+        keepQuickSaves();
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
         pop_drawprobe::onFrameEnd();
