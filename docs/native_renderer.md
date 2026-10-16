@@ -119,3 +119,17 @@ only while shown, and is correct again a frame or two after switching. Setting "
 both run every frame, so switching is instant (and a split-screen view becomes possible), at the
 cost of the VU1 + GS work. The hybrid wiring built for the frame-by-frame comparison during the
 migration is kept for this instead of being removed.
+
+## Live textures: the route (16 Oct)
+`CElementList::Render` (0x4B9440, decompile `game/analysis/native/decomp/004b9440.c`) sets the
+render state manager (scratchpad 0x70000000) before each element's Display: entry +8 = material
+(object), its sub-material list at material +0x10 linked by +0x20, entry byte +0xC = index; the
+chosen sub-material object is stored at **0x70000034** (current material at 0x70000030), and
+`FUN_004b2000(0x70000000, flags)` applies it when its +4 / +0x10 differ from the state's
+0x70000000 / 0x70000004 (texture / blend state). So the Display hook can read the current
+sub-material. Next: identify the sub-material object's texture field (+4, likely the texture
+manager index) and map index -> asset key through `PS2_Texture_Load` (0x4B4E80, first word of the
+16-byte `TEX_tdst_Data` entry = key; the override's POP_TEXLOG path), then decode the texture from
+the pack holding that key (PS2 bigfile reader as `pop_hdtextures.cpp` does for the PC file, plus
+`pop_assets::decodeTexture`). Blend state: the sub-material flags (record +0x14/+0x1C/+0x28) as in
+the offline converter.
