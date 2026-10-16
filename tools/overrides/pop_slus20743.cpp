@@ -42,6 +42,10 @@ namespace pop_drawprobe // pop_drawprobe.cpp: native renderer probe (POP_DRAWPRO
     void onPacket(const uint8_t *data, uint32_t size);
     void onFrameEnd();
 }
+namespace pop_native_live // pop_native_live.cpp: live C++ asset conversion check (POP_NATIVE_LIVE=1)
+{
+    void install(PS2Runtime &runtime);
+}
 namespace pop_hdtex // pop_hdtextures.cpp: PC textures
 {
     struct Texture;
@@ -2354,6 +2358,7 @@ namespace
             runtime.replaceFunction(kSceCdLayerSearchFile, cdSearchFileSkippingMovies);
         installPopMovies(runtime);
         pop_drawprobe::install(runtime);
+        pop_native_live::install(runtime);
         if (const char *v = std::getenv("POP_FRAMECAP"); v && *v)
         {
             const std::string spec = v;
