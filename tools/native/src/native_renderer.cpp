@@ -332,7 +332,7 @@ namespace pop_native
                     mul(clip, d.model, push.mvp);
                     push.params[0] = static_cast<float>(static_cast<int>(mode));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
-                    push.params[2] = mat && mat->lightmapImage >= 0 ? 1.0f : 0.0f;
+                    push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW;
                     push.fog[0] = d.ownFog ? d.fogA : fog.a;
                     push.fog[1] = d.ownFog ? d.fogB : fog.b;

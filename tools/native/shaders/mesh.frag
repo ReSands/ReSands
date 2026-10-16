@@ -25,8 +25,10 @@ void main()
     if (pc.params.x == 2.0 && t.a < 0.02)
         discard;
     vec3 base = t.rgb * vColour.rgb;
-    if (pc.params.z > 0.5) {
-        float a = texture(lightmapTex, vUv2).r;
+    // params.z: lightmap strength (0 = none); characters' shading pass uses the same blend with
+    // As = texel alpha * Af / 128 (VU1 program 0x4DD300 mode 3), so strength = Af / 128
+    if (pc.params.z > 0.0) {
+        float a = texture(lightmapTex, vUv2).r * pc.params.z;
         base *= 1.0 - a;
     }
     // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending

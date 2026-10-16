@@ -150,8 +150,9 @@ def skinned_draws(chain_path, with_textures=False):
                 if f == 0xC and n % 4 == 0 and len(p) >= 64 * (n // 4):
                     for k in range(n // 4):
                         pre[a + 4 * k] = list(struct.unpack_from('<16f', p, 64 * k))
-                elif f == 0xC and n == 1 and len(p) >= 16:
-                    pre[('v', a)] = list(struct.unpack_from('<4f', p, 0))
+                if f == 0xC:  # every qword too (VU constants, e.g. VU 0x15 = the shading pass colour)
+                    for k in range(min(n, len(p) // 16)):
+                        pre[('v', a + k)] = list(struct.unpack_from('<4f', p, 16 * k))
         if tid == 5:
             cur = {'target': tag[1] & 0x7FFFFFFF, 'bytes': b'', 'ups': [], 'mats': dict(pre),
                    'tex0': regs.get(0x06), 'test': regs.get(0x47, 0), 'alpha': regs.get(0x42, 0)}
@@ -205,12 +206,27 @@ def xform(m, v):
     return (x * m[0] + y * m[4] + z * m[8] + m[12], x * m[1] + y * m[5] + z * m[9] + m[13], x * m[2] + y * m[6] + z * m[10] + m[14])
 
 
-def build(chain_path, near=None, with_textures=False):
+# Characters' shading pass (VU1 program 0x4DD300, entry 0x7E, mode 3; decoded 16 Oct): the same
+# packet drawn again with the mesh's own UVs (1/512), a constant colour (VU 0x15 = 128, 128, 128, Af)
+# and a 4-bit shading texture, under GS ALPHA 0x46 = Cd * (1 - As), As = At * Af / 128 (TEX0
+# MODULATE with TCC). So it darkens the first pass by texel alpha * Af / 128 (Prince: Af 53.45).
+# packet -> (texture, strength Af / 128), filled by build() from the frame's ALPHA 0x46 draws.
+# Opt-in (--shade): in the fight capture TEX0 points at GS memory that holds a world lightmap page
+# (400438d4, 0102_Rempart_Salle_01_mur) uploaded at record 6199, shared by the Prince and a guard;
+# the real shading texture probably arrives over PATH3, which the VIF1 capture does not record.
+SHADE = {}
+
+
+def build(chain_path, near=None, with_textures=False, shade=False):
     posed, bind = [], []
-    for target, pkt, mats, tex, test, alpha, rigid in skinned_draws(chain_path, with_textures):
-        if alpha in (0x46, 0x54):  # 0x54: (Cs-Cd)*Ad+Cd shine pass, 16x16 texture, UVs from VU1 (weapons)
-            # second pass of characters: ALPHA 0x46 = Cd * (1 - As) with a 4-bit shading texture whose
-            # UVs VU1 probably computes (not modelled yet); drawn as an ordinary mesh it hides the colours
+    draws = skinned_draws(chain_path, with_textures)
+    SHADE.clear()
+    for target, pkt, mats, tex, test, alpha, rigid in draws:
+        if shade and alpha == 0x46 and tex is not None and ('v', 0x15) in mats:
+            SHADE[target] = (tex, mats[('v', 0x15)][3] / 128.0)
+    for target, pkt, mats, tex, test, alpha, rigid in draws:
+        if alpha in (0x46, 0x54):  # 0x46: the shading pass (SHADE); 0x54: (Cs-Cd)*Ad+Cd shine pass of
+            # weapons, 16x16 texture with UVs from VU1 (not modelled yet)
             continue
         if rigid and 0 in mats:  # weapons etc.: one rigid object, object matrix at VU 0
             for pos, uv, fl, nrm in rigid:
@@ -295,16 +311,23 @@ def write_gltf(meshes, path, offset_grid=False):
         return len(g['accessors']) - 1
     images = {}
 
-    def material(tex, test):
+    def image(tex):
+        g.setdefault('images', []).append({'uri': 'data:image/png;base64,' + base64.b64encode(jade2gltf.png_bytes(*tex)).decode()})
+        g.setdefault('textures', []).append({'source': len(g['images']) - 1, 'sampler': 0})
+        g.setdefault('samplers', [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}])
+        return len(g['textures']) - 1
+
+    def material(tex, test, shade=None):
         if tex is None:
             return 0
-        key = (tex[0], tex[1], hash(tex[2]), test)
+        key = (tex[0], tex[1], hash(tex[2]), test, shade and (hash(shade[0][2]), shade[1]))
         if key not in images:
-            g.setdefault('images', []).append({'uri': 'data:image/png;base64,' + base64.b64encode(jade2gltf.png_bytes(*tex)).decode()})
-            g.setdefault('textures', []).append({'source': len(g['images']) - 1, 'sampler': 0})
-            g.setdefault('samplers', [{'magFilter': 9729, 'minFilter': 9729, 'wrapS': 10497, 'wrapT': 10497}])
-            m = {'pbrMetallicRoughness': {'baseColorTexture': {'index': len(g['textures']) - 1}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
+            m = {'pbrMetallicRoughness': {'baseColorTexture': {'index': image(tex)}, 'metallicFactor': 0.0, 'roughnessFactor': 1.0},
                  'doubleSided': DOUBLE_SIDED}
+            if shade:  # shading pass: its texture's alpha as grey, darkening by grey * strength
+                w, h, rgba = shade[0]
+                grey = bytes(b for i in range(3, len(rgba), 4) for b in (rgba[i], rgba[i], rgba[i], 255))
+                m['occlusionTexture'] = {'index': image((w, h, grey)), 'texCoord': 1, 'strength': round(shade[1], 4)}
             if len(test) > 2 and test[2]:  # GS ALPHA 0x44: (Cs - Cd) * As + Cd
                 m.update({'alphaMode': 'BLEND'})
             elif test[0]:  # GS alpha test (ATST GREATER as the game uses), AREF on the 0x80 scale
@@ -317,8 +340,12 @@ def write_gltf(meshes, path, offset_grid=False):
         a_col = add(b''.join(struct.pack('<4f', *c[:4]) if len(c) >= 4 else struct.pack('<4f', 1, 1, 1, 1) for c in col[:len(pos)]), None, len(pos), 'VEC4', 5126, 34962)
         a_uv = add(b''.join(struct.pack('<2f', u / 512.0, v / 512.0) for u, v in uv[:len(pos)]), None, len(pos), 'VEC2', 5126, 34962)
         a_idx = add(b''.join(struct.pack('<3H', *t) for t in tris), None, 3 * len(tris), 'SCALAR', 5123, 34963)
-        g['meshes'].append({'name': '%x/%d' % (target, i), 'primitives': [{'attributes': {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col},
-                                                                          'indices': a_idx, 'material': material(tex, test)}]})
+        shade = SHADE.get(target) if tex is not None else None
+        attrs = {'POSITION': a_pos, 'TEXCOORD_0': a_uv, 'COLOR_0': a_col}
+        if shade:
+            attrs['TEXCOORD_1'] = a_uv  # the shading pass uses the mesh's own UVs
+        g['meshes'].append({'name': '%x/%d' % (target, i), 'primitives': [{'attributes': attrs,
+                                                                          'indices': a_idx, 'material': material(tex, test, shade)}]})
         g['nodes'].append({'name': 'skin %x' % target, 'mesh': i})
     g['buffers'].append({'byteLength': len(buf), 'uri': 'data:application/octet-stream;base64,' + base64.b64encode(bytes(buf)).decode()})
     g['scenes'] = [{'nodes': list(range(len(g['nodes'])))}]
@@ -330,7 +357,7 @@ def main(argv):
     near = None
     if '--near' in argv:
         near = [float(x) for x in argv[argv.index('--near') + 1].split(',')]
-    posed, bind = build(argv[0], near, '--textures' in argv)
+    posed, bind = build(argv[0], near, '--textures' in argv, '--shade' in argv)
     write_gltf(posed, argv[1])
     if len(argv) > 2 and not argv[2].startswith('--'):
         write_gltf(bind, argv[2])

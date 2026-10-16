@@ -203,6 +203,8 @@ int main(int argc, char **argv)
             Material mat;
             mat.baseImage = texImage(gm.pbr_metallic_roughness.base_color_texture);
             mat.lightmapImage = texImage(gm.occlusion_texture); // jade2gltf: lightmap page on TEXCOORD_1
+            if (mat.lightmapImage >= 0 && gm.occlusion_texture.scale > 0.0f)
+                mat.lightmapStrength = gm.occlusion_texture.scale; // glTF occlusion strength (default 1)
             mat.alphaMode = gm.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
                             : gm.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
                                                                       : AlphaMode::Opaque;

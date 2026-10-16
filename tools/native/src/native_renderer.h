@@ -35,6 +35,7 @@ namespace pop_native
     {
         int baseImage = -1;     // -1: white
         int lightmapImage = -1; // -1: no lightmap
+        float lightmapStrength = 1.0f; // darkening = texel * strength (world lightmaps 1; characters' shading pass Af / 128)
         AlphaMode alphaMode = AlphaMode::Opaque;
         float cutoff = 0.5f;
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
