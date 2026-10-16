@@ -4,7 +4,7 @@
 #      a native frame each plus the runtime's own screenshots around it;
 #   2. tools\windows\llm-job.ps1 -Job nightly: instruction test, boot smoke test with the new build,
 #      world-pack coverage (resumes), Gemma's report in docs\nightly.
-# Started by tools/tonight.command through start-job.ps1 (log: game\jobs\job.log).
+# Started by tools/oct16.command through start-job.ps1 (log: game\jobs\job.log).
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') native scenes"
