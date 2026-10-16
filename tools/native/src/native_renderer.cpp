@@ -321,8 +321,17 @@ namespace pop_native
                     const AlphaMode mode = mat ? mat->alphaMode : AlphaMode::Opaque;
                     if ((!options.gameOrder && isBlended(mode) != (pass == 1)) || r.indexCount == 0)
                         continue;
+                    // AFAIL RGB_ONLY: second pass over the alpha-test failures, colour only
+                    for (int afail = 0; afail < (mat && mat->afailRgbOnly ? 2 : 1); ++afail)
+                    {
+                    Material failMat;
+                    if (afail)
+                    {
+                        failMat = *mat;
+                        failMat.depthWrite = false;
+                    }
                     std::string perr;
-                    const VkPipeline want = pipeline(pipelineKey(mat), perr);
+                    const VkPipeline want = pipeline(pipelineKey(afail ? &failMat : mat), perr);
                     if (!want)
                         continue;
                     if (want != bound)
@@ -335,8 +344,9 @@ namespace pop_native
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
                     // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels)
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
-                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (mat && mat->alphaTestLess ? 4 : 0) |
-                                           (mat && mat->legacyBlend ? 8 : 0));
+                    // the failure pass keeps exactly the pixels the test rejects: the LESS bit flipped
+                    const bool less = (mat && mat->alphaTestLess) != (afail == 1);
+                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW;
@@ -353,6 +363,7 @@ namespace pop_native
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &set, 0, nullptr);
                     vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
                     vkCmdDrawIndexed(cb, r.indexCount, 1, r.firstIndex, r.vertexOffset, 0);
+                    }
                 }
             }
             vkCmdEndRenderPass(cb);

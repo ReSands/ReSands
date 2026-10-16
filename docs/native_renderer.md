@@ -270,3 +270,22 @@ camera right/up (`*(gp+0x110)` +0x160/+0x170) or the generator/object matrix row
 torch flame sheet (4x2): flames now sit on the torches. Not done: oriented particles (flag 0x1000 /
 particle flag 8, quaternions), sizes with random ranges (+0x64/+0x6C), sprite-sheet V direction and
 half/full extent unverified, rain visibility. `~/Desktop/pop_renders/32_live_full_game_vs_native.png`.
+
+## Torches (16 Oct, user report: right torch drawn over the palm, both too prominent)
+Two causes, both modelled exactly now:
+1. **AFAIL RGB_ONLY** (flag 0x100 with the alpha test; the palm fronds, 0x10117): pixels failing the
+   test still write colour but not depth. It had been approximated as "no test, no depth write", so
+   the fronds never wrote depth and the later additive torch fire drew over them. The renderer now
+   draws such materials twice: passing pixels with depth write, then the failures (test inverted)
+   colour only (`Material::afailRgbOnly`).
+2. **UV animation**: when the sub-material's +8 word is set, `CElementList::Render` runs
+   `DoComputeAndSetUVMatrix` (`FUN_0044A440`): scale = the +8/+0xC words with the low 17 bits
+   cleared (as floats), offset = their low 16 bits << 16 times the scale; flags 0x40000000 /
+   0x80000000 (word 1) replace the offsets by the running scroll at sub +0x14/+0x18
+   (`FUN_0044A840`); byte +0x11 bit 7 adds the running angle at +0x1C, else a fixed flip/rotation
+   from the sin/cos table at 0x4F0930 (`FUN_0044A540`). The fire glows (0xC0066207) scroll their
+   fire texture; we had stretched the whole texture over the mesh (a chunky orange blob). The frame
+   export applies the matrix to static, instanced and CJIdxMesh UVs (`POP_NATIVE_NOUVM=1` to
+   compare). `~/Desktop/pop_renders/33-35_*`.
+Left: the flame colour is still more saturated orange at its edges than the game's; some near palm
+fronds render light grey where the game's stay dark (present before these fixes; next to look at).

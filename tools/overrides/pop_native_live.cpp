@@ -106,8 +106,14 @@ namespace pop_native_live
             uint32_t fbmsk = 0xFF000000u;
             uint32_t list = 0;
             uint32_t seq = 0;   // the draw's position in the frame (game draw order)
+            // UV matrix of the static driver (VU 0x15/0x16), set by CVuManager::DoComputeAndSetUVMatrix
+            // when the sub-material's +8 word is nonzero (UV scroll / rotation; FUN_0044A440):
+            // u' = u * m0 + v * m2 + m4, v' = u * m1 + v * m3 + m5
+            bool hasUvm = false;
+            float uvm[6] = {1, 0, 0, 1, 0, 0};
         };
         uint32_t g_frameSeq = 0;
+        const bool g_noUvMatrix = std::getenv("POP_NATIVE_NOUVM") != nullptr; // A/B: no UV animation
         // dedupe key bit for the alpha-only pass (list +0x98, render state 0x44 = 0xFF000000): the game
         // draws mask elements again there, depth-tested against the finished scene
         uint64_t alphaPassBit(uint8_t *rdram);
@@ -163,6 +169,13 @@ namespace pop_native_live
             std::memcpy(&v, getConstMemPtr(rdram, addr), 2);
             return v;
         }
+        float guestF(uint8_t *rdram, uint32_t a)
+        {
+            const uint32_t b = guestAny(rdram, a);
+            float f;
+            std::memcpy(&f, &b, 4);
+            return f;
+        }
 
         // The render state's current sub-material (0x70000034, set by CElementList::Render before
         // Display): word 0 = texture index (low 16 bits; flags in the top byte), word 1 = the record's
@@ -199,6 +212,48 @@ namespace pop_native_live
                 dm.constColour = 0x808080;
             if (dm.flags & 0x400)
                 dm.constAlpha = int32_t(guestAny(rdram, sub) >> 25);
+            if (const uint32_t w8 = guestAny(rdram, sub + 8); w8 && !g_noUvMatrix)
+            {
+                // FUN_0044A440 / 0044A840 / 0044A540, reading the running scroll and angle the game
+                // has already advanced for this frame
+                const uint32_t wC = guestAny(rdram, sub + 0xC);
+                auto asf = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
+                float m[6];
+                m[0] = asf(w8 & 0xFFFE0000u);
+                m[3] = asf(wC & 0xFFFE0000u);
+                m[1] = m[2] = 0;
+                m[4] = m[0] * asf(w8 << 16);
+                m[5] = m[3] * asf(wC << 16);
+                if (dm.flags & 0x40000000u)
+                    m[4] = guestF(rdram, sub + 0x14);
+                if (dm.flags & 0x80000000u)
+                    m[5] = guestF(rdram, sub + 0x18);
+                float sn, cs;
+                if (guest8(rdram, sub + 0x11) & 0x80)
+                {
+                    const float a = guestF(rdram, sub + 0x1C);
+                    sn = std::sin(a);
+                    cs = std::cos(a);
+                }
+                else
+                {
+                    const uint32_t idx = (((w8 & 0x10000u) >> 9) | ((w8 & 1u) << 6) | ((wC & 0x10000u) >> 11) | ((wC & 1u) << 4)) >> 4;
+                    sn = guestF(rdram, 0x004F0930u + idx * 4);
+                    cs = guestF(rdram, 0x004F0930u + ((idx + 4) & 15) * 4);
+                }
+                const float m0 = m[0], m1 = m[1];
+                dm.uvm[0] = cs * m0 - sn * m[2];
+                dm.uvm[1] = cs * m1 - sn * m[3];
+                dm.uvm[2] = cs * m[2] + sn * m0;
+                dm.uvm[3] = cs * m[3] + sn * m1;
+                dm.uvm[4] = m[4];
+                dm.uvm[5] = m[5];
+                dm.hasUvm = true;
+                static int logged = 0;
+                if (logged++ < 8)
+                    std::fprintf(stderr, "[pop:native] UV matrix sub %08x flags %08x: %.3f %.3f %.3f %.3f + (%.3f, %.3f)\n", sub, dm.flags, dm.uvm[0],
+                                 dm.uvm[1], dm.uvm[2], dm.uvm[3], dm.uvm[4], dm.uvm[5]);
+            }
             const uint32_t zone = guestAny(rdram, 0x70000084u) & 0xFF, fa = guestAny(rdram, 0x70000270u + zone * 16 + 8),
                            fb = guestAny(rdram, 0x70000270u + zone * 16 + 12);
             std::memcpy(&dm.fogA, &fa, 4);
@@ -237,13 +292,6 @@ namespace pop_native_live
             int count = 0;
             float dir[4][3] = {}, col[4][3] = {}, amb[3] = {};
         };
-        float guestF(uint8_t *rdram, uint32_t a)
-        {
-            const uint32_t b = guestAny(rdram, a);
-            float f;
-            std::memcpy(&f, &b, 4);
-            return f;
-        }
         uint64_t alphaPassBit(uint8_t *rdram) { return guestAny(rdram, 0x70000044u) == 0xFF000000u ? uint64_t(1) << 62 : 0; }
         LightEnv readLightEnv(uint8_t *rdram)
         {
@@ -691,7 +739,9 @@ namespace pop_native_live
                                 model = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
                             std::vector<pop_assets::Batch> bs;
                             bs.push_back(std::move(b));
-                            g_frameRefs.emplace_back(std::move(bs), std::make_pair(model, currentMaterial(rdram)));
+                            DrawMaterial dm = currentMaterial(rdram);
+                            dm.hasUvm = false; // particle program (VU 4): sprite-sheet UVs of its own
+                            g_frameRefs.emplace_back(std::move(bs), std::make_pair(model, dm));
                         }
                     }
                 }
@@ -929,7 +979,11 @@ namespace pop_native_live
                     std::vector<pop_assets::Batch> posed;
                     const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
                     if (poseSkinned(rdram, element, index, sk->second, posed, &light))
-                        g_framePosed.emplace_back(std::move(posed), currentMaterial(rdram));
+                    {
+                        DrawMaterial dm = currentMaterial(rdram);
+                        dm.hasUvm = false; // the skin driver has no UV matrix
+                        g_framePosed.emplace_back(std::move(posed), dm);
+                    }
                 }
                 if (it == g_elements.end())
                 {
@@ -987,7 +1041,7 @@ namespace pop_native_live
         // the draw's vertex colours as the VIF delivers them (constant colour / local alpha masks)
         void writeVertices(FILE *f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
         {
-            if (m.constColour < 0 && m.constAlpha < 0)
+            if (m.constColour < 0 && m.constAlpha < 0 && !m.hasUvm)
             {
                 std::fwrite(vertices.data(), sizeof(pop_native::Vertex), vertices.size(), f);
                 return;
@@ -1000,6 +1054,12 @@ namespace pop_native_live
                         x.colour[k] = float((uint32_t(m.constColour) >> (8 * k)) & 0xFF) / 128.0f;
                 if (m.constAlpha >= 0)
                     x.colour[3] = float(m.constAlpha) / 128.0f;
+                if (m.hasUvm)
+                {
+                    const float u = x.uv[0], v = x.uv[1];
+                    x.uv[0] = u * m.uvm[0] + v * m.uvm[2] + m.uvm[4];
+                    x.uv[1] = u * m.uvm[1] + v * m.uvm[3] + m.uvm[5];
+                }
             }
             std::fwrite(v.data(), sizeof(pop_native::Vertex), v.size(), f);
         }

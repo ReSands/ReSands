@@ -57,6 +57,7 @@ namespace pop_native
         bool writeAlpha = false;    // GS FBMSK: alpha (= As) written; the frame's alpha is the glow mask
         float fix = 1.0f;           // FIX / 128 for Subtract
         bool legacyBlend = false;   // glTF BLEND: no depth write, nearly transparent texels dropped
+        bool afailRgbOnly = false;  // GS TEST AFAIL RGB_ONLY: alpha-test failures write colour, not depth
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
     };
 
@@ -87,13 +88,9 @@ namespace pop_native
         m.alphaTest = (flags & 0x10) != 0;
         m.alphaTestLess = inv;
         m.cutoff = float((ref >> 24) / 255.0);
-        // AFAIL RGB_ONLY: pixels failing the test still write colour, only not depth; approximated
-        // as no test and no depth write for the whole draw
-        if (m.alphaTest && (flags & 0x100))
-        {
-            m.alphaTest = false;
-            m.depthWrite = false;
-        }
+        // AFAIL RGB_ONLY: pixels failing the test still write colour, but not depth; the renderer
+        // draws such materials twice (passing pixels with depth, failing ones without)
+        m.afailRgbOnly = m.alphaTest && (flags & 0x100);
     }
 
     struct Mesh
