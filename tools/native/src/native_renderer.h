@@ -176,6 +176,9 @@ namespace pop_native
                      const float clip[16], const std::vector<Draw> &draws, std::string &error);
         void setFog(const Fog &fog);
         void setPostEffects(const PostEffects &post);
+        // an image to present instead of the scene (e.g. the game's own GS picture, for comparing);
+        // nullptr: present the scene again. Copied; same-size updates reuse the texture.
+        bool setOverlay(const Image *image, std::string &error);
         // the last frame present() drew (internal resolution, after the post effects), read back
         bool readPresented(std::vector<uint8_t> &rgba, uint32_t &width, uint32_t &height, std::string &error);
         std::string deviceName() const;

@@ -512,6 +512,8 @@ int main(int argc, char **argv)
             noGlow = true;
     }
     std::unordered_map<uint32_t, int> liveImageOf; // live: texture key -> renderer image (kept across frames)
+    Image liveGsImage;                             // live: the game's own GS picture of the frame (POP_NATIVE_WINDOW_GS=d)
+    std::vector<Image> liveGsImages;               // all GS pictures sent with the frame (1..d boundaries later)
     auto addFrameFrom = [&](std::istream &f, const char *path) -> bool {
         char magic[4] = {};
         f.read(magic, 4);
@@ -652,6 +654,21 @@ int main(int argc, char **argv)
                 if (!livePort)
                     std::printf("haze (SmartBlur): %u calls, colour %08X fade %.3f\n", calls, haze[0], double(fade));
             }
+            // live frames: the game's own GS pictures latched at the next frame boundaries
+            // (POP_NATIVE_WINDOW_GS=<d>); the first is shown with T, all are scored on --live-shots
+            liveGsImages.clear();
+            uint32_t gw = 0, gh = 0;
+            while (f.read(tag, 4) && std::memcmp(tag, "GSFB", 4) == 0 && f.read(reinterpret_cast<char *>(&gw), 4) &&
+                   f.read(reinterpret_cast<char *>(&gh), 4) && gw && gh && gw <= 4096 && gh <= 4096)
+            {
+                Image g;
+                g.width = gw;
+                g.height = gh;
+                g.rgba.resize(size_t(gw) * gh * 4);
+                f.read(reinterpret_cast<char *>(g.rgba.data()), std::streamsize(g.rgba.size()));
+                liveGsImages.push_back(std::move(g));
+            }
+            liveGsImage = liveGsImages.empty() ? Image{} : liveGsImages.front();
         }
         if (!livePort)
             std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
@@ -730,6 +747,7 @@ int main(int argc, char **argv)
         double liveRebuildMs = 0;
         bool freeCam = !livePort;
         bool livePost = true; // G: the game's post effects (glow, haze) on the GPU
+        bool showGs = false;  // T: show the game's own GS picture instead (POP_NATIVE_WINDOW_GS=1 in the game)
         if (!livePort && (glowOn || hazeOn))
         {
             // an exported frame in the window: its post effects on the GPU too
@@ -823,6 +841,8 @@ int main(int argc, char **argv)
                     r.setPostEffects(pe);
                     glowOn = hazeOn = false; // the next frame's trailer says again
                 }
+                if (showGs && !r.setOverlay(&liveGsImage, error))
+                    std::fprintf(stderr, "overlay: %s\n", error.c_str());
                 ++liveFrames;
                 liveRebuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tr0).count();
                 liveBytes += frame.size();
@@ -837,6 +857,13 @@ int main(int argc, char **argv)
                 std::string path = std::string(argv[3]);
                 const size_t dot = path.rfind('.');
                 path = (dot == std::string::npos ? path : path.substr(0, dot)) + "_live_" + std::to_string(++shots) + ".png";
+                if (std::getenv("POP_LIVE_DUMP"))
+                {
+                    // the frame as received (PNF6; textures sent in earlier frames are not in it)
+                    std::lock_guard<std::mutex> lock(liveMutex);
+                    std::ofstream(path.substr(0, path.size() - 4) + ".pnf", std::ios::binary)
+                        .write(reinterpret_cast<const char *>(liveFrame.data()), std::streamsize(liveFrame.size()));
+                }
                 if (r.readPresented(px, w, h, error))
                 {
                     std::vector<uint8_t> rgb(size_t(w) * h * 3);
@@ -846,6 +873,28 @@ int main(int argc, char **argv)
                     std::printf("live: saved %s (game frame %llu, %zu draws; per frame %.1f ms rebuild, %.0f KB)\n", path.c_str(),
                                 (unsigned long long)liveFrames, draws.size(), liveRebuildMs / double(liveFrames),
                                 double(liveBytes) / double(liveFrames) / 1024.0);
+                    for (size_t gi = 0; gi < liveGsImages.size() && !showGs; ++gi)
+                    {
+                        const Image &liveGsImage = liveGsImages[gi];
+                        if (liveGsImage.width != w || liveGsImage.height != h)
+                            continue;
+                        // the game's GS picture of the same frame, and how far the native one is from it
+                        std::vector<uint8_t> grgb(size_t(w) * h * 3);
+                        double sum = 0;
+                        size_t big = 0;
+                        for (size_t i = 0; i < size_t(w) * h; ++i)
+                            for (int c = 0; c < 3; ++c)
+                            {
+                                grgb[i * 3 + c] = liveGsImage.rgba[i * 4 + c];
+                                const int d = std::abs(int(liveGsImage.rgba[i * 4 + c]) - int(px[i * 4 + c]));
+                                sum += d;
+                                big += d > 24;
+                            }
+                        const std::string gpath = path.substr(0, path.size() - 4) + "_gs" + std::to_string(gi + 1) + ".png";
+                        stbi_write_png(gpath.c_str(), int(w), int(h), 3, grgb.data(), int(w * 3));
+                        std::printf("live:   GS picture %zu boundaries later %s; native vs GS: mean difference %.2f, %.1f%% of values off by > 24\n",
+                                    gi + 1, gpath.c_str(), sum / double(size_t(w) * h * 3), 100.0 * double(big) / double(size_t(w) * h * 3));
+                    }
                     std::fflush(stdout);
                 }
             }
@@ -869,6 +918,12 @@ int main(int argc, char **argv)
                         cam.reset();
                     else if (k == SDLK_G && livePort)
                         livePost = !livePost;
+                    else if (k == SDLK_T && livePort)
+                    {
+                        showGs = !showGs;
+                        if (!r.setOverlay(showGs ? &liveGsImage : nullptr, error))
+                            std::fprintf(stderr, "overlay: %s\n", error.c_str());
+                    }
                     else if (k == SDLK_F && livePort)
                     {
                         freeCam = !freeCam;

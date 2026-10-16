@@ -18,7 +18,7 @@ namespace pop_live_client
     namespace
     {
         std::mutex g_mutex;
-        std::condition_variable g_cv;
+        std::condition_variable g_cv, g_idle;
         std::vector<uint8_t> g_pending;
         bool g_have = false, g_started = false;
         std::atomic<uint64_t> g_connection{0};
@@ -60,6 +60,7 @@ namespace pop_live_client
                     frame.swap(g_pending);
                     g_have = false;
                 }
+                g_idle.notify_all();
                 if (!pop_live::sendFrame(s, frame))
                 {
                     std::fprintf(stderr, "[pop:live] viewer gone; reconnecting\n");
@@ -89,6 +90,12 @@ namespace pop_live_client
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         return g_have;
+    }
+
+    void waitIdle()
+    {
+        std::unique_lock<std::mutex> lock(g_mutex);
+        g_idle.wait_for(lock, std::chrono::seconds(5), [] { return !g_have; });
     }
 
     void submit(std::vector<uint8_t> &&frame)

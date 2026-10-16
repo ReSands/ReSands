@@ -29,6 +29,7 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
     void submit(std::vector<uint8_t> &&frame);
     uint64_t connection(); // changes with every new viewer connection
     bool busy();           // the previous frame is still being sent
+    void waitIdle();       // blocks until it is
 }
 #include "../../../../../../tools/native/src/meshdecode.cpp"
 
@@ -45,6 +46,7 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -310,7 +312,6 @@ namespace pop_native_live
             const uint32_t set = table + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
             uint32_t ambient = guestAny(rdram, set + 4);
             int count = int(guest8(rdram, set + 8));
-            const bool pointFlag = guest8(rdram, set + 1) != 0;
             if (guest8(rdram, 0x70000039u))
             {
                 ambient = guestAny(rdram, 0x7000003Cu);
@@ -329,19 +330,17 @@ namespace pop_native_live
                         e.col[i][c] = guestF(rdram, cm + 4u * (4 * i + c));
                     }
             }
-            else if (pointFlag && !std::getenv("POP_NATIVE_PTLIGHTS"))
-            {
-                // Point-light sets (flag at +1; DoSetSkinLightEnv takes another path for them, retail
-                // 0x4B6A40): their light slots hold floats (positions, a matrix), not RGB colours, so
-                // reading them as directional lights gave huge colours (the light-grey palm fronds).
-                // Ambient only until that path is decoded; POP_NATIVE_PTLIGHTS=1 = the old reading.
-            }
             else
             {
+                // As DoSetSkinLightEnv uploads them: for point-light sets (+1 != 0) it takes its other path
+                // (retail 0x4B6A40) and reads `count` slots as directional lights without looking at their
+                // types: vector at +0x10 + 16i (not normalised), colour bytes at +0xD0 + 4i (slots with a
+                // zero colour word skipped). The title scene's set 0 holds a position and floats there; the
+                // game lights with them as they are (the backlit curtains come out bright, as in the GS frame).
                 for (int i = 0; i < count && i < 4; ++i)
                 {
-                    if (pointFlag && guestAny(rdram, set + 0xE0 + 4 * i) != 0)
-                        continue; // point lights (types 1/2) not modelled yet
+                    if (guestAny(rdram, set + 0xD0 + 4 * i) == 0)
+                        continue;
                     const uint32_t c = guestAny(rdram, set + 0xD0 + 4 * i);
                     for (int k = 0; k < 3; ++k)
                     {
@@ -360,23 +359,37 @@ namespace pop_native_live
         // matrix = *(0x700001D0) + (firstBone + id[k]) * 0x40, firstBone = u16 table at 0x700001DC
         // indexed by index - u16 at 0x7000025E. n >= 2: vertex slot s uses bone s - 1 (VU 0x388); one
         // bone: every vertex uses it (VU 0). Matrices are world space, row vectors.
+        uint64_t g_skinnedNoPalette = 0; // skinned draws without a bone palette (posed by the object matrix)
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
                          std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr)
         {
             const uint32_t pal = guestAny(rdram, element + 0x48);
-            if (!pal)
-                return false;
-            const uint32_t n = guest8(rdram, pal);
-            const uint32_t base = guestAny(rdram, 0x700001D0u), baseIndex = guest16(rdram, 0x7000025Eu);
-            const uint32_t first = guest16(rdram, 0x700001DCu + ((index & 0xFFFF) - baseIndex) * 2u);
+            const uint32_t n = pal ? guest8(rdram, pal) : 0;
             std::vector<std::array<float, 16>> bones(std::max(n, 1u));
-            for (uint32_t k = 0; k < bones.size(); ++k)
+            if (!pal)
             {
-                const uint32_t m = base + (first + guest8(rdram, pal + 4 + k)) * 0x40u;
+                // no bone palette: one rigid part, placed by the object's matrix-pool entry (as static
+                // elements); these were dropped before
+                ++g_skinnedNoPalette;
+                const uint32_t m = guestAny(rdram, 0x70000260u) + (index & 0xFFFF) * 0x40u;
                 for (int j = 0; j < 16; ++j)
                 {
                     const uint32_t bits = guestAny(rdram, m + 4u * j);
-                    std::memcpy(&bones[k][j], &bits, 4);
+                    std::memcpy(&bones[0][j], &bits, 4);
+                }
+            }
+            else
+            {
+                const uint32_t base = guestAny(rdram, 0x700001D0u), baseIndex = guest16(rdram, 0x7000025Eu);
+                const uint32_t first = guest16(rdram, 0x700001DCu + ((index & 0xFFFF) - baseIndex) * 2u);
+                for (uint32_t k = 0; k < bones.size(); ++k)
+                {
+                    const uint32_t m = base + (first + guest8(rdram, pal + 4 + k)) * 0x40u;
+                    for (int j = 0; j < 16; ++j)
+                    {
+                        const uint32_t bits = guestAny(rdram, m + 4u * j);
+                        std::memcpy(&bones[k][j], &bits, 4);
+                    }
                 }
             }
             for (const auto &b : bind)
@@ -473,6 +486,7 @@ namespace pop_native_live
                          (unsigned long long)s.vertices, (unsigned long long)s.triangles, (unsigned long long)s.notConverted,
                          (unsigned long long)s.draws, (unsigned long long)s.drawsKnown, (unsigned long long)s.drawsUnknown,
                          (unsigned long long)s.positionsFound, (unsigned long long)s.positions, (unsigned long long)s.drawsExact);
+            std::fprintf(stderr, "[pop:native] skinned draws without a bone palette (object matrix used): %llu\n", (unsigned long long)g_skinnedNoPalette);
             std::fprintf(stderr, "[pop:native] unknown draws: skinned %llu, instanced %llu, no pass %llu, failed %llu, never loaded %llu\n",
                          (unsigned long long)g_unknownBy['s'], (unsigned long long)g_unknownBy['i'], (unsigned long long)g_unknownBy['n'],
                          (unsigned long long)g_unknownBy['f'], (unsigned long long)g_unknownBy['?']);
@@ -552,8 +566,8 @@ namespace pop_native_live
                     if (!b.indices.empty())
                         out.push_back(std::move(b));
                 }
-                uv.clear();
-                col.clear();
+                // UVs and colours stay, as they stay in VU memory: a batch that uploads none uses the
+                // previous batch's (the flat curtain panels when they were cleared)
                 pos.clear();
                 posNum = 0;
                 have = 0;
@@ -677,8 +691,11 @@ namespace pop_native_live
                 {
                     const uint32_t flags = guestAny(rdram, D + 0x14), genArray = guestAny(rdram, gens), genCount = guestAny(rdram, gens + 4);
                     const uint32_t firstParts = genCount ? guestAny(rdram, genArray + 0xC4) : 0;
+                    // billboards: one pair of axes for every particle; oriented particles (flag 0x1000, or
+                    // particle flag 8 on the first one): axes per particle (size, rotation, quaternion)
                     const bool billboard = !(flags & 0x1000) && !(firstParts && (guestAny(rdram, firstParts) & 8));
-                    if (billboard)
+                    static const bool noOriented = std::getenv("POP_NATIVE_NOORIENTED") != nullptr;
+                    if (billboard || !noOriented)
                     {
                         // axis choice (PAG_GetGeneratorAxis, the common branch)
                         const uint32_t cam = guestAny(rdram, 0x006749F0u + 0x110u);
@@ -690,16 +707,17 @@ namespace pop_native_live
                             ax1 = src, ax2 = src + 0x20;
                         else if (flags & 0x8000000)
                             ax1 = src, ax2 = src + 0x10;
+                        // PAG_GetGeneratorAxis: fixed sizes (D+0x60 == D+0x64, D+0x68 == D+0x6C, no flag 1)
+                        // give axes scaled by them; otherwise the raw axes, scaled per particle
                         const float s1 = guestF(rdram, D + 0x60), s2 = (flags & 4) ? s1 : guestF(rdram, D + 0x68);
+                        const bool fixedSize = guestF(rdram, D + 0x64) == s1 && guestF(rdram, D + 0x6C) == guestF(rdram, D + 0x68) && !(flags & 1);
+                        const float k1 = fixedSize ? s1 : 1.0f, k2 = fixedSize ? s2 : 1.0f;
                         float a1[3], a2[3];
                         for (int k = 0; k < 3; ++k)
                         {
-                            a1[k] = guestF(rdram, ax1 + 4 * k) * s1;
-                            a2[k] = guestF(rdram, ax2 + 4 * k) * ((flags & 4) ? 1.0f : 1.0f) * s2;
+                            a1[k] = guestF(rdram, ax1 + 4 * k) * k1;
+                            a2[k] = guestF(rdram, (flags & 4) ? ax1 + 4 * k : ax2 + 4 * k) * k2;
                         }
-                        if (flags & 4)
-                            for (int k = 0; k < 3; ++k)
-                                a2[k] = guestF(rdram, ax1 + 4 * k) * s1;
                         const uint32_t cols = std::max(1u, guest8(rdram, D + 0xF0)), rows = std::max(1u, guest8(rdram, D + 0xF1));
                         const uint32_t cA = guestAny(rdram, D + 0xE0), cB = guestAny(rdram, D + 0xE4), cC = guestAny(rdram, D + 0xE8),
                                        cD = guestAny(rdram, D + 0xEC);
@@ -756,17 +774,61 @@ namespace pop_native_live
                                     du = 1.0f / cols;
                                     dv = 1.0f / rows;
                                     u0 = float(idx % cols) * du;
-                                    v0 = float(idx / cols) * dv;
+                                    // FUN_004584C0 sends the sheet row as rows - 1 - idx / cols (counted from the
+                                    // bottom); POP_PARTICLE_ROWTOP=1 = the old top-down reading
+                                    static const bool rowTop = std::getenv("POP_PARTICLE_ROWTOP") != nullptr;
+                                    v0 = float(rowTop ? idx / cols : (rows - 1) - idx / cols) * dv;
+                                }
+                                // the quad's two half-axes: billboards = the shared axes times the particle's
+                                // size; oriented (FUN_004584C0's other branch): the axes times the size (or
+                                // pre-scaled for fixed sizes), turned by the particle's angle (+0x1C, sine
+                                // table at 0x6D3400), or the rows of its quaternion (+0x10) for flag 8
+                                float e1[3], e2[3];
+                                for (int k = 0; k < 3; ++k)
+                                {
+                                    e1[k] = a1[k] * ((billboard || !fixedSize) ? sx : 1.0f);
+                                    e2[k] = a2[k] * ((billboard || !fixedSize) ? sy : 1.0f);
+                                }
+                                if (!billboard)
+                                {
+                                    const uint32_t rot = guestAny(rdram, q + 0x1C);
+                                    if (rot)
+                                    {
+                                        const uint32_t idx = rot >> 22;
+                                        const float sn = guestF(rdram, 0x006D3400u + 4 * idx), cs = guestF(rdram, 0x006D3400u + 4 * ((idx + 0x100) % 0x3FF));
+                                        float r1[3], r2[3];
+                                        for (int k = 0; k < 3; ++k)
+                                        {
+                                            r1[k] = e1[k] * cs + sn * e2[k];  // FUN_00495D60: out = a + s * b
+                                            r2[k] = e2[k] * cs - sn * e1[k];
+                                        }
+                                        std::memcpy(e1, r1, sizeof e1);
+                                        std::memcpy(e2, r2, sizeof e2);
+                                    }
+                                    if (pf & 8)
+                                    {
+                                        // MATH_ConvertQuaternionToMatrix (x, y, z, w at +0x10): rows 0 and 1
+                                        const float qx = guestF(rdram, q + 0x10), qy = guestF(rdram, q + 0x14), qz = guestF(rdram, q + 0x18),
+                                                    qw = guestF(rdram, q + 0x1C);
+                                        const float m0[3] = {1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy + qz * qw), 2 * (qx * qz - qy * qw)};
+                                        const float m1[3] = {2 * (qx * qy - qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz + qx * qw)};
+                                        const float qsx = guestF(rdram, q + 0x28), qsy = guestF(rdram, q + 0x2C);
+                                        for (int k = 0; k < 3; ++k)
+                                        {
+                                            e1[k] = m0[k] * qsx;
+                                            e2[k] = m1[k] * qsy;
+                                        }
+                                    }
                                 }
                                 const uint32_t base = uint32_t(b.vertices.size());
                                 const float cx[4] = {-1, 1, 1, -1}, cy[4] = {-1, -1, 1, 1};
                                 for (int c = 0; c < 4; ++c)
                                 {
                                     pop_native::Vertex v{};
-                                    const float hx = cx[c] * sx * kParticleHalf, hy = cy[c] * sy * kParticleHalf;
-                                    v.pos[0] = px + a1[0] * hx + a2[0] * hy;
-                                    v.pos[1] = py + a1[1] * hx + a2[1] * hy;
-                                    v.pos[2] = pz + a1[2] * hx + a2[2] * hy;
+                                    const float hx = cx[c] * kParticleHalf, hy = cy[c] * kParticleHalf;
+                                    v.pos[0] = px + e1[0] * hx + e2[0] * hy;
+                                    v.pos[1] = py + e1[1] * hx + e2[1] * hy;
+                                    v.pos[2] = pz + e1[2] * hx + e2[2] * hy;
                                     v.uv[0] = u0 + (cx[c] > 0 ? du : 0);
                                     v.uv[1] = v0 + (cy[c] > 0 ? 0 : dv);
                                     for (int k = 0; k < 4; ++k)
@@ -776,10 +838,11 @@ namespace pop_native_live
                                 b.indices.insert(b.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
                             }
                         }
-                        static int logged = 0;
-                        if (logged++ < 6)
-                            std::fprintf(stderr, "[pop:native] particles element %08x: %u generators, %zu quads, flags %08x sheet %ux%u axes %.2f/%.2f\n",
-                                         element, genCount, b.vertices.size() / 4, flags, cols, rows, s1, s2);
+                        static int logged = 0, loggedOriented = 0;
+                        if (billboard ? logged++ < 6 : loggedOriented++ < 6)
+                            std::fprintf(stderr, "[pop:native] particles element %08x (%s): %u generators, %zu quads, flags %08x sheet %ux%u sizes %.2f/%.2f%s\n",
+                                         element, billboard ? "billboard" : "oriented", genCount, b.vertices.size() / 4, flags, cols, rows, s1, s2,
+                                         fixedSize ? " fixed" : "");
                         if (!b.indices.empty())
                         {
                             // the particles' matrix: pool entry 0x70000090 (FUN_00458FC0 sets it from the list entry)
@@ -1154,6 +1217,19 @@ namespace pop_native_live
     namespace
     {
         // the draw's vertex colours as the VIF delivers them (constant colour / local alpha masks)
+        // the GS picture the runtime last presented (frame N when frame N + 1's capture ends), for the
+        // live window's comparison toggle. Not every runtime has copyLatchedHostPresentationFrame (the
+        // Mac `pop` one does; the PC's GPU renderer keeps its frames on the GPU), hence the detection.
+        PS2Runtime *g_runtimePtr = nullptr;
+        template <typename G>
+        auto copyGsFrame(G &gs, std::vector<uint8_t> &px, uint32_t &w, uint32_t &h, int) -> decltype(gs.copyLatchedHostPresentationFrame(px, w, h, nullptr), bool())
+        {
+            uint32_t fbp = 0;
+            return gs.copyLatchedHostPresentationFrame(px, w, h, &fbp);
+        }
+        template <typename G>
+        bool copyGsFrame(G &, std::vector<uint8_t> &, uint32_t &, uint32_t &, long) { return false; }
+
         void putBytes(std::vector<uint8_t> &out, const void *p, size_t n)
         {
             const uint8_t *b = static_cast<const uint8_t *>(p);
@@ -1161,6 +1237,7 @@ namespace pop_native_live
         }
         std::unordered_map<uint32_t, pop_native::Image> g_liveImages; // live window: decoded textures by key
         std::unordered_set<uint32_t> g_liveSent;                       // texture keys the viewer already has
+        std::deque<std::pair<std::vector<uint8_t>, int>> g_liveDelayed; // frames waiting for GS pictures (count so far)
         uint64_t g_liveConnection = 0;
 
         void writeVertices(std::vector<uint8_t> &f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
@@ -1393,6 +1470,36 @@ namespace pop_native_live
             putBytes(f, "HAZE", size_t(1) * size_t(4));
             putBytes(f, &g_hazeCalls, size_t(4) * size_t(1));
             putBytes(f, g_haze, size_t(4) * size_t(2));
+            // POP_NATIVE_WINDOW_GS=<d>: the emulated GS picture for the viewer's comparison toggle
+            // ("GSFB" + w + h + RGBA). The picture the runtime presents lags the frame being drawn, so
+            // a frame waits for the pictures latched at the next d frame boundaries and carries all
+            // of them (the first is the one shown; the viewer scores each, to find the right lag).
+            static const char *gsEnv = std::getenv("POP_NATIVE_WINDOW_GS");
+            static const int gsDelay = gsEnv && *gsEnv ? std::max(1, std::atoi(gsEnv)) : 0;
+            if (live && gsDelay > 0 && g_runtimePtr)
+            {
+                std::vector<uint8_t> px;
+                uint32_t w = 0, h = 0;
+                const bool have = copyGsFrame(g_runtimePtr->gs(), px, w, h, 0) && w && h && px.size() >= size_t(w) * h * 4;
+                // every frame still waiting gets this boundary's picture
+                for (auto &pending : g_liveDelayed)
+                    if (have)
+                    {
+                        putBytes(pending.first, "GSFB", 4);
+                        putBytes(pending.first, &w, 4);
+                        putBytes(pending.first, &h, 4);
+                        putBytes(pending.first, px.data(), size_t(w) * h * 4);
+                        ++pending.second;
+                    }
+                g_liveDelayed.emplace_back(std::move(f), 0);
+                while (!g_liveDelayed.empty() && int(g_liveDelayed.front().second) >= gsDelay)
+                {
+                    pop_live_client::waitIdle(); // comparison mode: every frame is sent, the game waits
+                    pop_live_client::submit(std::move(g_liveDelayed.front().first));
+                    g_liveDelayed.pop_front();
+                }
+                return;
+            }
             if (live)
             {
                 pop_live_client::submit(std::move(f));
@@ -1518,6 +1625,7 @@ namespace pop_native_live
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdramPtr = rdram;
+            g_runtimePtr = runtime;
             g_drawManager = getRegU32(ctx, 4);
             if (g_frameCapturing)
             {
@@ -1525,7 +1633,8 @@ namespace pop_native_live
                 g_frameCapturing = false;
                 if (g_liveWindow)
                 {
-                    if (!pop_live_client::busy())
+                    static const bool gsMode = std::getenv("POP_NATIVE_WINDOW_GS") != nullptr;
+                    if (gsMode || !pop_live_client::busy())
                         writeFrame(true);
                     resetFrameCapture();
                 }

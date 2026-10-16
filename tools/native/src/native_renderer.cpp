@@ -696,6 +696,11 @@ namespace pop_native
             return p;
         }
 
+        // ---- overlay: an image presented instead of the scene ----
+        Texture overlay;
+        uint32_t overlayW = 0, overlayH = 0;
+        bool overlayOn = false;
+
         // ---- GPU post effects (present path) ----
         PostEffects post;
         VkDescriptorSetLayout postSetLayout = VK_NULL_HANDLE;
@@ -976,6 +981,7 @@ namespace pop_native
             m->destroyBuffer(m->vertexBuffer);
             m->destroyBuffer(m->indexBuffer);
             m->destroyPostBuffers();
+            m->destroyImage(m->overlay);
             for (VkPipeline p : {m->postSprite, m->postDiffusion, m->postConvert})
                 if (p)
                     vkDestroyPipeline(m->device, p, nullptr);
@@ -1018,6 +1024,48 @@ namespace pop_native
 
     void Renderer::setFog(const Fog &fog) { m->fog = fog; }
     void Renderer::setPostEffects(const PostEffects &post) { m->post = post; }
+
+    bool Renderer::setOverlay(const Image *image, std::string &error)
+    {
+        if (!image || !image->width || !image->height)
+        {
+            m->overlayOn = false;
+            return true;
+        }
+        if (m->frameFence)
+            vkWaitForFences(m->device, 1, &m->frameFence, VK_TRUE, UINT64_MAX);
+        if (m->overlayW != image->width || m->overlayH != image->height)
+        {
+            vkDeviceWaitIdle(m->device);
+            m->destroyImage(m->overlay);
+            if (!m->createImage(image->width, image->height, VK_FORMAT_R8G8B8A8_UNORM,
+                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT, m->overlay, error))
+                return false;
+            m->overlayW = image->width;
+            m->overlayH = image->height;
+        }
+        Buffer staging;
+        if (!m->createBuffer(image->rgba.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, error))
+            return false;
+        void *p;
+        vkMapMemory(m->device, staging.memory, 0, image->rgba.size(), 0, &p);
+        std::memcpy(p, image->rgba.data(), image->rgba.size());
+        vkUnmapMemory(m->device, staging.memory);
+        const bool ok = m->oneShot([&](VkCommandBuffer cb) {
+            Impl::barrier(cb, m->overlay.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {image->width, image->height, 1};
+            vkCmdCopyBufferToImage(cb, staging.buffer, m->overlay.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            Impl::barrier(cb, m->overlay.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }, error);
+        m->destroyBuffer(staging);
+        m->overlayOn = ok;
+        return ok;
+    }
 
     bool Renderer::readPresented(std::vector<uint8_t> &rgba, uint32_t &width, uint32_t &height, std::string &error)
     {
@@ -1420,8 +1468,10 @@ namespace pop_native
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cb, &bi);
-        m->recordScene(cb, m->targetFb, internalWidth, internalHeight, clip, draws);
-        if (m->post.glow || m->post.haze)
+        const bool overlay = m->overlayOn && m->overlay.image;
+        if (!overlay)
+            m->recordScene(cb, m->targetFb, internalWidth, internalHeight, clip, draws);
+        if (!overlay && (m->post.glow || m->post.haze))
         {
             if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
                 return false;
@@ -1435,19 +1485,20 @@ namespace pop_native
         vkCmdClearColorImage(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
         // the frame scaled to fit the window, aspect kept (bars around it)
         const VkExtent2D e = m->realExtent;
-        const double scale = std::min(double(e.width) / internalWidth, double(e.height) / internalHeight);
-        const int32_t w = static_cast<int32_t>(internalWidth * scale), h = static_cast<int32_t>(internalHeight * scale);
+        const uint32_t srcW = overlay ? m->overlayW : internalWidth, srcH = overlay ? m->overlayH : internalHeight;
+        const double scale = std::min(double(e.width) / srcW, double(e.height) / srcH);
+        const int32_t w = static_cast<int32_t>(srcW * scale), h = static_cast<int32_t>(srcH * scale);
         const int32_t x = (static_cast<int32_t>(e.width) - w) / 2, y = (static_cast<int32_t>(e.height) - h) / 2;
         VkImageBlit blit{};
         blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        blit.srcOffsets[1] = {static_cast<int32_t>(internalWidth), static_cast<int32_t>(internalHeight), 1};
+        blit.srcOffsets[1] = {static_cast<int32_t>(srcW), static_cast<int32_t>(srcH), 1};
         blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         blit.dstOffsets[0] = {x, y, 0};
         blit.dstOffsets[1] = {x + w, y + h, 1};
         Impl::barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                       VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-        vkCmdBlitImage(cb, m->targetColour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
-                       &blit, VK_FILTER_LINEAR);
+        vkCmdBlitImage(cb, overlay ? m->overlay.image : m->targetColour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
         Impl::barrier(cb, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
                       VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
         vkEndCommandBuffer(cb);
