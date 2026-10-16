@@ -379,6 +379,14 @@ def main(argv):
     uvscale = float(argv[argv.index('--uvscale') + 1]) if '--uvscale' in argv else 4096.0
     d = open(pack_path, 'rb').read()
     elements = capture_elements(d)
+    # --scene <file>: the placement decisions as text, for the C++ converter's offline test
+    # (tools/native/src/assets.*): E key offset matid entry chain / O name geo mm lightmap 16 floats /
+    # I entry chain colour-offset colour-size (instanced colour blocks of the preceding O)
+    scene = open(argv[argv.index('--scene') + 1], 'w') if '--scene' in argv else None
+    if scene:
+        for key, eo, _es, matid, entry, chain in elements:
+            scene.write(f'E {key:08x} {eo} {matid} {entry} {chain}\n')
+    scene_inst = []
     by_record = {}
     stats = {'elements': len(elements), 'drawn': 0, 'no_pass': 0, 'batches': 0, 'verts': 0, 'tris': 0, 'uvmax': 0}
     v3_of, n_entries = {}, {}
@@ -615,6 +623,7 @@ def main(argv):
                     blobs = [(off, size) for bits, off, size in refs[entry][chain][0] if bits == 4]
                     if blobs:
                         colours = d[blobs[0][0]:blobs[0][0] + blobs[0][1]]
+                        scene_inst.append((entry, chain, blobs[0][0], blobs[0][1]))
                 vbase = 0
                 for pos, uv, flags in batches:
                     n = len(pos)
@@ -661,8 +670,14 @@ def main(argv):
                 stats['world_space'] = stats.get('world_space', 0) + 1
             # Row-vector matrix (rows = axes, row 3 = translation) is glTF's column-major array as stored.
             mat = m[:3] + [0.0] + m[4:7] + [0.0] + m[8:11] + [0.0] + m[12:15] + [1.0]
-            nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm, lightmap_of(go, gs)), 'matrix': mat})
+            scene_inst.clear()
+            lm = None if geo in v3_of else lightmap_of(go, gs)
+            nodes.append({'name': name, 'mesh': instance_mesh(name, geo, mm, go, gs, start) if geo in v3_of else mesh_for(geo, mm, lm), 'matrix': mat})
             children.append(len(nodes) - 1)
+            if scene:
+                scene.write(f'O {name.replace(" ", "_")} {geo:08x} {mm:08x} {lm or 0:08x} ' + ' '.join(f'{x:.9g}' for x in mat) + '\n')
+                for entry, chain, co, cs in scene_inst:
+                    scene.write(f'I {entry} {chain} {co} {cs}\n')
         nodes.append({'name': 'world (Z-up)', 'children': children, 'rotation': [-0.7071068, 0.0, 0.0, 0.7071068]})
         roots = [len(nodes) - 1]
         extra = {'images': images, 'textures': textures, 'materials': materials,

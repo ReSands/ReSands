@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(volk)
 FetchContent_MakeAvailable(cgltf stb)
 target_link_libraries(volk PUBLIC Vulkan::Headers)
 
-add_library(pop_native STATIC src/native_renderer.cpp src/meshdecode.cpp)
+add_library(pop_native STATIC src/native_renderer.cpp src/meshdecode.cpp src/assets.cpp)
 target_include_directories(pop_native PUBLIC src)
 target_link_libraries(pop_native PUBLIC volk Vulkan::Headers)
 
@@ -42,3 +42,7 @@ endif()
 add_executable(pop_native_view src/viewer.cpp)
 target_include_directories(pop_native_view PRIVATE ${cgltf_SOURCE_DIR} ${stb_SOURCE_DIR})
 target_link_libraries(pop_native_view PRIVATE pop_native SDL3::SDL3)
+
+# pop_assets_test: lists every texture record of a pack decoded by pop_assets (judge: tools/native/assets_check.py)
+add_executable(pop_assets_test src/assets_test.cpp)
+target_link_libraries(pop_assets_test PRIVATE pop_native)

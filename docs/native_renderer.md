@@ -14,7 +14,7 @@ everything not yet native. Format knowledge comes from the Python reference conv
    see; the lightmap list; or a batch path). Find it by decompiling `CElementList::Render`
    (0x4B9440) and reading the list entries directly. Judge: the per-frame list reproduces the DMA
    chain's draws (`tools/dmacmp.py`).
-2. **Load-time conversion in C++.** Port the reference converter's decoding (inline and
+2. **Load-time conversion in C++.** (16 Oct: static world done offline, `tools/native/src/assets.*`, pixel-identical to the Python converter; next: skinned elements, the ReadElement hook.) Port the reference converter's decoding (inline and
    reference packets, instanced meshes, skinned meshes, UV scales, baked colours, lightmap UVs,
    textures incl. PSMT4 lightmaps, material blend bits) into the runtime, hooked at
    `CJMeshElement::ReadElement` / the visual loader, producing vertex/index buffers and textures.

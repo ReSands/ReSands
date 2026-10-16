@@ -12,6 +12,7 @@
 //          --frames N quits after N frames (for tests).
 //   clip file: the game's world -> clip matrix, 16 comma- or space-separated floats (row vectors, as
 //   graphics system +0x240 holds it; POP_CAMLOG / POP_FRAMECAP "capture" lines carry it).
+#include "assets.h"
 #include "free_camera.h"
 #include "native_renderer.h"
 
@@ -34,6 +35,8 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <iterator>
+#include <tuple>
 #include <vector>
 
 using namespace pop_native;
@@ -101,7 +104,9 @@ int main(int argc, char **argv)
 {
     if (argc < 4)
     {
-        std::fprintf(stderr, "usage: %s <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <scene.gltf> <clip file> <out.png> [--nearest] [--width W --height H]\n"
+                             "       %s <scene.txt> <clip file> <out.png> --pack <unpacked pack.bin> (C++ asset conversion; scene\n"
+                             "       from tools/jade2gltf.py --place --static-only --scene)\n", argv[0], argv[0]);
         return 2;
     }
     Options options;
@@ -135,9 +140,13 @@ int main(int argc, char **argv)
         return 1;
     }
     const auto t0 = std::chrono::steady_clock::now();
+    const char *packPath = nullptr;
+    for (int i = 4; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--pack"))
+            packPath = argv[i + 1];
     cgltf_options opt{};
     cgltf_data *data = nullptr;
-    if (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success)
+    if (!packPath && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
     {
         std::fprintf(stderr, "cannot load %s\n", argv[1]);
         return 1;
@@ -305,7 +314,162 @@ int main(int argc, char **argv)
             }
         }
     };
-    addScene(data, nullptr);
+    // --pack: the scene converted by pop_assets (C++) from the pack, placed as jade2gltf decided
+    // (scene file: E key offset matid entry chain / O name geo mm lightmap 16 floats / I entry chain
+    // colour-offset colour-size). Same draw order as jade2gltf's glTF, for a like-for-like judge.
+    std::vector<uint8_t> packBytes;
+    auto addPackScene = [&](const char *scenePath) -> bool {
+        std::ifstream pf(packPath, std::ios::binary);
+        packBytes.assign(std::istreambuf_iterator<char>(pf), {});
+        pop_assets::Pack pack;
+        if (packBytes.empty() || !pop_assets::indexPack(packBytes.data(), packBytes.size(), pack))
+        {
+            std::fprintf(stderr, "cannot index pack %s\n", packPath);
+            return false;
+        }
+        struct Element { uint32_t offset, matid, entry, chain; };
+        struct Inst { uint32_t entry, chain, offset, size; };
+        struct Object { uint32_t geo, mm, lm; float m[16]; std::vector<Inst> inst; };
+        std::map<uint32_t, std::vector<Element>> elements;
+        std::vector<Object> objects;
+        std::ifstream sf(scenePath);
+        std::string line;
+        while (std::getline(sf, line))
+        {
+            std::istringstream ss(line);
+            std::string kind;
+            ss >> kind;
+            if (kind == "E")
+            {
+                std::string key;
+                Element e{};
+                ss >> key >> e.offset >> e.matid >> e.entry >> e.chain;
+                elements[uint32_t(std::stoul(key, nullptr, 16))].push_back(e);
+            }
+            else if (kind == "O")
+            {
+                std::string name, geo, mm, lm;
+                Object o{};
+                ss >> name >> geo >> mm >> lm;
+                o.geo = uint32_t(std::stoul(geo, nullptr, 16));
+                o.mm = uint32_t(std::stoul(mm, nullptr, 16));
+                o.lm = uint32_t(std::stoul(lm, nullptr, 16));
+                for (float &f : o.m)
+                    ss >> f;
+                objects.push_back(o);
+            }
+            else if (kind == "I" && !objects.empty())
+            {
+                Inst in{};
+                ss >> in.entry >> in.chain >> in.offset >> in.size;
+                objects.back().inst.push_back(in);
+            }
+        }
+        std::map<uint32_t, int> images; // texture key -> renderer image (-1: does not decode)
+        auto image = [&](uint32_t key) {
+            const auto it = images.find(key);
+            if (it != images.end())
+                return it->second;
+            Image img;
+            const int idx = pop_assets::decodeTexture(pack, key, img) ? r.addImage(img) : -1;
+            images[key] = idx;
+            ++imageTotal;
+            return idx;
+        };
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, int> materials; // (mm, matid, lightmap) -> material
+        auto material = [&](uint32_t mm, uint32_t matid, uint32_t lm) {
+            const auto k = std::make_tuple(mm, matid, lm);
+            const auto it = materials.find(k);
+            if (it != materials.end())
+                return it->second;
+            int idx = -1;
+            pop_assets::SubMaterial sub;
+            // as jade2gltf.material_base: a material only when the sub-material's texture decodes
+            if (pop_assets::subMaterial(pack, mm, matid, sub) && pop_assets::textureFormat(pack, sub.texture))
+            {
+                Material mat;
+                mat.baseImage = image(sub.texture);
+                if (mat.baseImage >= 0)
+                {
+                    mat.alphaMode = sub.mode;
+                    mat.cutoff = sub.cutoff;
+                    if (lm)
+                        mat.lightmapImage = image(lm);
+                    idx = r.addMaterial(mat);
+                }
+            }
+            materials[k] = idx;
+            return idx;
+        };
+        auto addBatch = [&](pop_assets::Batch &b, int mat, std::vector<int> &out) {
+            Mesh mesh;
+            mesh.vertices = std::move(b.vertices);
+            mesh.indices = std::move(b.indices);
+            mesh.material = mat;
+            vertexTotal += mesh.vertices.size();
+            triTotal += mesh.indices.size() / 3;
+            out.push_back(r.addMesh(std::move(mesh)));
+        };
+        std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<int>> meshCache; // (geo, mm, lm) -> meshes
+        constexpr double kUvScale = 4096.0;
+        for (const Object &o : objects)
+        {
+            const auto &els = elements[o.geo];
+            const bool instanced = std::any_of(els.begin(), els.end(), [&](const Element &e) { return pop_assets::isInstanced(pack, e.offset); });
+            std::vector<int> meshes;
+            const auto key = std::make_tuple(o.geo, o.mm, o.lm);
+            if (!instanced && meshCache.count(key))
+                meshes = meshCache[key];
+            else
+            {
+                for (const Element &e : els) // static elements (instanced objects: without the lightmap)
+                {
+                    std::vector<pop_assets::Batch> batches;
+                    if (!pop_assets::convertElement(pack, e.offset, kUvScale, batches))
+                        continue;
+                    for (auto &b : batches)
+                        addBatch(b, material(o.mm, e.matid, !instanced && b.hasUv2 ? o.lm : 0), meshes);
+                }
+                if (instanced)
+                    for (const Element &e : els)
+                    {
+                        if (!pop_assets::isInstanced(pack, e.offset))
+                            continue;
+                        const uint8_t *colours = nullptr;
+                        size_t colourBytes = 0;
+                        for (const Inst &in : o.inst)
+                            if (in.entry == e.entry && in.chain == e.chain && size_t(in.offset) + in.size <= packBytes.size())
+                            {
+                                colours = packBytes.data() + in.offset;
+                                colourBytes = in.size;
+                                break;
+                            }
+                        std::vector<pop_assets::Batch> batches;
+                        if (pop_assets::convertInstanced(pack, e.offset, colours, colourBytes, kUvScale, batches))
+                            for (auto &b : batches)
+                                addBatch(b, material(o.mm, e.matid, 0), meshes);
+                    }
+                else
+                    meshCache[key] = meshes;
+            }
+            Draw d;
+            std::memcpy(d.model, o.m, sizeof d.model);
+            for (int m : meshes)
+            {
+                d.mesh = m;
+                draws.push_back(d);
+            }
+        }
+        std::printf("pack %s: %zu objects, %zu geometry records, %zu materials\n", packPath, objects.size(), elements.size(), materials.size());
+        return true;
+    };
+    if (packPath)
+    {
+        if (!addPackScene(argv[1]))
+            return 1;
+    }
+    else
+        addScene(data, nullptr);
     std::vector<cgltf_data *> extra;
     for (int i = 4; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--add") || (!std::strcmp(argv[i], "--addfog") && i + 2 < argc))
