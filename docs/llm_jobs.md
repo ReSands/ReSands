@@ -25,3 +25,30 @@ Notes
 - The PC's GPU is only free when no build or game runs; one job at a time.
 - Each job writes one result file per item and resumes after interruption (like name_functions.py).
 - Results are suggestions until the judge passes; never applied to the build automatically.
+
+## Candidates noted 16 Oct (Qwen3.6-35B via llama.cpp, generic harness `tools/llm_port/generic/`)
+Ranked by value for 1.0. Each has a precise spec (written by us) and a scripted judge, which is
+what Qwen needs (staged, medium-sized functions; 1-4 rounds each in the 15 Oct runs).
+1. **Live packet decoders -> standalone C++ with a judge**: `livePacketBatches` / `packetPositions`
+   in `tools/overrides/pop_native_live.cpp` are hand-written and untested outside the game. Task:
+   inputs = DMA chains captured from frames (`POP_DMACAP` captures already on disk), spec = the
+   docstrings, judge = the Python `dmacmp.vif_unpacks` + `jade2gltf` decode of the same chain. Gives
+   a tested decoder shared by the live path and the viewer.
+2. **`tools/chainfar.py` (sky) and the character lighting bake in `tools/chainskin.py` -> C++**,
+   judged against the Python output (noted 16 Oct morning; still valid).
+3. **The 18 remaining wrong MMI instructions** (spec harness exists, 18/18 with specs on 14 Oct).
+4. **GS blend/state table unit test**: from `docs/native_renderer.md` "Blend state" (the game's
+   SetBlending table), write a table-driven test that feeds every flags combination through
+   `pop_native::materialFromGsFlags` and checks the GS ALPHA value it implies against the table
+   (judge = the table transcribed from the decompile by us). Small; catches regressions.
+Not a model job:
+- **Audio quality comparison across versions** (user's question): the measurements (sample rate,
+  channels, codec, bandwidth from an FFT, noise floor, clipping) are deterministic and best done by
+  a script with vgmstream + numpy, run overnight on the PC as a nightly-style job. The model would
+  add nothing to the numbers; at most it could word the report, as Gemma does for the nightly. The
+  hard part is matching the same stream across archives (PS2 `SOUNDPS2.BIG` vs GC/PC/Xbox
+  `.big`/folders): the bigfile keys match across versions for most assets, so try key matching
+  first; the listening judgement stays with the user.
+- Reverse-engineering new formats/paths (GFX particles `FUN_004584C0`, after-effect halos, UV
+  animation matrices): discovery is where the model is weak (14 Oct tests); do it ourselves, then
+  hand the volume work over with a spec.
