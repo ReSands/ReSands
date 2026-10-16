@@ -28,6 +28,9 @@
 #include <array>
 #include <chrono>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +40,10 @@
 #include <vector>
 
 uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> bigfile key
+namespace pop_hdtex
+{
+    bool readEntry(const std::string &path, uint32_t key, std::vector<uint8_t> &out); // pop_hdtextures.cpp
+}
 
 namespace pop_native_live
 {
@@ -64,6 +71,40 @@ namespace pop_native_live
         float g_frameClip[16];
         std::vector<std::pair<uint32_t, std::array<float, 16>>> g_frameDraws; // element, model matrix
         std::vector<uint32_t> g_frameSub;                                       // current sub-material per draw
+        struct DrawMaterial
+        {
+            uint32_t textureKey = 0;
+            uint32_t mode = 0;   // pop_native::AlphaMode
+            float cutoff = 0.5f;
+        };
+        std::vector<DrawMaterial> g_frameMaterials;
+
+        // PS2 world packs the game has looked up (BIG_ul_SearchKeyToPos), read from the disc's
+        // PRINCE.BF (POP_PS2_BIGFILE, default DATA/PRINCE.BF) and unpacked on a worker thread:
+        // textures for the native frame are decoded from them by key.
+        struct LoadedPack
+        {
+            std::vector<uint8_t> bytes;
+            pop_assets::Pack index;
+        };
+        std::mutex g_packsMutex;
+        std::unordered_map<uint32_t, std::shared_ptr<LoadedPack>> g_packs; // pack key -> pack (null while loading)
+        bool g_live = false;
+
+        bool findTexture(uint32_t key, pop_native::Image &out)
+        {
+            std::vector<std::shared_ptr<LoadedPack>> packs;
+            {
+                std::lock_guard<std::mutex> lock(g_packsMutex);
+                for (const auto &p : g_packs)
+                    if (p.second)
+                        packs.push_back(p.second);
+            }
+            for (const auto &p : packs)
+                if (p->index.records.count(key) && pop_assets::decodeTexture(p->index, key, out))
+                    return true;
+            return false;
+        }
         std::unordered_set<uint64_t> g_frameSeen;                               // (element, matrix index)
 
         uint32_t guestAny(uint8_t *rdram, uint32_t addr) // main RAM or scratchpad
@@ -265,7 +306,25 @@ namespace pop_native_live
                         g_frameDraws.emplace_back(element, model);
                         // the render state manager's current sub-material (0x70000034, set by
                         // CElementList::Render before the Display call)
-                        g_frameSub.push_back(guestAny(rdram, 0x70000034u));
+                        const uint32_t sub = guestAny(rdram, 0x70000034u);
+                        g_frameSub.push_back(sub);
+                        // live sub-material object: word 0 = texture index, word 1 = the record's
+                        // +0x1C flags (0x10: alpha test), +0x10 = its +0x28 (AREF in the top byte),
+                        // word 11 = its +0x14 (0x80: alpha blending); measured 16 Oct
+                        DrawMaterial dm;
+                        if (sub)
+                        {
+                            dm.textureKey = popTextureKey(guestAny(rdram, sub));
+                            const uint32_t f1c = guestAny(rdram, sub + 4), f28 = guestAny(rdram, sub + 0x10), f14 = guestAny(rdram, sub + 0x2C);
+                            if (f14 & 0x80)
+                                dm.mode = uint32_t(pop_native::AlphaMode::Blend);
+                            else if (f1c & 0x10)
+                            {
+                                dm.mode = uint32_t(pop_native::AlphaMode::Mask);
+                                dm.cutoff = float((f28 >> 24) / 255.0);
+                            }
+                        }
+                        g_frameMaterials.push_back(dm);
                     }
                 }
                 element = guest32(rdram, element + 0x4C);
@@ -285,16 +344,43 @@ namespace pop_native_live
             FILE *f = std::fopen(g_framePath.c_str(), "wb");
             if (!f)
                 return;
-            std::fwrite("PNF1", 1, 4, f);
+            // "PNF2": clip[16]; images (count; per image: w, h, RGBA); draws (count; per draw: model[16],
+            // image index (-1: none), alpha mode, cutoff, batch count, batches)
+            std::fwrite("PNF2", 1, 4, f);
             std::fwrite(g_frameClip, 4, 16, f);
+            std::unordered_map<uint32_t, int32_t> imageOf;
+            std::vector<pop_native::Image> images;
+            for (const DrawMaterial &m : g_frameMaterials)
+                if (m.textureKey && !imageOf.count(m.textureKey))
+                {
+                    pop_native::Image img;
+                    imageOf[m.textureKey] = findTexture(m.textureKey, img) ? int32_t(images.size()) : -1;
+                    if (imageOf[m.textureKey] >= 0)
+                        images.push_back(std::move(img));
+                }
+            const uint32_t ni0 = uint32_t(images.size());
+            std::fwrite(&ni0, 4, 1, f);
+            for (const auto &img : images)
+            {
+                std::fwrite(&img.width, 4, 1, f);
+                std::fwrite(&img.height, 4, 1, f);
+                std::fwrite(img.rgba.data(), 1, img.rgba.size(), f);
+            }
             const uint32_t n = uint32_t(g_frameDraws.size());
             std::fwrite(&n, 4, 1, f);
-            size_t tris = 0;
-            for (const auto &[element, model] : g_frameDraws)
+            size_t tris = 0, textured = 0;
+            for (size_t di = 0; di < g_frameDraws.size(); ++di)
             {
+                const auto &[element, model] = g_frameDraws[di];
                 const auto &meshes = g_elements[element].meshes;
                 const uint32_t nb = uint32_t(meshes.size());
+                const DrawMaterial &mat = g_frameMaterials[di];
+                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                textured += image >= 0;
                 std::fwrite(model.data(), 4, 16, f);
+                std::fwrite(&image, 4, 1, f);
+                std::fwrite(&mat.mode, 4, 1, f);
+                std::fwrite(&mat.cutoff, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
                 for (const auto &b : meshes)
                 {
@@ -322,7 +408,8 @@ namespace pop_native_live
                 }
                 std::fclose(t);
             }
-            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws, %zu triangles\n", g_framePath.c_str(), n, tris);
+            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu textured, %u images), %zu triangles\n",
+                         g_framePath.c_str(), n, textured, ni0, tris);
         }
 
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -353,6 +440,28 @@ namespace pop_native_live
         }
     }
 
+    // The game looked up bigfile key `key`. For a world pack (0xFF......), load the PS2 pack once.
+    void onBigfileLookup(uint32_t key)
+    {
+        if (!g_live || (key >> 24) != 0xFFu)
+            return;
+        {
+            std::lock_guard<std::mutex> lock(g_packsMutex);
+            if (g_packs.count(key))
+                return;
+            g_packs[key] = nullptr;
+        }
+        std::thread([key] {
+            const char *env = std::getenv("POP_PS2_BIGFILE");
+            auto pack = std::make_shared<LoadedPack>();
+            if (!pop_hdtex::readEntry(env && *env ? env : "DATA/PRINCE.BF", key, pack->bytes) ||
+                !pop_assets::indexPack(pack->bytes.data(), pack->bytes.size(), pack->index))
+                return;
+            std::lock_guard<std::mutex> lock(g_packsMutex);
+            g_packs[key] = std::move(pack);
+        }).detach();
+    }
+
     void install(PS2Runtime &runtime)
     {
         const char *v = std::getenv("POP_NATIVE_LIVE");
@@ -367,6 +476,7 @@ namespace pop_native_live
         }
         runtime.replaceFunction(kReadElement, readElement);
         runtime.replaceFunction(kMeshDisplay, display);
+        g_live = true;
         g_start = std::chrono::steady_clock::now();
         if (const char *f = std::getenv("POP_NATIVE_FRAME"); f && *f)
         {

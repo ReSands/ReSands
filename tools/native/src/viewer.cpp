@@ -473,15 +473,56 @@ int main(int argc, char **argv)
         std::ifstream f(path, std::ios::binary);
         char magic[4] = {};
         f.read(magic, 4);
-        if (std::memcmp(magic, "PNF1", 4) != 0)
+        const bool v2 = std::memcmp(magic, "PNF2", 4) == 0;
+        if (!v2 && std::memcmp(magic, "PNF1", 4) != 0)
             return false;
         f.read(reinterpret_cast<char *>(clip), 64);
+        std::vector<int> imageIndex;
+        if (v2)
+        {
+            uint32_t ni = 0;
+            f.read(reinterpret_cast<char *>(&ni), 4);
+            for (uint32_t i = 0; i < ni && f; ++i)
+            {
+                Image img;
+                f.read(reinterpret_cast<char *>(&img.width), 4);
+                f.read(reinterpret_cast<char *>(&img.height), 4);
+                img.rgba.resize(size_t(img.width) * img.height * 4);
+                f.read(reinterpret_cast<char *>(img.rgba.data()), std::streamsize(img.rgba.size()));
+                imageIndex.push_back(r.addImage(img));
+                ++imageTotal;
+            }
+        }
+        std::map<std::tuple<int, uint32_t, float>, int> materials;
         uint32_t n = 0;
         f.read(reinterpret_cast<char *>(&n), 4);
         for (uint32_t i = 0; i < n && f; ++i)
         {
             Draw d;
             f.read(reinterpret_cast<char *>(d.model), 64);
+            int material = -1;
+            if (v2)
+            {
+                int32_t image = -1;
+                uint32_t mode = 0;
+                float cutoff = 0.5f;
+                f.read(reinterpret_cast<char *>(&image), 4);
+                f.read(reinterpret_cast<char *>(&mode), 4);
+                f.read(reinterpret_cast<char *>(&cutoff), 4);
+                if (image >= 0 && size_t(image) < imageIndex.size())
+                {
+                    const auto key = std::make_tuple(image, mode, cutoff);
+                    if (!materials.count(key))
+                    {
+                        Material mat;
+                        mat.baseImage = imageIndex[size_t(image)];
+                        mat.alphaMode = static_cast<AlphaMode>(mode);
+                        mat.cutoff = cutoff;
+                        materials[key] = r.addMaterial(mat);
+                    }
+                    material = materials[key];
+                }
+            }
             uint32_t nb = 0;
             f.read(reinterpret_cast<char *>(&nb), 4);
             for (uint32_t b = 0; b < nb && f; ++b)
@@ -494,13 +535,14 @@ int main(int argc, char **argv)
                 mesh.indices.resize(ni);
                 f.read(reinterpret_cast<char *>(mesh.vertices.data()), std::streamsize(nv) * sizeof(Vertex));
                 f.read(reinterpret_cast<char *>(mesh.indices.data()), std::streamsize(ni) * 4);
+                mesh.material = material;
                 vertexTotal += nv;
                 triTotal += ni / 3;
                 d.mesh = r.addMesh(std::move(mesh));
                 draws.push_back(d);
             }
         }
-        std::printf("frame %s: %u element draws\n", path, n);
+        std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
         return bool(f) || f.eof();
     };
     if (framePath)

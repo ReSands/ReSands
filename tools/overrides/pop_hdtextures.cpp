@@ -310,6 +310,61 @@ namespace pop_hdtex
         }
     }
 
+    // Reads bigfile entry `key` of the bigfile at `path` (Jade BIG: entry count at 0x08, (offset, key)
+    // pairs from 0x44; an entry is a u32 size, then 0x20000-byte chunks [u32 unpacked size][u32 packed
+    // size][LZO1X data, or raw when the sizes match]) and returns its unpacked bytes. Thread-safe; the
+    // index of each bigfile is read once. Used for the PS2 PRINCE.BF by pop_native_live.cpp.
+    bool readEntry(const std::string &path, uint32_t key, std::vector<uint8_t> &out)
+    {
+        static std::mutex indexMutex;
+        static std::unordered_map<std::string, std::unordered_map<uint32_t, uint32_t>> indexes;
+        uint32_t offset = 0;
+        {
+            std::lock_guard<std::mutex> lock(indexMutex);
+            auto it = indexes.find(path);
+            if (it == indexes.end())
+            {
+                auto &index = indexes[path];
+                std::ifstream f(path, std::ios::binary);
+                uint8_t head[0x44];
+                if (f.read(reinterpret_cast<char *>(head), sizeof(head)) && std::memcmp(head, "BIG", 4) == 0)
+                {
+                    const uint32_t count = le32(head + 8);
+                    std::vector<uint8_t> table(size_t(count) * 8);
+                    if (f.read(reinterpret_cast<char *>(table.data()), std::streamsize(table.size())))
+                        for (uint32_t i = 0; i < count; ++i)
+                            index[le32(&table[i * 8 + 4])] = le32(&table[i * 8]);
+                }
+                it = indexes.find(path);
+            }
+            const auto e = it->second.find(key);
+            if (e == it->second.end())
+                return false;
+            offset = e->second;
+        }
+        std::ifstream f(path, std::ios::binary);
+        uint8_t sizeBytes[4];
+        if (!f.seekg(offset) || !f.read(reinterpret_cast<char *>(sizeBytes), 4))
+            return false;
+        std::vector<uint8_t> blob(le32(sizeBytes));
+        if (!f.read(reinterpret_cast<char *>(blob.data()), std::streamsize(blob.size())))
+            return false;
+        out.clear();
+        for (size_t p = 0; p + 8 <= blob.size();)
+        {
+            const uint32_t usize = le32(&blob[p]), csize = le32(&blob[p + 4]);
+            p += 8;
+            if (usize == 0 || p + csize > blob.size())
+                break;
+            if (csize == usize)
+                out.insert(out.end(), blob.begin() + long(p), blob.begin() + long(p + csize));
+            else if (!lzo1xDecompress(&blob[p], csize, out))
+                return false;
+            p += csize;
+        }
+        return true;
+    }
+
     // Loads and decodes all textures of the world pack with bigfile key `packKey`. Thread-safe;
     // meant to run on a worker thread.
     std::shared_ptr<Pack> loadPack(uint32_t packKey)

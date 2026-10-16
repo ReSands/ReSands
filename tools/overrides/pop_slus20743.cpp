@@ -45,12 +45,14 @@ namespace pop_drawprobe // pop_drawprobe.cpp: native renderer probe (POP_DRAWPRO
 namespace pop_native_live // pop_native_live.cpp: live C++ asset conversion check (POP_NATIVE_LIVE=1)
 {
     void install(PS2Runtime &runtime);
+    void onBigfileLookup(uint32_t key);
 }
 namespace pop_hdtex // pop_hdtextures.cpp: PC textures
 {
     struct Texture;
     void runSelfTest();
     void onBigfileLookup(uint32_t key);
+    bool readEntry(const std::string &path, uint32_t key, std::vector<uint8_t> &out);
     std::shared_ptr<const Texture> find(uint32_t textureKey);
 }
 
@@ -1416,6 +1418,7 @@ namespace
                 std::fprintf(stderr, "[pop:pack] %.1f s %08x\n", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(), getRegU32(ctx, 4));
         }
         pop_hdtex::onBigfileLookup(getRegU32(ctx, 4));
+        pop_native_live::onBigfileLookup(getRegU32(ctx, 4));
         g_origBigSearch(rdram, ctx, runtime);
     }
 
