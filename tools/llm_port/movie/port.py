@@ -10,10 +10,15 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
-sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'meshdecode'))
-import judge  # noqa: E402
 from port import ask, extract  # noqa: E402  (meshdecode/port.py: the model API and code extraction)
+import importlib.util  # noqa: E402
+
+# Loaded by path: meshdecode/ (on sys.path for ask/extract) has a judge.py of its own, which an
+# `import judge` picked up instead of this folder's (every attempt "failed to compile": no movie.h).
+_spec = importlib.util.spec_from_file_location('movie_judge', os.path.join(HERE, 'judge.py'))
+judge = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(judge)
 
 TASK = """You are writing a small C++17 parser. Correctness is judged automatically: your output must
 be identical to the Python reference on every movie file (every field, every list).

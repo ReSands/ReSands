@@ -10,10 +10,20 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
-sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'meshdecode'))
-import judge  # noqa: E402
 from port import ask, extract  # noqa: E402  (meshdecode/port.py: model API, code extraction)
+
+
+def _load(name, path):
+    # Loaded by path: meshdecode/ (on sys.path for ask/extract) has a judge.py of its own, which an
+    # `import judge` picked up instead of this folder's (every report came back empty).
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+judge = _load('generic_judge', os.path.join(HERE, 'judge.py'))
 
 TASK = """Write a C++17 program part. Correctness is judged automatically: for each input file, your
 run() must return EXACTLY the text that the Python function canon(data) below returns (every
@@ -84,7 +94,7 @@ def main(argv):
         open(path, 'w').write(code)
         res = judge.judge(task, path)
         open(os.path.join(att, name + '.report.txt'), 'w').write(res['report'])
-        say('%s: %s; %.0f s, %s tokens' % (name, res['report'].splitlines()[0][:120], secs, usage.get('completion_tokens')))
+        say('%s: %s; %.0f s, %s tokens' % (name, (res['report'].splitlines() or ['(empty report)'])[0][:120], secs, usage.get('completion_tokens')))
         if res.get('score', -1) > best:
             best = res['score']
             open(os.path.join(out, 'best.cpp'), 'w').write(code)
