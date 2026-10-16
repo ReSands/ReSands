@@ -72,13 +72,19 @@ def main(argv):
     prev_code = open(os.path.join(att, done[-1])).read() if done else None
     prev_report = open(os.path.join(att, done[-1][:-4] + '.report.txt')).read() if done else None
     best = -1
-    for n in range(len(done) + 1, rounds + 1):
-        messages = [{'role': 'user', 'content': prompt}]
+    overran = False  # the last round thought until the token limit and wrote no code
+    kOverrun = ('\n\nYour last answer spent the whole token budget reasoning and contained no code. This time '
+                'reason briefly (a few short paragraphs at most), then write the complete file.')
+    # Rounds without code leave no file, so continue after the highest round saved.
+    last = max((int(f[5:7]) for f in done), default=0)
+    for n in range(last + 1, max(rounds, last) + 1):
+        messages = [{'role': 'user', 'content': prompt + (kOverrun if overran and not prev_code else '')}]
         if prev_code:
             messages += [{'role': 'assistant', 'content': '```cpp\n' + prev_code + '```'},
                          {'role': 'user', 'content': 'Judge report for that file:\n\n' + prev_report +
                           '\n\nFind the cause by comparing your code with the Python reference, fix it, and reply with '
-                          'the complete corrected file in one ```cpp block. Keep your reasoning short.'}]
+                          'the complete corrected file in one ```cpp block. Keep your reasoning short.' +
+                          (kOverrun if overran else '')}]
         try:
             content, _r, usage, secs = ask(url, messages)
         except Exception as e:  # server hiccup: try the round again later
@@ -89,7 +95,9 @@ def main(argv):
         name = 'round%02d' % n
         if code is None:
             say('%s: no code block (%.0f s, %s tokens)' % (name, secs, usage.get('completion_tokens')))
+            overran = True
             continue
+        overran = False
         path = os.path.join(att, name + '.cpp')
         open(path, 'w').write(code)
         res = judge.judge(task, path)
