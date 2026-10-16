@@ -16,6 +16,13 @@
 #include "free_camera.h"
 #include "native_renderer.h"
 #include "postfx.h"
+#include "live_socket.h"
+
+#include <atomic>
+#include <mutex>
+#include <sstream>
+#include <thread>
+#include <unordered_map>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -115,6 +122,9 @@ int main(int argc, char **argv)
     bool windowed = false;
     uint32_t scale = 1;
     long maxFrames = -1; // --frames N: quit after N presented frames (tests)
+    int livePort = 0;    // --live PORT: the live native window, fed frames by the running game (POP_NATIVE_WINDOW)
+    const char *presentShot = nullptr; // --present-shot <png>: with --frames, save the last presented frame
+    double liveShotSeconds = 0; // --live-shots S: save the live frame (game camera) every S seconds as <out>_live_<n>.png
     for (int i = 4; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--nearest"))
@@ -125,6 +135,15 @@ int main(int argc, char **argv)
             options.cullClockwise = false;
         else if (!std::strcmp(argv[i], "--window"))
             windowed = true;
+        else if (!std::strcmp(argv[i], "--present-shot") && i + 1 < argc)
+            presentShot = argv[++i];
+        else if (!std::strcmp(argv[i], "--live-shots") && i + 1 < argc)
+            liveShotSeconds = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--live") && i + 1 < argc)
+        {
+            livePort = std::atoi(argv[++i]);
+            windowed = true;
+        }
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc)
             maxFrames = std::atol(argv[++i]);
         else if (!std::strcmp(argv[i], "--scale") && i + 1 < argc)
@@ -134,8 +153,8 @@ int main(int argc, char **argv)
         else if (!std::strcmp(argv[i], "--height") && i + 1 < argc)
             height = static_cast<uint32_t>(std::atoi(argv[++i]));
     }
-    float clip[16];
-    if (!readClip(argv[2], clip))
+    float clip[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    if (!livePort && !readClip(argv[2], clip))
     {
         std::fprintf(stderr, "cannot read 16 floats from %s\n", argv[2]);
         return 1;
@@ -148,7 +167,9 @@ int main(int argc, char **argv)
             packPath = argv[i + 1];
         else if (!std::strcmp(argv[i], "--frame"))
             framePath = true;
-    if (framePath)
+    if (livePort)
+        options.gameOrder = true; // live frames are PNF5
+    else if (framePath)
     {
         // PNF4 frames list the draws in the game's own order: draw them in one pass in that order
         std::ifstream peek(argv[1], std::ios::binary);
@@ -158,7 +179,7 @@ int main(int argc, char **argv)
     }
     cgltf_options opt{};
     cgltf_data *data = nullptr;
-    if (!packPath && !framePath && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
+    if (!packPath && !framePath && !livePort && (cgltf_parse_file(&opt, argv[1], &data) != cgltf_result_success || cgltf_load_buffers(&opt, data, argv[1]) != cgltf_result_success))
     {
         std::fprintf(stderr, "cannot load %s\n", argv[1]);
         return 1;
@@ -490,12 +511,13 @@ int main(int argc, char **argv)
         if (!std::strcmp(argv[i], "--noglow"))
             noGlow = true;
     }
-    auto addFrame = [&](const char *path) -> bool {
-        std::ifstream f(path, std::ios::binary);
+    std::unordered_map<uint32_t, int> liveImageOf; // live: texture key -> renderer image (kept across frames)
+    auto addFrameFrom = [&](std::istream &f, const char *path) -> bool {
         char magic[4] = {};
         f.read(magic, 4);
         // PNF3: per draw the render state flags + AREF word instead of PNF2's alpha mode + cutoff
-        const bool v5 = std::memcmp(magic, "PNF5", 4) == 0; // + FBMSK per draw, GLOW trailer
+        const bool v6 = std::memcmp(magic, "PNF6", 4) == 0; // live: images by texture key, pixels only the first time
+        const bool v5 = v6 || std::memcmp(magic, "PNF5", 4) == 0; // + FBMSK per draw, GLOW trailer
         const bool v4 = v5 || std::memcmp(magic, "PNF4", 4) == 0; // + fog a, b, FOGCOL, Z test per draw
         const bool v3 = v4 || std::memcmp(magic, "PNF3", 4) == 0;
         const bool v2 = v3 || std::memcmp(magic, "PNF2", 4) == 0;
@@ -510,11 +532,22 @@ int main(int argc, char **argv)
             for (uint32_t i = 0; i < ni && f; ++i)
             {
                 Image img;
+                uint32_t key = 0;
+                if (v6)
+                    f.read(reinterpret_cast<char *>(&key), 4);
                 f.read(reinterpret_cast<char *>(&img.width), 4);
                 f.read(reinterpret_cast<char *>(&img.height), 4);
+                if (v6 && img.width == 0)
+                {
+                    const auto it = liveImageOf.find(key); // sent in an earlier frame
+                    imageIndex.push_back(it != liveImageOf.end() ? it->second : -1);
+                    continue;
+                }
                 img.rgba.resize(size_t(img.width) * img.height * 4);
                 f.read(reinterpret_cast<char *>(img.rgba.data()), std::streamsize(img.rgba.size()));
                 imageIndex.push_back(r.addImage(img));
+                if (v6)
+                    liveImageOf[key] = imageIndex.back();
                 ++imageTotal;
             }
         }
@@ -606,7 +639,8 @@ int main(int argc, char **argv)
             {
                 f.read(reinterpret_cast<char *>(glow), sizeof glow);
                 glowOn = calls > 0;
-                std::printf("glow (ColorDiffusion): %u calls, levels %u FIX %u mask %u convolution %u strength %d\n", calls, glow[0], glow[1],
+                if (!livePort)
+                    std::printf("glow (ColorDiffusion): %u calls, levels %u FIX %u mask %u convolution %u strength %d\n", calls, glow[0], glow[1],
                             glow[2], glow[3], int(glow[4]));
             }
             if (f.read(tag, 4) && std::memcmp(tag, "HAZE", 4) == 0 && f.read(reinterpret_cast<char *>(&calls), 4))
@@ -615,11 +649,17 @@ int main(int argc, char **argv)
                 hazeOn = calls > 0;
                 float fade = 0;
                 std::memcpy(&fade, &haze[1], 4);
-                std::printf("haze (SmartBlur): %u calls, colour %08X fade %.3f\n", calls, haze[0], double(fade));
+                if (!livePort)
+                    std::printf("haze (SmartBlur): %u calls, colour %08X fade %.3f\n", calls, haze[0], double(fade));
             }
         }
-        std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
+        if (!livePort)
+            std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
         return bool(f) || f.eof();
+    };
+    auto addFrame = [&](const char *path) -> bool {
+        std::ifstream f(path, std::ios::binary);
+        return addFrameFrom(f, path);
     };
     if (framePath)
     {
@@ -634,7 +674,7 @@ int main(int argc, char **argv)
         if (!addPackScene(argv[1]))
             return 1;
     }
-    else
+    else if (!livePort)
         addScene(data, nullptr);
     std::vector<cgltf_data *> extra;
     for (int i = 4; i + 1 < argc; ++i)
@@ -678,6 +718,70 @@ int main(int argc, char **argv)
                     imageTotal, std::chrono::duration<double, std::milli>(t1 - t0).count());
         std::fflush(stdout);
         FreeCamera cam(clip);
+        // --live: a thread accepts the game's connection and keeps the latest frame; the loop
+        // rebuilds the scene from each new frame (the game's camera unless F switched to the free one)
+        std::mutex liveMutex;
+        std::vector<uint8_t> liveFrame;
+        std::atomic<uint64_t> liveSeq{0}, liveConnection{0};
+        uint64_t liveConnectionShown = 0;
+        std::atomic<bool> liveQuit{false};
+        std::thread liveThread;
+        uint64_t liveShown = 0, liveFrames = 0, liveBytes = 0;
+        double liveRebuildMs = 0;
+        bool freeCam = !livePort;
+        bool livePost = true; // G: the game's post effects (glow, haze) on the GPU
+        if (!livePort && (glowOn || hazeOn))
+        {
+            // an exported frame in the window: its post effects on the GPU too
+            PostEffects pe;
+            pe.glow = glowOn && !noGlow;
+            pe.levels = int(glow[0]);
+            pe.fix = int(glow[1]);
+            pe.mask = glow[2] != 0;
+            pe.convolution = glow[3] != 0;
+            pe.strength = int(glow[4]);
+            pe.haze = hazeOn && !noHaze;
+            pe.hazeColour = haze[0];
+            std::memcpy(&pe.hazeFade, &haze[1], 4);
+            r.setPostEffects(pe);
+        }
+        if (livePort)
+        {
+            const pop_live::Socket server = pop_live::listenLocal(livePort);
+            if (server == pop_live::kNoSocket)
+            {
+                std::fprintf(stderr, "cannot listen on 127.0.0.1:%d\n", livePort);
+                return 1;
+            }
+            std::printf("live: waiting for the game on 127.0.0.1:%d (POP_NATIVE_WINDOW=%d)\n", livePort, livePort);
+            std::fflush(stdout);
+            liveThread = std::thread([&, server]() {
+                while (!liveQuit)
+                {
+                    const pop_live::Socket c = accept(server, nullptr, nullptr);
+                    if (c == pop_live::kNoSocket)
+                        break;
+                    {
+                        std::lock_guard<std::mutex> lock(liveMutex);
+                        ++liveConnection; // a new game: its texture keys start from nothing
+                    }
+                    std::printf("live: game connected\n");
+                    std::fflush(stdout);
+                    std::vector<uint8_t> buf;
+                    while (!liveQuit && pop_live::recvFrame(c, buf))
+                    {
+                        std::lock_guard<std::mutex> lock(liveMutex);
+                        liveFrame.swap(buf);
+                        ++liveSeq;
+                    }
+                    pop_live::closeSocket(c);
+                    std::printf("live: game disconnected\n");
+                    std::fflush(stdout);
+                }
+                pop_live::closeSocket(server);
+            });
+            liveThread.detach();
+        }
         long presented = 0;
         const auto runStart = std::chrono::steady_clock::now();
         bool running = true, looking = false;
@@ -685,6 +789,66 @@ int main(int argc, char **argv)
         auto last = std::chrono::steady_clock::now(), fpsStart = last;
         while (running)
         {
+            if (livePort && liveSeq != liveShown)
+            {
+                std::vector<uint8_t> frame;
+                bool newGame = false;
+                {
+                    std::lock_guard<std::mutex> lock(liveMutex);
+                    frame = liveFrame;
+                    liveShown = liveSeq;
+                    newGame = liveConnection != liveConnectionShown;
+                    liveConnectionShown = liveConnection;
+                }
+                const auto tr0 = std::chrono::steady_clock::now();
+                r.reset(!newGame); // textures stay for the same game connection
+                if (newGame)
+                    liveImageOf.clear();
+                draws.clear();
+                vertexTotal = triTotal = imageTotal = 0;
+                std::istringstream in(std::string(reinterpret_cast<const char *>(frame.data()), frame.size()), std::ios::binary);
+                if (!addFrameFrom(in, "live") || !r.upload(error))
+                    std::fprintf(stderr, "live frame: %s\n", error.empty() ? "unreadable" : error.c_str());
+                {
+                    PostEffects pe;
+                    pe.glow = livePost && glowOn;
+                    pe.levels = int(glow[0]);
+                    pe.fix = int(glow[1]);
+                    pe.mask = glow[2] != 0;
+                    pe.convolution = glow[3] != 0;
+                    pe.strength = int(glow[4]);
+                    pe.haze = livePost && hazeOn;
+                    pe.hazeColour = haze[0];
+                    std::memcpy(&pe.hazeFade, &haze[1], 4);
+                    r.setPostEffects(pe);
+                    glowOn = hazeOn = false; // the next frame's trailer says again
+                }
+                ++liveFrames;
+                liveRebuildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tr0).count();
+                liveBytes += frame.size();
+            }
+            static auto lastShot = std::chrono::steady_clock::now();
+            if (livePort && liveShotSeconds > 0 && liveFrames &&
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - lastShot).count() >= liveShotSeconds)
+            {
+                lastShot = std::chrono::steady_clock::now();
+                std::vector<uint8_t> px;
+                uint32_t w = 0, h = 0;
+                std::string path = std::string(argv[3]);
+                const size_t dot = path.rfind('.');
+                path = (dot == std::string::npos ? path : path.substr(0, dot)) + "_live_" + std::to_string(++shots) + ".png";
+                if (r.readPresented(px, w, h, error))
+                {
+                    std::vector<uint8_t> rgb(size_t(w) * h * 3);
+                    for (size_t i = 0; i < size_t(w) * h; ++i)
+                        std::memcpy(&rgb[i * 3], &px[i * 4], 3);
+                    stbi_write_png(path.c_str(), int(w), int(h), 3, rgb.data(), int(w * 3));
+                    std::printf("live: saved %s (game frame %llu, %zu draws; per frame %.1f ms rebuild, %.0f KB)\n", path.c_str(),
+                                (unsigned long long)liveFrames, draws.size(), liveRebuildMs / double(liveFrames),
+                                double(liveBytes) / double(liveFrames) / 1024.0);
+                    std::fflush(stdout);
+                }
+            }
             SDL_Event e;
             while (SDL_PollEvent(&e))
             {
@@ -703,6 +867,14 @@ int main(int argc, char **argv)
                         running = false;
                     else if (k == SDLK_R)
                         cam.reset();
+                    else if (k == SDLK_G && livePort)
+                        livePost = !livePost;
+                    else if (k == SDLK_F && livePort)
+                    {
+                        freeCam = !freeCam;
+                        if (freeCam)
+                            cam = FreeCamera(clip); // start from the game's current view
+                    }
                     else if (k >= SDLK_1 && k <= SDLK_4)
                         scale = static_cast<uint32_t>(k - SDLK_1 + 1);
                     else if (k == SDLK_P)
@@ -735,7 +907,10 @@ int main(int argc, char **argv)
             int ww = 0, wh = 0;
             SDL_GetWindowSizeInPixels(window, &ww, &wh);
             float c[16];
-            cam.clip(c);
+            if (freeCam)
+                cam.clip(c);
+            else
+                std::memcpy(c, clip, sizeof c);
             if (!r.present(uint32_t(ww), uint32_t(wh), 640 * scale, 448 * scale, c, draws, error))
             {
                 std::fprintf(stderr, "present: %s\n", error.c_str());
@@ -744,6 +919,20 @@ int main(int argc, char **argv)
             ++frames;
             if (maxFrames >= 0 && ++presented >= maxFrames)
             {
+                if (presentShot)
+                {
+                    // --present-shot: the last presented frame (GPU post effects included)
+                    std::vector<uint8_t> px;
+                    uint32_t w = 0, h = 0;
+                    if (r.readPresented(px, w, h, error))
+                    {
+                        std::vector<uint8_t> rgb(size_t(w) * h * 3);
+                        for (size_t i = 0; i < size_t(w) * h; ++i)
+                            std::memcpy(&rgb[i * 3], &px[i * 4], 3);
+                        stbi_write_png(presentShot, int(w), int(h), 3, rgb.data(), int(w * 3));
+                        std::printf("saved the presented frame %s (%ux%u)\n", presentShot, w, h);
+                    }
+                }
                 const float total = std::chrono::duration<float>(std::chrono::steady_clock::now() - runStart).count();
                 std::printf("%ld frames presented in %.2f s (%.0f fps, vsync), window %dx%d, internal %ux%u\n", presented, total,
                             presented / total, ww, wh, 640 * scale, 448 * scale);
@@ -753,13 +942,19 @@ int main(int argc, char **argv)
             if (secs >= 1.0f)
             {
                 char title[128];
-                std::snprintf(title, sizeof title, "PoP native view - %ux%u - %.0f fps%s", 640 * scale, 448 * scale, frames / secs,
-                              cam.moved() ? "" : " - game camera");
+                if (livePort)
+                    std::snprintf(title, sizeof title, "PoP native (live) - %ux%u - %.0f fps, game frames %llu - %zu draws%s", 640 * scale,
+                                  448 * scale, frames / secs, (unsigned long long)liveFrames, draws.size(),
+                                  freeCam ? " - free camera (F: game camera)" : " - game camera (F: free camera)");
+                else
+                    std::snprintf(title, sizeof title, "PoP native view - %ux%u - %.0f fps%s", 640 * scale, 448 * scale, frames / secs,
+                                  cam.moved() ? "" : " - game camera");
                 SDL_SetWindowTitle(window, title);
                 frames = 0;
                 fpsStart = now;
             }
         }
+        liveQuit = true;
         cgltf_free(data);
         SDL_DestroyWindow(window);
         SDL_Quit();

@@ -340,3 +340,32 @@ matrix), not colours, so reading them as directional lights gave huge colours. T
 uses the ambient alone for point-light sets (unverified approximation; `POP_NATIVE_PTLIGHTS=1` =
 the old reading); the VU1 side of point lights is still to decode.
 
+## Live native window, first version (16 Oct night)
+Two processes, so the native window needs nothing from the runtime's own presenter (on macOS a
+second window toolkit in the game process would fight raylib/GLFW for the main thread):
+- **game side** (`POP_NATIVE_WINDOW=<port>` with `POP_NATIVE_LIVE=1`): the frame capture of the
+  export runs every frame (Display3DElements to Display3DElements, `resetFrameCapture()` between),
+  `writeFrame(true)` serialises it in memory as **PNF6** (= PNF5, but each image as texture key +
+  w + h + RGBA, the pixels only the first time this viewer connection gets that key) and
+  `tools/overrides/pop_live_client.cpp` sends it from its own thread over TCP 127.0.0.1 (message
+  "PNFM", u32 size, payload; `tools/native/src/live_socket.h`, POSIX or Winsock). While a frame is
+  still being sent the game builds none (a built frame is never dropped: it may carry a texture's
+  only copy); textures decoded once per key (`g_liveImages`). Reconnects every second; a new
+  connection resets the sent-texture set.
+- **viewer side**: `pop_native_view live - <shots.png> --live <port> [--live-shots S] [--scale N]`:
+  a thread accepts the game and keeps the latest frame; the window loop rebuilds the scene from
+  each new one (`Renderer::reset(true)` keeps the textures, `upload()` adds only new ones in one
+  command buffer) and draws it with the game's camera (F: free camera from the current view, G:
+  post effects on/off, 1-4: internal resolution). Measured on the Mac (title scene, 682 draws):
+  **5.8 ms rebuild and 1.4 MB per frame** (was ~50 ms / ~4 MB with every texture each frame); the
+  game's own speed is unchanged (1.9 fps title scene, CPU GS bound).
+- **post effects on the GPU in the window**: `Renderer::setPostEffects` (glow and haze parameters
+  from each frame's trailers); `present()` copies the frame into a storage buffer, runs
+  ColorDiffusion (`color_diffusion.comp` + `rgba_float.comp` conversions) and SmartBlur
+  (`gs_sprite.comp`, self-reads from a copy) as compute dispatches in the same command buffer, and
+  copies it back before the blit. Presented frame (`--frames N --present-shot <png>`,
+  `Renderer::readPresented`) vs the CPU references on an exported frame: **bit-identical**.
+- Not yet: the live window on the PC (tonight's job `tools/windows/live-window.ps1`), its own
+  frame pacing / interpolation (it shows each game frame until the next), in-process drawing
+  replacing the GS output (the reference-renderer toggle), 2D/HUD, and everything the export lacks.
+

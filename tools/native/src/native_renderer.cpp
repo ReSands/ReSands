@@ -1,5 +1,6 @@
 // Native renderer core: see native_renderer.h.
 #include "native_renderer.h"
+#include "postfx.h"
 #include "shaders_spv.h"
 
 #include <volk.h>
@@ -255,6 +256,51 @@ namespace pop_native
             return ok;
         }
 
+        // several textures with one command buffer (one queue wait instead of one per texture)
+        bool uploadTextures(const std::vector<Image> &imgs, Texture *out, std::string &error)
+        {
+            VkDeviceSize total = 0;
+            for (size_t i = 0; i < imgs.size(); ++i)
+            {
+                if (!createImage(imgs[i].width, imgs[i].height, VK_FORMAT_R8G8B8A8_UNORM,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT, out[i], error))
+                    return false;
+                total += (imgs[i].rgba.size() + 15) & ~VkDeviceSize(15);
+            }
+            Buffer staging;
+            if (!createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              staging, error))
+                return false;
+            uint8_t *p = nullptr;
+            vkMapMemory(device, staging.memory, 0, total ? total : 16, 0, reinterpret_cast<void **>(&p));
+            std::vector<VkDeviceSize> offsets(imgs.size());
+            VkDeviceSize at = 0;
+            for (size_t i = 0; i < imgs.size(); ++i)
+            {
+                offsets[i] = at;
+                std::memcpy(p + at, imgs[i].rgba.data(), imgs[i].rgba.size());
+                at += (imgs[i].rgba.size() + 15) & ~VkDeviceSize(15);
+            }
+            vkUnmapMemory(device, staging.memory);
+            const bool ok = oneShot([&](VkCommandBuffer cb) {
+                for (size_t i = 0; i < imgs.size(); ++i)
+                {
+                    barrier(cb, out[i].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                    VkBufferImageCopy region{};
+                    region.bufferOffset = offsets[i];
+                    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.imageExtent = {imgs[i].width, imgs[i].height, 1};
+                    vkCmdCopyBufferToImage(cb, staging.buffer, out[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                    barrier(cb, out[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                }
+            }, error);
+            destroyBuffer(staging);
+            return ok;
+        }
+
         bool uploadBuffer(const void *data, VkDeviceSize size, VkBufferUsageFlags usage, Buffer &out, std::string &error)
         {
             if (!createBuffer(size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out, error))
@@ -379,7 +425,9 @@ namespace pop_native
             destroyImage(targetColour);
             destroyImage(targetDepth);
             targetFb = VK_NULL_HANDLE;
-            if (!createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            // TRANSFER_DST: the GPU post effects copy the processed frame back into it
+            if (!createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM,
+                             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                              VK_IMAGE_ASPECT_COLOR_BIT, targetColour, error) ||
                 !createImage(w, h, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
                              targetDepth, error))
@@ -647,6 +695,263 @@ namespace pop_native
             pipelines[key] = p;
             return p;
         }
+
+        // ---- GPU post effects (present path) ----
+        PostEffects post;
+        VkDescriptorSetLayout postSetLayout = VK_NULL_HANDLE;
+        VkPipelineLayout postLayout = VK_NULL_HANDLE;
+        VkPipeline postSprite = VK_NULL_HANDLE, postDiffusion = VK_NULL_HANDLE, postConvert = VK_NULL_HANDLE;
+        VkDescriptorPool postPool = VK_NULL_HANDLE;
+        Buffer postFrame, postWork, postSnap, postFull, postAlpha, postDummy;
+        std::vector<Buffer> postPlanes; // ColorDiffusion levels: per level the plane and its convolved copy
+        uint32_t postW = 0, postH = 0;
+
+        bool createPostPipelines(std::string &error)
+        {
+            VkDescriptorSetLayoutBinding b[3]{};
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                b[i].binding = i;
+                b[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                b[i].descriptorCount = 1;
+                b[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            }
+            VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            dl.bindingCount = 3;
+            dl.pBindings = b;
+            if (!check(vkCreateDescriptorSetLayout(device, &dl, nullptr, &postSetLayout), "post set layout", error))
+                return false;
+            VkPushConstantRange pr{VK_SHADER_STAGE_COMPUTE_BIT, 0, 64};
+            VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+            pl.setLayoutCount = 1;
+            pl.pSetLayouts = &postSetLayout;
+            pl.pushConstantRangeCount = 1;
+            pl.pPushConstantRanges = &pr;
+            if (!check(vkCreatePipelineLayout(device, &pl, nullptr, &postLayout), "post pipeline layout", error))
+                return false;
+            auto make = [&](const uint32_t *code, size_t bytes, VkPipeline &out) {
+                VkShaderModule mod = shader(code, bytes, error);
+                if (!mod)
+                    return false;
+                VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                ci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+                ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                ci.stage.module = mod;
+                ci.stage.pName = "main";
+                ci.layout = postLayout;
+                const bool ok = check(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &out), "post pipeline", error);
+                vkDestroyShaderModule(device, mod, nullptr);
+                return ok;
+            };
+            VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3 * 128};
+            VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            dp.maxSets = 128;
+            dp.poolSizeCount = 1;
+            dp.pPoolSizes = &ps;
+            return make(kGsSpriteComp, sizeof(kGsSpriteComp), postSprite) && make(kColorDiffusionComp, sizeof(kColorDiffusionComp), postDiffusion) &&
+                   make(kRgbaFloatComp, sizeof(kRgbaFloatComp), postConvert) &&
+                   check(vkCreateDescriptorPool(device, &dp, nullptr, &postPool), "post descriptor pool", error);
+        }
+
+        void destroyPostBuffers()
+        {
+            for (Buffer *b : {&postFrame, &postWork, &postSnap, &postFull, &postAlpha, &postDummy})
+                destroyBuffer(*b);
+            for (Buffer &b : postPlanes)
+                destroyBuffer(b);
+            postPlanes.clear();
+            postW = postH = 0;
+        }
+
+        bool ensurePostBuffers(uint32_t w, uint32_t h, std::string &error)
+        {
+            if (postW == w && postH == h)
+                return true;
+            vkDeviceWaitIdle(device);
+            destroyPostBuffers();
+            const uint32_t scale = std::max(1u, w / 640);
+            const VkDeviceSize work = VkDeviceSize(448 * scale) * (288 * scale) * 4, frame = VkDeviceSize(w) * h * 4;
+            const VkBufferUsageFlags u = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            const VkMemoryPropertyFlags d = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+            bool ok = createBuffer(frame, u, d, postFrame, error) && createBuffer(work, u, d, postWork, error) &&
+                      createBuffer(std::max(frame, work), u, d, postSnap, error) && createBuffer(frame * 4, u, d, postFull, error) &&
+                      createBuffer(frame * 4, u, d, postAlpha, error) && createBuffer(64, u, d, postDummy, error);
+            // ColorDiffusion planes: level 0 at half size (+ its resampled mask), then halvings, each with
+            // a convolved copy: at most 2 per level, 10 levels
+            uint32_t lw = w / 2, lh = h / 2;
+            for (int l = 0; ok && l < 10 && lw >= 1 && lh >= 1; ++l, lw /= 2, lh /= 2)
+                for (int k = 0; k < 2; ++k)
+                {
+                    postPlanes.emplace_back();
+                    ok = createBuffer(VkDeviceSize(lw) * lh * 16, u, d, postPlanes.back(), error);
+                }
+            if (!ok)
+                return false;
+            postW = w;
+            postH = h;
+            // the work buffer starts black (the haze reads a texel past some regions it wrote)
+            return oneShot([&](VkCommandBuffer cb) { vkCmdFillBuffer(cb, postWork.buffer, 0, VK_WHOLE_SIZE, 0); }, error);
+        }
+
+        static void memoryBarrier(VkCommandBuffer cb, VkPipelineStageFlags src, VkAccessFlags srcAccess, VkPipelineStageFlags dst,
+                                  VkAccessFlags dstAccess)
+        {
+            VkMemoryBarrier mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            mb.srcAccessMask = srcAccess;
+            mb.dstAccessMask = dstAccess;
+            vkCmdPipelineBarrier(cb, src, dst, 0, 1, &mb, 0, nullptr, 0, nullptr);
+        }
+
+        void dispatchPost(VkCommandBuffer cb, VkPipeline pipe, VkBuffer b0, VkBuffer b1, VkBuffer b2, const void *push, size_t bytes,
+                          uint32_t w, uint32_t h)
+        {
+            VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            da.descriptorPool = postPool;
+            da.descriptorSetCount = 1;
+            da.pSetLayouts = &postSetLayout;
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            if (vkAllocateDescriptorSets(device, &da, &set) != VK_SUCCESS)
+                return;
+            VkDescriptorBufferInfo info[3] = {{b0, 0, VK_WHOLE_SIZE}, {b1, 0, VK_WHOLE_SIZE}, {b2, 0, VK_WHOLE_SIZE}};
+            VkWriteDescriptorSet wr[3]{};
+            for (uint32_t i = 0; i < 3; ++i)
+            {
+                wr[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                wr[i].dstSet = set;
+                wr[i].dstBinding = i;
+                wr[i].descriptorCount = 1;
+                wr[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                wr[i].pBufferInfo = &info[i];
+            }
+            vkUpdateDescriptorSets(device, 3, wr, 0, nullptr);
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, postLayout, 0, 1, &set, 0, nullptr);
+            uint8_t pc[64] = {};
+            std::memcpy(pc, push, std::min<size_t>(bytes, 64));
+            vkCmdPushConstants(cb, postLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, 64, pc);
+            vkCmdDispatch(cb, (w + 7) / 8, (h + 7) / 8, 1);
+            memoryBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_ACCESS_SHADER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT);
+        }
+
+        // the post chain on `image` (w x h, in TRANSFER_SRC layout before and after): copy to a buffer,
+        // ColorDiffusion and/or SmartBlur as compute dispatches, copy back. The descriptor pool is reset
+        // here, so only one frame may be in flight (present waits for the previous one first).
+        void recordPost(VkCommandBuffer cb, VkImage image, uint32_t w, uint32_t h)
+        {
+            vkResetDescriptorPool(device, postPool, 0);
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {w, h, 1};
+            vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, postFrame.buffer, 1, &region);
+            memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            if (post.glow && post.levels >= 2 && w >= 4 && h >= 4)
+            {
+                struct ConvPush
+                {
+                    int32_t op, w, h;
+                } cvt{0, int32_t(w), int32_t(h)};
+                dispatchPost(cb, postConvert, postFrame.buffer, postFull.buffer, postAlpha.buffer, &cvt, sizeof cvt, w, h);
+                struct DiffPush
+                {
+                    int32_t op, sw, sh, dw, dh, strength;
+                    float k;
+                };
+                auto run = [&](int op, VkBuffer src, uint32_t sw, uint32_t sh, VkBuffer dst, uint32_t dw, uint32_t dh, VkBuffer aux, float k) {
+                    DiffPush p{op, int32_t(sw), int32_t(sh), int32_t(dw), int32_t(dh), post.strength, k};
+                    dispatchPost(cb, postDiffusion, src, dst, aux, &p, sizeof p, dw, dh);
+                };
+                // level 0: half size, masked by the resampled frame alpha (postPlanes[0], mask in [1])
+                uint32_t lw = w / 2, lh = h / 2;
+                VkBuffer level = postPlanes[0].buffer;
+                run(0, postFull.buffer, w, h, level, lw, lh, postDummy.buffer, 0);
+                if (post.mask)
+                {
+                    run(0, postAlpha.buffer, w, h, postPlanes[1].buffer, lw, lh, postDummy.buffer, 0);
+                    run(1, postDummy.buffer, lw, lh, level, lw, lh, postPlanes[1].buffer, 0);
+                }
+                struct L
+                {
+                    VkBuffer b;
+                    uint32_t w, h;
+                };
+                std::vector<L> pyramid;
+                for (int l = 1; l < post.levels && lw >= 2 && lh >= 2 && size_t(2 * l + 1) < postPlanes.size(); ++l)
+                {
+                    const uint32_t nw = lw / 2, nh = lh / 2;
+                    VkBuffer next = postPlanes[size_t(2 * l)].buffer;
+                    run(0, level, lw, lh, next, nw, nh, postDummy.buffer, 0);
+                    level = next;
+                    lw = nw;
+                    lh = nh;
+                    if (post.convolution)
+                    {
+                        VkBuffer conv = postPlanes[size_t(2 * l + 1)].buffer;
+                        run(2, level, lw, lh, conv, lw, lh, postDummy.buffer, 0);
+                        level = conv;
+                    }
+                    pyramid.push_back({level, lw, lh});
+                }
+                const float k = float(post.fix & 0xFF) / 128.0f;
+                for (int l = int(pyramid.size()) - 1; l >= 0; --l)
+                    run(3, pyramid[size_t(l)].b, pyramid[size_t(l)].w, pyramid[size_t(l)].h, postFull.buffer, w, h, postDummy.buffer, k);
+                cvt.op = 1;
+                dispatchPost(cb, postConvert, postFrame.buffer, postFull.buffer, postAlpha.buffer, &cvt, sizeof cvt, w, h);
+            }
+            if (post.haze)
+            {
+                const uint32_t scale = std::max(1u, w / 640), ww = 448 * scale, wh = 288 * scale;
+                const float kk = float(scale) / 16.0f;
+                const int a = int(float(post.hazeColour >> 24) * (1.0f - post.hazeFade));
+                const pop_postfx::SmartBlurBlit *bl = pop_postfx::smartBlurBlits();
+                struct SpritePush
+                {
+                    float xy[4], uv[4];
+                    int32_t size[4];
+                    uint32_t colour, flags;
+                };
+                for (int i = 0; i < 11; ++i)
+                {
+                    const auto &b = bl[i];
+                    const VkBuffer dst = b.toFrame ? postFrame.buffer : postWork.buffer;
+                    const uint32_t dw = b.toFrame ? w : ww, dh = b.toFrame ? h : wh;
+                    VkBuffer src = b.fromFrame ? postFrame.buffer : postWork.buffer;
+                    const uint32_t sw = b.fromFrame ? w : ww, sh = b.fromFrame ? h : wh;
+                    if (b.textured && src == dst)
+                    {
+                        // a blit that reads its own target reads a copy of it (as the CPU reference)
+                        VkBufferCopy c{0, 0, VkDeviceSize(dw) * dh * 4};
+                        vkCmdCopyBuffer(cb, dst, postSnap.buffer, 1, &c);
+                        memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                      VK_ACCESS_SHADER_READ_BIT);
+                        src = postSnap.buffer;
+                    }
+                    SpritePush p{};
+                    p.xy[0] = (b.x0 - 0x6C00) * kk;
+                    p.xy[1] = (b.y0 - 0x7200) * kk;
+                    p.xy[2] = (b.x1 - 0x6C00) * kk;
+                    p.xy[3] = (b.y1 - 0x7200) * kk;
+                    p.uv[0] = b.u0 * kk;
+                    p.uv[1] = b.v0 * kk;
+                    p.uv[2] = b.u1 * kk;
+                    p.uv[3] = b.v1 * kk;
+                    p.size[0] = int32_t(sw);
+                    p.size[1] = int32_t(sh);
+                    p.size[2] = int32_t(dw);
+                    p.size[3] = int32_t(dh);
+                    p.colour = b.colour == 0xFFFFFFFFu ? ((post.hazeColour & 0xFFFFFFu) | (uint32_t(a & 0xFF) << 24)) : b.colour;
+                    p.flags = (b.textured ? 1u : 0u) | (b.blend ? 2u : 0u);
+                    dispatchPost(cb, postSprite, b.textured ? src : postDummy.buffer, dst, postDummy.buffer, &p, sizeof p, dw, dh);
+                }
+            }
+            barrier(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+            vkCmdCopyBufferToImage(cb, postFrame.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            barrier(cb, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        }
     };
 
     Renderer::Renderer() : m(new Impl) {}
@@ -670,6 +975,16 @@ namespace pop_native
                 vkDestroySemaphore(m->device, m->rendered, nullptr);
             m->destroyBuffer(m->vertexBuffer);
             m->destroyBuffer(m->indexBuffer);
+            m->destroyPostBuffers();
+            for (VkPipeline p : {m->postSprite, m->postDiffusion, m->postConvert})
+                if (p)
+                    vkDestroyPipeline(m->device, p, nullptr);
+            if (m->postPool)
+                vkDestroyDescriptorPool(m->device, m->postPool, nullptr);
+            if (m->postLayout)
+                vkDestroyPipelineLayout(m->device, m->postLayout, nullptr);
+            if (m->postSetLayout)
+                vkDestroyDescriptorSetLayout(m->device, m->postSetLayout, nullptr);
             for (Texture &t : m->textures)
                 m->destroyImage(t);
             if (m->descriptorPool)
@@ -702,6 +1017,39 @@ namespace pop_native
     std::string Renderer::deviceName() const { return m->props.deviceName; }
 
     void Renderer::setFog(const Fog &fog) { m->fog = fog; }
+    void Renderer::setPostEffects(const PostEffects &post) { m->post = post; }
+
+    bool Renderer::readPresented(std::vector<uint8_t> &rgba, uint32_t &width, uint32_t &height, std::string &error)
+    {
+        if (!m->targetFb)
+        {
+            error = "nothing presented yet";
+            return false;
+        }
+        if (m->frameFence)
+            vkWaitForFences(m->device, 1, &m->frameFence, VK_TRUE, UINT64_MAX);
+        width = m->targetW;
+        height = m->targetH;
+        Buffer readback;
+        if (!m->createBuffer(VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, readback, error))
+            return false;
+        const bool ok = m->oneShot([&](VkCommandBuffer cb) {
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {width, height, 1};
+            vkCmdCopyImageToBuffer(cb, m->targetColour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
+        }, error);
+        if (ok)
+        {
+            void *p;
+            vkMapMemory(m->device, readback.memory, 0, readback.size, 0, &p);
+            rgba.assign(static_cast<uint8_t *>(p), static_cast<uint8_t *>(p) + size_t(width) * height * 4);
+            vkUnmapMemory(m->device, readback.memory);
+        }
+        m->destroyBuffer(readback);
+        return ok;
+    }
 
     bool Renderer::init(const Options &options, std::string &error)
     {
@@ -831,13 +1179,14 @@ namespace pop_native
         si.maxLod = 0.0f;
         if (!check(vkCreateSampler(m->device, &si, nullptr, &m->sampler), "vkCreateSampler", error))
             return false;
-        return m->createPipelines(error);
+        return m->createPipelines(error) && m->createPostPipelines(error);
     }
 
     int Renderer::addImage(const Image &image)
     {
+        // index among all images ever added (textures[0] is white, so uploaded images are textures.size() - 1)
         m->images.push_back(image);
-        return static_cast<int>(m->images.size()) - 1;
+        return static_cast<int>((m->textures.empty() ? 0 : m->textures.size() - 1) + m->images.size()) - 1;
     }
 
     int Renderer::addMaterial(const Material &material)
@@ -854,15 +1203,24 @@ namespace pop_native
 
     bool Renderer::upload(std::string &error)
     {
-        // textures: the images, then a 1x1 white one for missing textures / no lightmap
-        Image white{1, 1, {255, 255, 255, 255}};
-        m->textures.resize(m->images.size() + 1);
-        for (size_t i = 0; i <= m->images.size(); ++i)
-            if (!m->uploadTexture(i < m->images.size() ? m->images[i] : white, m->textures[i], error))
+        // textures persist across reset(true): textures[0] is white (missing texture / no lightmap),
+        // textures[1 + i] is image i; only the images added since the last upload are uploaded
+        if (m->textures.empty())
+        {
+            m->textures.resize(1);
+            Image white{1, 1, {255, 255, 255, 255}};
+            if (!m->uploadTexture(white, m->textures[0], error))
                 return false;
-        const size_t whiteIndex = m->images.size();
-        m->images.clear();
-        m->images.shrink_to_fit();
+        }
+        if (!m->images.empty())
+        {
+            const size_t first = m->textures.size();
+            m->textures.resize(first + m->images.size());
+            if (!m->uploadTextures(m->images, m->textures.data() + first, error))
+                return false;
+            m->images.clear();
+            m->images.shrink_to_fit();
+        }
 
         // descriptor sets: one per material (base, lightmap) plus one all-white
         const uint32_t sets = static_cast<uint32_t>(m->materials.size()) + 1;
@@ -881,7 +1239,9 @@ namespace pop_native
         da.pSetLayouts = layouts.data();
         if (!check(vkAllocateDescriptorSets(m->device, &da, all.data()), "vkAllocateDescriptorSets", error))
             return false;
-        auto texView = [&](int image) { return m->textures[image >= 0 && static_cast<size_t>(image) < whiteIndex ? image : whiteIndex].view; };
+        auto texView = [&](int image) {
+            return m->textures[image >= 0 && static_cast<size_t>(image) + 1 < m->textures.size() ? size_t(image) + 1 : 0].view;
+        };
         for (uint32_t s = 0; s < sets; ++s)
         {
             const Material *mat = s < m->materials.size() ? &m->materials[s] : nullptr;
@@ -918,6 +1278,32 @@ namespace pop_native
         m->meshes.clear();
         return m->uploadBuffer(verts.data(), verts.size() * sizeof(Vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m->vertexBuffer, error) &&
                m->uploadBuffer(idx.data(), idx.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m->indexBuffer, error);
+    }
+
+    void Renderer::reset(bool keepImages)
+    {
+        if (!m->device)
+            return;
+        if (m->frameFence)
+            vkWaitForFences(m->device, 1, &m->frameFence, VK_TRUE, UINT64_MAX); // the last frame still uses the scene
+        vkDeviceWaitIdle(m->device);
+        m->destroyBuffer(m->vertexBuffer);
+        m->destroyBuffer(m->indexBuffer);
+        if (!keepImages)
+        {
+            for (Texture &t : m->textures)
+                m->destroyImage(t);
+            m->textures.clear();
+            m->images.clear();
+        }
+        if (m->descriptorPool)
+            vkDestroyDescriptorPool(m->device, m->descriptorPool, nullptr);
+        m->descriptorPool = VK_NULL_HANDLE;
+        m->materialSets.clear();
+        m->whiteSet = VK_NULL_HANDLE;
+        m->materials.clear();
+        m->meshes.clear();
+        m->ranges.clear();
     }
 
     bool Renderer::renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
@@ -1035,6 +1421,12 @@ namespace pop_native
         bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkBeginCommandBuffer(cb, &bi);
         m->recordScene(cb, m->targetFb, internalWidth, internalHeight, clip, draws);
+        if (m->post.glow || m->post.haze)
+        {
+            if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
+                return false;
+            m->recordPost(cb, m->targetColour.image, internalWidth, internalHeight);
+        }
         VkImage dst = m->swapImages[index];
         Impl::barrier(cb, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);

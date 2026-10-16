@@ -23,6 +23,13 @@
 // The native sources, by path: this file is copied to <runtime>/ps2xRuntime/src/runner, six levels
 // below the repository root on both the Mac (game/recomp/...) and the PC (game/recomp-sotc/...).
 #include "../../../../../../tools/native/src/assets.cpp"
+namespace pop_live_client // pop_live_client.cpp: the live native window's frame sender
+{
+    void start(int port);
+    void submit(std::vector<uint8_t> &&frame);
+    uint64_t connection(); // changes with every new viewer connection
+    bool busy();           // the previous frame is still being sent
+}
 #include "../../../../../../tools/native/src/meshdecode.cpp"
 
 #include <algorithm>
@@ -79,6 +86,7 @@ namespace pop_native_live
         std::string g_framePath;
         double g_frameAfter = -1.0;
         bool g_frameCapturing = false, g_frameDone = false;
+        int g_liveWindow = 0; // POP_NATIVE_WINDOW=<port>: capture every frame and stream it to the live native window
         std::chrono::steady_clock::time_point g_start;
         float g_frameClip[16];
         std::vector<std::pair<uint32_t, std::array<float, 16>>> g_frameDraws; // element, model matrix
@@ -1146,11 +1154,20 @@ namespace pop_native_live
     namespace
     {
         // the draw's vertex colours as the VIF delivers them (constant colour / local alpha masks)
-        void writeVertices(FILE *f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
+        void putBytes(std::vector<uint8_t> &out, const void *p, size_t n)
+        {
+            const uint8_t *b = static_cast<const uint8_t *>(p);
+            out.insert(out.end(), b, b + n);
+        }
+        std::unordered_map<uint32_t, pop_native::Image> g_liveImages; // live window: decoded textures by key
+        std::unordered_set<uint32_t> g_liveSent;                       // texture keys the viewer already has
+        uint64_t g_liveConnection = 0;
+
+        void writeVertices(std::vector<uint8_t> &f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
         {
             if (m.constColour < 0 && m.constAlpha < 0 && !m.hasUvm)
             {
-                std::fwrite(vertices.data(), sizeof(pop_native::Vertex), vertices.size(), f);
+                putBytes(f, vertices.data(), sizeof(pop_native::Vertex) * vertices.size());
                 return;
             }
             std::vector<pop_native::Vertex> v = vertices;
@@ -1168,25 +1185,29 @@ namespace pop_native_live
                     x.uv[1] = u * m.uvm[1] + v * m.uvm[3] + m.uvm[5];
                 }
             }
-            std::fwrite(v.data(), sizeof(pop_native::Vertex), v.size(), f);
+            putBytes(f, v.data(), sizeof(pop_native::Vertex) * v.size());
         }
 
         // File: "PNF1", clip[16], draw count; per draw: model[16], batch count; per batch: vertex
         // count, index count, vertices (pop_native::Vertex), indices (u32).
         std::function<uint32_t(uint32_t)> g_rdramForDump;
-        void writeFrame()
+        // live: the frame goes to the live native window instead of a file, and the one-off
+        // diagnostics (side files, stderr reports) are skipped
+        void writeFrame(bool live = false)
         {
-            FILE *f = std::fopen(g_framePath.c_str(), "wb");
-            if (!f)
-                return;
+            std::vector<uint8_t> f;
+            f.reserve(8u << 20);
             // "PNF5": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
             // per draw: model[16], image index (-1: none), render state flags, AREF word, fog a, fog b,
             // FOGCOL, Z test, FBMSK, batch count, batches); then "GLOW" + ColorDiffusion's parameters
             // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame
-            std::fwrite("PNF5", 1, 4, f);
-            std::fwrite(g_frameClip, 4, 16, f);
+            // live: "PNF6" = PNF5 with each image as (texture key, w, h, RGBA), RGBA only the first time
+            // the viewer gets that key on this connection (w = h = 0 afterwards: it keeps the texture)
+            putBytes(f, live ? "PNF6" : "PNF5", 4);
+            putBytes(f, g_frameClip, size_t(4) * size_t(16));
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
+            std::vector<uint32_t> imageKeys;
             std::vector<DrawMaterial> allMaterials = g_frameMaterials;
             for (const auto &p : g_framePosed)
                 allMaterials.push_back(p.second);
@@ -1210,10 +1231,26 @@ namespace pop_native_live
                 if (m.textureKey && !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
-                    imageOf[m.textureKey] = findTexture(m.textureKey, img) ? int32_t(images.size()) : -1;
-                    if (imageOf[m.textureKey] >= 0)
+                    bool found = false;
+                    if (live)
+                    {
+                        // decoded once per texture key (the packs stay loaded); misses are retried
+                        auto it = g_liveImages.find(m.textureKey);
+                        if (it == g_liveImages.end() && findTexture(m.textureKey, img))
+                            it = g_liveImages.emplace(m.textureKey, std::move(img)).first;
+                        if ((found = it != g_liveImages.end()))
+                            img = it->second;
+                    }
+                    else
+                        found = findTexture(m.textureKey, img);
+                    imageOf[m.textureKey] = found ? int32_t(images.size()) : -1;
+                    if (found)
+                    {
                         images.push_back(std::move(img));
+                        imageKeys.push_back(m.textureKey);
+                    }
                 }
+            if (!live)
             {
                 std::unordered_map<uint32_t, int> keys;
                 for (const auto &kv : g_frameLightmap)
@@ -1227,6 +1264,7 @@ namespace pop_native_live
                 }
                 std::fprintf(stderr, "\n");
             }
+            if (!live)
             {
                 // unresolved texture keys, and whether each is a bigfile entry of its own
                 const char *env = std::getenv("POP_PS2_BIGFILE");
@@ -1242,15 +1280,31 @@ namespace pop_native_live
                     }
             }
             const uint32_t ni0 = uint32_t(images.size());
-            std::fwrite(&ni0, 4, 1, f);
-            for (const auto &img : images)
+            putBytes(f, &ni0, size_t(4) * size_t(1));
+            if (live && g_liveConnection != pop_live_client::connection())
             {
-                std::fwrite(&img.width, 4, 1, f);
-                std::fwrite(&img.height, 4, 1, f);
-                std::fwrite(img.rgba.data(), 1, img.rgba.size(), f);
+                g_liveConnection = pop_live_client::connection(); // a new viewer has none of our textures
+                g_liveSent.clear();
+            }
+            for (size_t i = 0; i < images.size(); ++i)
+            {
+                const auto &img = images[i];
+                if (live)
+                {
+                    putBytes(f, &imageKeys[i], 4);
+                    if (!g_liveSent.insert(imageKeys[i]).second)
+                    {
+                        const uint32_t zero[2] = {0, 0};
+                        putBytes(f, zero, 8);
+                        continue;
+                    }
+                }
+                putBytes(f, &img.width, size_t(4) * size_t(1));
+                putBytes(f, &img.height, size_t(4) * size_t(1));
+                putBytes(f, img.rgba.data(), img.rgba.size());
             }
             const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size() + g_frameRefs.size());
-            std::fwrite(&n, 4, 1, f);
+            putBytes(f, &n, size_t(4) * size_t(1));
             size_t tris = 0, textured = 0;
             static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             // every draw in the game's order: (seq, kind 0 static / 1 skinned / 2 instanced, index)
@@ -1264,7 +1318,7 @@ namespace pop_native_live
             std::sort(order.begin(), order.end());
             // side file: per written draw its kind, source index, render state, texture key and mean
             // vertex colour (0x80 = 1.0), to identify draws found by bisecting a frame in the viewer
-            FILE *dl = std::fopen((g_framePath + ".draws.txt").c_str(), "w");
+            FILE *dl = live ? nullptr : std::fopen((g_framePath + ".draws.txt").c_str(), "w");
             uint32_t drawNo = 0;
             for (const auto &o : order)
             {
@@ -1311,35 +1365,44 @@ namespace pop_native_live
                 const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
-                std::fwrite(model, 4, 16, f);
-                std::fwrite(&image, 4, 1, f);
-                std::fwrite(&mat.flags, 4, 1, f);
-                std::fwrite(&mat.ref, 4, 1, f);
-                std::fwrite(&mat.fogA, 4, 1, f);
-                std::fwrite(&mat.fogB, 4, 1, f);
-                std::fwrite(&mat.fogColour, 4, 1, f);
-                std::fwrite(&mat.zTest, 4, 1, f);
-                std::fwrite(&mat.fbmsk, 4, 1, f);
-                std::fwrite(&nb, 4, 1, f);
+                putBytes(f, model, size_t(4) * size_t(16));
+                putBytes(f, &image, size_t(4) * size_t(1));
+                putBytes(f, &mat.flags, size_t(4) * size_t(1));
+                putBytes(f, &mat.ref, size_t(4) * size_t(1));
+                putBytes(f, &mat.fogA, size_t(4) * size_t(1));
+                putBytes(f, &mat.fogB, size_t(4) * size_t(1));
+                putBytes(f, &mat.fogColour, size_t(4) * size_t(1));
+                putBytes(f, &mat.zTest, size_t(4) * size_t(1));
+                putBytes(f, &mat.fbmsk, size_t(4) * size_t(1));
+                putBytes(f, &nb, size_t(4) * size_t(1));
                 for (const auto &b : *batches)
                 {
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
-                    std::fwrite(&nv, 4, 1, f);
-                    std::fwrite(&ni, 4, 1, f);
+                    putBytes(f, &nv, size_t(4) * size_t(1));
+                    putBytes(f, &ni, size_t(4) * size_t(1));
                     writeVertices(f, b.vertices, mat);
-                    std::fwrite(b.indices.data(), 4, ni, f);
+                    putBytes(f, b.indices.data(), size_t(4) * size_t(ni));
                     tris += ni / 3;
                 }
             }
             if (dl)
                 std::fclose(dl);
-            std::fwrite("GLOW", 1, 4, f);
-            std::fwrite(&g_glowCalls, 4, 1, f);
-            std::fwrite(g_glow, 4, 5, f);
-            std::fwrite("HAZE", 1, 4, f);
-            std::fwrite(&g_hazeCalls, 4, 1, f);
-            std::fwrite(g_haze, 4, 2, f);
-            std::fclose(f);
+            putBytes(f, "GLOW", size_t(1) * size_t(4));
+            putBytes(f, &g_glowCalls, size_t(4) * size_t(1));
+            putBytes(f, g_glow, size_t(4) * size_t(5));
+            putBytes(f, "HAZE", size_t(1) * size_t(4));
+            putBytes(f, &g_hazeCalls, size_t(4) * size_t(1));
+            putBytes(f, g_haze, size_t(4) * size_t(2));
+            if (live)
+            {
+                pop_live_client::submit(std::move(f));
+                return;
+            }
+            if (FILE *out = std::fopen(g_framePath.c_str(), "wb"))
+            {
+                std::fwrite(f.data(), 1, f.size(), out);
+                std::fclose(out);
+            }
             // side file for identifying the sub-material layout: per draw, the sub-material object's
             // first 0x30 bytes and the key that word +4 maps to as a texture index
             if (FILE *t = std::fopen((g_framePath + ".sub.txt").c_str(), "w"))
@@ -1434,6 +1497,24 @@ namespace pop_native_live
             g_origListRender(rdram, ctx, runtime);
         }
 
+        // live window: empties everything one frame's capture collected, for the next frame
+        void resetFrameCapture()
+        {
+            g_frameDraws.clear();
+            g_frameSub.clear();
+            g_frameMaterials.clear();
+            g_framePosed.clear();
+            g_frameRefs.clear();
+            g_frameOther.clear();
+            g_frameGfx.clear();
+            g_frameSeen.clear();
+            g_frameLightmap.clear();
+            g_frameSeq = 0;
+            g_glowCalls = 0;
+            g_hazeCalls = 0;
+            g_haloAddsInWindow = 0;
+        }
+
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdramPtr = rdram;
@@ -1442,8 +1523,17 @@ namespace pop_native_live
             {
                 g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
                 g_frameCapturing = false;
-                g_frameDone = true;
-                writeFrame();
+                if (g_liveWindow)
+                {
+                    if (!pop_live_client::busy())
+                        writeFrame(true);
+                    resetFrameCapture();
+                }
+                else
+                {
+                    g_frameDone = true;
+                    writeFrame();
+                }
             }
             if (!g_frameDone && g_frameAfter >= 0 &&
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count() >= g_frameAfter)
@@ -1502,12 +1592,23 @@ namespace pop_native_live
         runtime.replaceFunction(kMeshDisplay, display);
         g_live = true;
         g_start = std::chrono::steady_clock::now();
-        if (const char *f = std::getenv("POP_NATIVE_FRAME"); f && *f)
+        const char *frameSpec = std::getenv("POP_NATIVE_FRAME"), *windowSpec = std::getenv("POP_NATIVE_WINDOW");
+        if ((frameSpec && *frameSpec) || (windowSpec && *windowSpec))
         {
-            const std::string spec = f;
-            const auto colon = spec.rfind(':');
-            g_framePath = spec.substr(0, colon);
-            g_frameAfter = colon != std::string::npos ? std::atof(spec.c_str() + colon + 1) : 60.0;
+            if (windowSpec && *windowSpec)
+            {
+                // the live native window: every frame, streamed to pop_native_view --live <port>
+                g_liveWindow = std::atoi(windowSpec);
+                g_frameAfter = 0.0;
+                pop_live_client::start(g_liveWindow);
+            }
+            else
+            {
+                const std::string spec = frameSpec;
+                const auto colon = spec.rfind(':');
+                g_framePath = spec.substr(0, colon);
+                g_frameAfter = colon != std::string::npos ? std::atof(spec.c_str() + colon + 1) : 60.0;
+            }
             g_origDisplay3D = runtime.lookupFunction(kDisplay3D);
             if (g_origDisplay3D)
                 runtime.replaceFunction(kDisplay3D, display3D);

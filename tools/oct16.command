@@ -39,7 +39,7 @@ if [[ "$pc_head" != "$(git rev-parse main)" ]]; then
     ps "git -C '$REMOTE' pull --ff-only game\\jobs\\pop.bundle main 2>&1 | Select-Object -Last 1; git -C '$REMOTE' log --oneline -1"
 fi
 
-echo "== Starting tonight's job on the PC (native scenes, then nightly checks)"
+echo "== Starting tonight's job on the PC (native scenes, live native window test, then nightly checks)"
 ps "Set-Location '$REMOTE'; & tools\\windows\\start-job.ps1 -Script tools\\windows\\oct16.ps1"
 echo
 echo "Started. You can switch this Mac off now; the PC must stay on."

@@ -119,6 +119,20 @@ namespace pop_native
         float fogColour[3] = {0, 0, 0};
     };
 
+    // The game's post effects for the window path (present): CAfterEffect::ColorDiffusion (glow) and
+    // AE_ProcessSmartBlur (haze), run on the GPU (shaders gs_sprite / color_diffusion; CPU references
+    // and judge in postfx.h / pop_postfx_gpu_judge). Off by default.
+    struct PostEffects
+    {
+        bool glow = false;
+        int levels = 6, fix = 128;
+        bool mask = true, convolution = true;
+        int strength = 0;
+        bool haze = false;
+        uint32_t hazeColour = 0; // effect object +0x124
+        float hazeFade = 0.0f;   // +0x144
+    };
+
     struct Options
     {
         bool linearFilter = true; // bilinear texture filtering (the PS2's usual setting) or nearest
@@ -147,6 +161,10 @@ namespace pop_native
         int addMesh(Mesh mesh);
         // uploads everything added so far (call once, after all add* calls)
         bool upload(std::string &error);
+        // drops the scene (materials, meshes, and the images unless keepImages) and their GPU copies
+        // so a new one can be added and uploaded; keeps the device, pipelines, window and render
+        // targets (live frames). Image indices stay valid while images are kept.
+        void reset(bool keepImages = false);
         // renders the draws through `clip` (the game's world -> clip matrix, row vectors as the game
         // stores them) into a width x height RGBA image
         // depthOut (optional): per-pixel view depth w (0 where nothing was drawn)
@@ -157,6 +175,9 @@ namespace pop_native
         bool present(uint32_t windowWidth, uint32_t windowHeight, uint32_t internalWidth, uint32_t internalHeight,
                      const float clip[16], const std::vector<Draw> &draws, std::string &error);
         void setFog(const Fog &fog);
+        void setPostEffects(const PostEffects &post);
+        // the last frame present() drew (internal resolution, after the post effects), read back
+        bool readPresented(std::vector<uint8_t> &rgba, uint32_t &width, uint32_t &height, std::string &error);
         std::string deviceName() const;
 
     private:
