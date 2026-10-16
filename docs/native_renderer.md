@@ -216,3 +216,16 @@ changed areas there sit under the HUD text).
 Halos: `AE_AddHaloToDisplay` (0x4AB1C0; array 0x6DF2C0, 32 bytes each, count 0x67518C; drawn by
 `AE_ProcessOneHalo` as additive screen quads, ALPHA 0x58 = Cs*Ad + Cd with Ad an occlusion mask
 written by `ProcessLensFlare`) is not called in the balcony scene at all.
+
+## Character lighting live (16 Oct)
+`CVuManager::DoSetSkinLightEnv` (0x4B64C0) uploads the VU1 lights per light set: `SetSkinDriver`
+(from `CElementList::Render`, list entry bits 42-49) leaves the set index at 0x70000088; set =
+`*(0x700004F0) + index * 0xF0`: +1 point-light flag, +4 ambient RGB (0x80 = 1.0; alpha = local
+alpha), +8 light count, +0x10 + 16i directions (world), +0x50/+0x90 point-light data, +0xD0 + 4i
+colours, +0xE0 + 4i types. Without lights and ambient the global environment is used (gp+0x140
+directions as matrix columns, gp+0x180 colours as rows); a constant colour (render state 0x39)
+replaces the ambient and drops the lights. The frame export bakes ambient + sum max(0, n.d)*colour
+per vertex (normals now kept by `pop_assets::convertSkinned`, rotated by the bone matrices);
+point lights (types 1/2) are skipped. A/B: `POP_NATIVE_NOLIGHT=1`.
+`~/Desktop/pop_renders/30_live_prince_game_unlit_lit.png`: game, unlit, lit (trousers lose the
+warm cast, as in the game; the game's warm rim light from the curtain fire is a point light).

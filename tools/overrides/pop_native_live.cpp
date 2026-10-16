@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <map>
 #include <memory>
@@ -101,6 +102,7 @@ namespace pop_native_live
             uint32_t seq = 0;   // the draw's position in the frame (game draw order)
         };
         uint32_t g_frameSeq = 0;
+        const bool g_noLighting = std::getenv("POP_NATIVE_NOLIGHT") != nullptr; // A/B: unlit characters
         uint8_t *g_rdramPtr = nullptr;
         std::vector<DrawMaterial> g_frameMaterials;
         std::vector<std::pair<std::vector<pop_assets::Batch>, DrawMaterial>> g_framePosed; // skinned draws, posed in world space
@@ -192,13 +194,80 @@ namespace pop_native_live
             return dm;
         }
 
+        // VU1 character lighting as CVuManager::DoSetSkinLightEnv (0x4B64C0) uploads it: the light set
+        // index is at 0x70000088 (SetSkinDriver, from list entry bits 42-49); set = *(0x700004F0) +
+        // index * 0xF0: +4 ambient RGB (0x80 = 1.0), +8 light count, +0x10 + 16i directions, +0xD0 + 4i
+        // colours, +0xE0 + 4i types, +1 point-light flag. No lights and no ambient: the global
+        // environment (gp+0x140 directions as columns, gp+0x180 colours as rows, gp = 0x6749F0).
+        // A constant colour (render state 0x70000039) replaces the ambient and switches the lights off.
+        // Vertex colour = ambient + sum max(0, n . d_i) * colour_i (tools/chainskin.py; game-checked).
+        struct LightEnv
+        {
+            bool valid = false;
+            int count = 0;
+            float dir[4][3] = {}, col[4][3] = {}, amb[3] = {};
+        };
+        float guestF(uint8_t *rdram, uint32_t a)
+        {
+            const uint32_t b = guestAny(rdram, a);
+            float f;
+            std::memcpy(&f, &b, 4);
+            return f;
+        }
+        LightEnv readLightEnv(uint8_t *rdram)
+        {
+            LightEnv e;
+            const uint32_t table = guestAny(rdram, 0x700004F0u);
+            if (!table)
+                return e;
+            const uint32_t set = table + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
+            uint32_t ambient = guestAny(rdram, set + 4);
+            int count = int(guest8(rdram, set + 8));
+            const bool pointFlag = guest8(rdram, set + 1) != 0;
+            if (guest8(rdram, 0x70000039u))
+            {
+                ambient = guestAny(rdram, 0x7000003Cu);
+                count = 0;
+            }
+            for (int c = 0; c < 3; ++c)
+                e.amb[c] = float((ambient >> (8 * c)) & 0xFF);
+            if ((ambient & 0xFFFFFF) == 0 && count == 0)
+            {
+                const uint32_t m = 0x006749F0u + 0x140u, cm = 0x006749F0u + 0x180u;
+                e.count = 4;
+                for (int i = 0; i < 4; ++i)
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        e.dir[i][c] = guestF(rdram, m + 4u * (4 * c + i));
+                        e.col[i][c] = guestF(rdram, cm + 4u * (4 * i + c));
+                    }
+            }
+            else
+            {
+                for (int i = 0; i < count && i < 4; ++i)
+                {
+                    if (pointFlag && guestAny(rdram, set + 0xE0 + 4 * i) != 0)
+                        continue; // point lights (types 1/2) not modelled yet
+                    const uint32_t c = guestAny(rdram, set + 0xD0 + 4 * i);
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        e.dir[e.count][k] = guestF(rdram, set + 0x10 + 16 * i + 4 * k);
+                        e.col[e.count][k] = float((c >> (8 * k)) & 0xFF);
+                    }
+                    ++e.count;
+                }
+            }
+            e.valid = true;
+            return e;
+        }
+
         // A skinned element drawn with matrix index `index`, posed as CJMeshElement::Display uploads
         // its bones: palette at element +0x48 (byte 0 = bone count n, bytes 4.. = bone ids); bone k's
         // matrix = *(0x700001D0) + (firstBone + id[k]) * 0x40, firstBone = u16 table at 0x700001DC
         // indexed by index - u16 at 0x7000025E. n >= 2: vertex slot s uses bone s - 1 (VU 0x388); one
         // bone: every vertex uses it (VU 0). Matrices are world space, row vectors.
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
-                         std::vector<pop_assets::Batch> &out)
+                         std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr)
         {
             const uint32_t pal = guestAny(rdram, element + 0x48);
             if (!pal)
@@ -224,7 +293,8 @@ namespace pop_native_live
                 for (size_t i = 0; i < nv; ++i)
                 {
                     const float *v = &b.positions[3 * i];
-                    float acc[3] = {0, 0, 0}, total = 0;
+                    float acc[3] = {0, 0, 0}, nacc[3] = {0, 0, 0}, total = 0;
+                    const bool lit = light && light->valid && b.normals.size() >= 3 * nv;
                     for (int k = 0; k < 3; ++k)
                     {
                         const int32_t slot = b.slots[3 * i + k];
@@ -234,6 +304,12 @@ namespace pop_native_live
                         const auto &m = bones[n < 2 ? 0 : uint32_t(slot - 1)];
                         for (int c = 0; c < 3; ++c)
                             acc[c] += w * (v[0] * m[c] + v[1] * m[4 + c] + v[2] * m[8 + c] + m[12 + c]);
+                        if (lit)
+                        {
+                            const float *nb = &b.normals[3 * i];
+                            for (int c = 0; c < 3; ++c)
+                                nacc[c] += w * (nb[0] * m[c] + nb[1] * m[4 + c] + nb[2] * m[8 + c]);
+                        }
                         total += w;
                     }
                     pop_native::Vertex &out1 = o.vertices[i];
@@ -242,6 +318,19 @@ namespace pop_native_live
                     out1.uv[0] = b.uvs[2 * i];
                     out1.uv[1] = b.uvs[2 * i + 1];
                     std::memcpy(out1.colour, &b.colours[4 * i], sizeof out1.colour);
+                    const float nl = std::sqrt(nacc[0] * nacc[0] + nacc[1] * nacc[1] + nacc[2] * nacc[2]);
+                    if (lit && nl > 0)
+                    {
+                        float c3[3] = {light->amb[0], light->amb[1], light->amb[2]};
+                        for (int l = 0; l < light->count; ++l)
+                        {
+                            const float k = std::max(0.0f, (nacc[0] * light->dir[l][0] + nacc[1] * light->dir[l][1] + nacc[2] * light->dir[l][2]) / nl);
+                            for (int c = 0; c < 3; ++c)
+                                c3[c] += k * light->col[l][c];
+                        }
+                        for (int c = 0; c < 3; ++c)
+                            out1.colour[c] = std::min(c3[c], 255.0f) / 128.0f;
+                    }
                     out1.uv2[0] = out1.uv2[1] = 0;
                 }
                 o.indices = b.indices;
@@ -624,7 +713,8 @@ namespace pop_native_live
                     g_frameSeen.insert((uint64_t(element) << 16) | index).second)
                 {
                     std::vector<pop_assets::Batch> posed;
-                    if (poseSkinned(rdram, element, index, sk->second, posed))
+                    const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
+                    if (poseSkinned(rdram, element, index, sk->second, posed, &light))
                         g_framePosed.emplace_back(std::move(posed), currentMaterial(rdram));
                 }
                 if (it == g_elements.end())

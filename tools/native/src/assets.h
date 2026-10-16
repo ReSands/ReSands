@@ -63,6 +63,7 @@ namespace pop_assets
         std::vector<float> colours;   // 4 per vertex (1.0 when the batch has none)
         std::vector<int32_t> slots;   // 3 per vertex
         std::vector<float> weights;   // 3 per vertex
+        std::vector<float> normals;   // 3 per vertex (bind space, unit length) when the batch has normals, else empty
         std::vector<uint32_t> indices;
     };
     bool convertSkinned(const Pack &pack, uint32_t offset, std::vector<SkinnedBatch> &out);

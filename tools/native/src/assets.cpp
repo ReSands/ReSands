@@ -1,6 +1,7 @@
 // See assets.h. Ported from tools/jade2gltf.py (main's static path, batch_mesh, instanced meshes)
 // and tools/jadetex.py (ps2_texture, ps2_lightmap); comments there give the format evidence.
 #include "assets.h"
+#include <cmath>
 
 #include "gs_tables.h"
 
@@ -368,6 +369,19 @@ namespace pop_assets
                 {
                     o.slots[3 * i + k] = i < b.bones.size() && size_t(k) < b.bones[i].size() ? b.bones[i][k] : 0;
                     o.weights[3 * i + k] = 3 * i + k < b.weights.size() ? b.weights[3 * i + k] : 0.0f;
+                }
+            }
+            if (b.hasNormals && b.normals.size() >= 3 * n)
+            {
+                // signed bytes (length ~127), for the VU1 lighting (DoSetSkinLightEnv's lights)
+                o.normals.resize(3 * n);
+                for (size_t i = 0; i < n; ++i)
+                {
+                    const float x = float(b.normals[3 * i]), y = float(b.normals[3 * i + 1]), z = float(b.normals[3 * i + 2]);
+                    const float l = std::sqrt(x * x + y * y + z * z);
+                    o.normals[3 * i] = l > 0 ? x / l : 0.0f;
+                    o.normals[3 * i + 1] = l > 0 ? y / l : 0.0f;
+                    o.normals[3 * i + 2] = l > 0 ? z / l : 1.0f;
                 }
             }
             strips(b.flags, n, o.indices);
