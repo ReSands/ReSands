@@ -1101,6 +1101,12 @@ namespace
         g_origTextureLoad(rdram, ctx, runtime);
     }
 
+    uint32_t textureKeyOf(uint32_t index)
+    {
+        const auto it = g_textureKeys.find(index);
+        return it == g_textureKeys.end() ? 0u : it->second;
+    }
+
     void loadTextureMapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t manager = getRegU32(ctx, 4), index = getRegU32(ctx, 5); // before the call reuses them
@@ -2450,3 +2456,10 @@ namespace
 
 PS2_REGISTER_GAME_OVERRIDE("Prince of Persia: The Sands of Time (NTSC-U v1.01)",
                            "SLUS_207.43", kEntry, kElfCrc32, applyPopOverrides)
+
+// Texture index (texture manager) -> bigfile key, as registered by PS2_Texture_Load (0 if unknown);
+// used by pop_native_live.cpp.
+uint32_t popTextureKey(uint32_t index)
+{
+    return textureKeyOf(index);
+}

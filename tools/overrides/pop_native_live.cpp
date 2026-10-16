@@ -27,6 +27,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <string>
 #include <cstdio>
 #include <cstdlib>
@@ -34,6 +35,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> bigfile key
 
 namespace pop_native_live
 {
@@ -60,6 +63,7 @@ namespace pop_native_live
         std::chrono::steady_clock::time_point g_start;
         float g_frameClip[16];
         std::vector<std::pair<uint32_t, std::array<float, 16>>> g_frameDraws; // element, model matrix
+        std::vector<uint32_t> g_frameSub;                                       // current sub-material per draw
         std::unordered_set<uint64_t> g_frameSeen;                               // (element, matrix index)
 
         uint32_t guestAny(uint8_t *rdram, uint32_t addr) // main RAM or scratchpad
@@ -259,6 +263,9 @@ namespace pop_native_live
                             std::memcpy(&model[k], &bits, 4);
                         }
                         g_frameDraws.emplace_back(element, model);
+                        // the render state manager's current sub-material (0x70000034, set by
+                        // CElementList::Render before the Display call)
+                        g_frameSub.push_back(guestAny(rdram, 0x70000034u));
                     }
                 }
                 element = guest32(rdram, element + 0x4C);
@@ -272,6 +279,7 @@ namespace pop_native_live
     {
         // File: "PNF1", clip[16], draw count; per draw: model[16], batch count; per batch: vertex
         // count, index count, vertices (pop_native::Vertex), indices (u32).
+        std::function<uint32_t(uint32_t)> g_rdramForDump;
         void writeFrame()
         {
             FILE *f = std::fopen(g_framePath.c_str(), "wb");
@@ -299,6 +307,21 @@ namespace pop_native_live
                 }
             }
             std::fclose(f);
+            // side file for identifying the sub-material layout: per draw, the sub-material object's
+            // first 0x30 bytes and the key that word +4 maps to as a texture index
+            if (FILE *t = std::fopen((g_framePath + ".sub.txt").c_str(), "w"))
+            {
+                for (size_t i = 0; i < g_frameSub.size(); ++i)
+                {
+                    const uint32_t sub = g_frameSub[i];
+                    std::fprintf(t, "%zu %08x", i, sub);
+                    for (uint32_t k = 0; k < 12; ++k)
+                        std::fprintf(t, " %08x", sub ? g_rdramForDump(sub + 4 * k) : 0u);
+                    std::fprintf(t, " key4 %08x key0 %08x\n", sub ? popTextureKey(g_rdramForDump(sub + 4)) : 0u,
+                                 sub ? popTextureKey(g_rdramForDump(sub)) : 0u);
+                }
+                std::fclose(t);
+            }
             std::fprintf(stderr, "[pop:native] frame written to %s: %u draws, %zu triangles\n", g_framePath.c_str(), n, tris);
         }
 
@@ -306,6 +329,7 @@ namespace pop_native_live
         {
             if (g_frameCapturing)
             {
+                g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
                 g_frameCapturing = false;
                 g_frameDone = true;
                 writeFrame();

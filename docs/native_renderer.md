@@ -133,3 +133,13 @@ manager index) and map index -> asset key through `PS2_Texture_Load` (0x4B4E80, 
 the pack holding that key (PS2 bigfile reader as `pop_hdtextures.cpp` does for the PC file, plus
 `pop_assets::decodeTexture`). Blend state: the sub-material flags (record +0x14/+0x1C/+0x28) as in
 the offline converter.
+
+Measured the same day (Mac, opening balcony frame, `POP_NATIVE_FRAME` side file `<file>.sub.txt`):
+the sub-material object (at 0x70000034 during Display) has **word 0 = texture manager index**
+(-> key via `popTextureKey`, the override's PS2_Texture_Load registry), word 1 = flags (0x07,
+0x17, ...; bit 0x10 likely alpha test), +0x10 = the alpha-test reference in its top byte (as the
+record's +0x28). 43 of the frame's 52 draws map to a texture key: 16 are texture records of
+ff02b51e (in the local test set), 27 are in packs not unpacked locally; 9 draws have no key.
+Next: a PS2 pack cache (load + LZO-unpack the world pack the game looks up, as
+`pop_hdtextures.cpp` does for the PC bigfile; `BIG_ul_SearchKeyToPos` hook), then
+`pop_assets::decodeTexture` by key, and the sub-material's blend flags.
