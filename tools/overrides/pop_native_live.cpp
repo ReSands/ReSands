@@ -52,9 +52,10 @@ namespace pop_native_live
         constexpr uint32_t kReadElement = 0x004C9500u;
         constexpr uint32_t kMeshDisplay = 0x004C8A80u;
         constexpr uint32_t kDisplay3D = 0x004BC000u; // CJadeDrawManager::Display3DElements
+        constexpr uint32_t kRefDisplay = 0x004C7B40u; // CJMeshElementRef::Display (instanced meshes)
         constexpr size_t kRam = 32u << 20;
 
-        PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr, g_origDisplay3D = nullptr;
+        PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr, g_origDisplay3D = nullptr, g_origRefDisplay = nullptr;
 
         // Per converted element: its vertex positions (exact float bits), for the draw check.
         struct Converted
@@ -256,6 +257,129 @@ namespace pop_native_live
                          (unsigned long long)g_unknownBy['f'], (unsigned long long)g_unknownBy['?']);
         }
 
+        // Batches of a packet as the hardware receives it: the DMA chain from `packet` in guest
+        // memory, its VIF UNPACKs in order; each V3-32 positions upload closes a batch with the
+        // latest V3-16 UVs (s, t, strip flag; raw / uvscale) and V4-8 colours (0x80 = 1.0) before it.
+        // Used for instanced (CJMeshElementRef) draws, whose colours/UVs are per instance.
+        void livePacketBatches(uint8_t *rdram, uint32_t packet, double uvscale, std::vector<pop_assets::Batch> &out)
+        {
+            std::vector<uint32_t> words;
+            uint32_t pc = packet;
+            for (int steps = 0; steps < 4096; ++steps)
+            {
+                const uint32_t t0 = guestAny(rdram, pc), addr = guestAny(rdram, pc + 4) & 0x7FFFFFF0u;
+                const uint32_t qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7;
+                words.push_back(guestAny(rdram, pc + 8));
+                words.push_back(guestAny(rdram, pc + 12));
+                uint32_t data = pc + 16, next = pc + 16 + qwc * 16;
+                bool stop = false;
+                switch (id)
+                {
+                case 0: data = addr; stop = true; break;
+                case 1: break;
+                case 2: next = addr; break;
+                case 3: case 4: data = addr; next = pc + 16; break;
+                default: stop = true; break;
+                }
+                for (uint32_t k = 0; k < qwc * 4u; ++k)
+                    words.push_back(guestAny(rdram, data + 4 * k));
+                if (stop)
+                    break;
+                pc = next;
+            }
+            static const uint8_t kElementBytes[16] = {4, 2, 1, 0, 8, 4, 2, 0, 12, 6, 3, 0, 16, 8, 4, 2};
+            std::vector<uint8_t> uv, col;
+            for (size_t i = 0; i < words.size();)
+            {
+                const uint32_t w = words[i++];
+                const uint32_t cmd = (w >> 24) & 0x7F, num = ((w >> 16) & 0xFF) ? ((w >> 16) & 0xFF) : 256u;
+                if (cmd >= 0x60)
+                {
+                    const uint32_t bytes = kElementBytes[cmd & 0xF] * num, n = (bytes + 3) / 4;
+                    if (i + n > words.size())
+                        break;
+                    const uint8_t *raw = reinterpret_cast<const uint8_t *>(&words[i]);
+                    if ((cmd & 0xF) == 9)
+                        uv.assign(raw, raw + bytes);
+                    else if ((cmd & 0xF) == 0xE)
+                        col.assign(raw, raw + bytes);
+                    else if ((cmd & 0xF) == 8)
+                    {
+                        pop_assets::Batch b;
+                        b.vertices.resize(num);
+                        std::vector<int32_t> flags(num, 0);
+                        for (uint32_t v = 0; v < num; ++v)
+                        {
+                            pop_native::Vertex &vx = b.vertices[v];
+                            std::memcpy(vx.pos, raw + 12 * v, 12);
+                            int16_t st[3] = {0, 0, 0};
+                            if (6 * v + 6 <= uv.size())
+                                std::memcpy(st, &uv[6 * v], 6);
+                            vx.uv[0] = float(st[0] / uvscale);
+                            vx.uv[1] = float(st[1] / uvscale);
+                            flags[v] = st[2];
+                            for (int k = 0; k < 4; ++k)
+                                vx.colour[k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
+                            vx.uv2[0] = vx.uv2[1] = 0;
+                        }
+                        for (uint32_t v = 2; v < num; ++v)
+                        {
+                            if (flags[v])
+                                continue;
+                            if (v % 2 == 0)
+                                b.indices.insert(b.indices.end(), {v - 2, v - 1, v});
+                            else
+                                b.indices.insert(b.indices.end(), {v - 1, v - 2, v});
+                        }
+                        if (!b.indices.empty())
+                            out.push_back(std::move(b));
+                    }
+                    i += n;
+                }
+                else if (cmd == 0x4A)
+                    i += 2 * num;
+                else if (cmd == 0x50 || cmd == 0x51)
+                    i += 4 * ((w & 0xFFFF) ? (w & 0xFFFF) : 65536u);
+                else if (cmd == 0x20)
+                    i += 1;
+                else if (cmd == 0x30 || cmd == 0x31)
+                    i += 4;
+            }
+        }
+
+        std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameRefs; // instanced draws
+
+        // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
+        // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
+        void refDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
+                uint32_t ref = getRegU32(ctx, 4);
+                for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 4); ++link)
+                {
+                    if (g_frameSeen.insert((uint64_t(ref) << 16) | index | (uint64_t(1) << 63)).second)
+                    {
+                        const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
+                        std::vector<pop_assets::Batch> batches;
+                        livePacketBatches(rdram, packet, 4096.0, batches);
+                        std::array<float, 16> model;
+                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                        for (int k = 0; k < 16; ++k)
+                        {
+                            const uint32_t bits = guestAny(rdram, m + 4u * k);
+                            std::memcpy(&model[k], &bits, 4);
+                        }
+                        if (!batches.empty())
+                            g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                    }
+                    ref = guestAny(rdram, ref + 0x1C);
+                }
+            }
+            g_origRefDisplay(rdram, ctx, runtime);
+        }
+
         void readElement(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t element = getRegU32(ctx, 4);
@@ -453,6 +577,8 @@ namespace pop_native_live
             std::vector<DrawMaterial> allMaterials = g_frameMaterials;
             for (const auto &p : g_framePosed)
                 allMaterials.push_back(p.second);
+            for (const auto &r : g_frameRefs)
+                allMaterials.push_back(r.second.second);
             for (const DrawMaterial &m : allMaterials)
                 if (m.textureKey && !imageOf.count(m.textureKey))
                 {
@@ -496,7 +622,7 @@ namespace pop_native_live
                 std::fwrite(&img.height, 4, 1, f);
                 std::fwrite(img.rgba.data(), 1, img.rgba.size(), f);
             }
-            const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size());
+            const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size() + g_frameRefs.size());
             std::fwrite(&n, 4, 1, f);
             size_t tris = 0, textured = 0;
             for (size_t di = 0; di < g_frameDraws.size(); ++di)
@@ -543,6 +669,27 @@ namespace pop_native_live
                     tris += ni / 3;
                 }
             }
+            for (const auto &[batches, mm] : g_frameRefs)
+            {
+                const auto &[model, mat] = mm;
+                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                textured += image >= 0;
+                const uint32_t nb = uint32_t(batches.size());
+                std::fwrite(model.data(), 4, 16, f);
+                std::fwrite(&image, 4, 1, f);
+                std::fwrite(&mat.mode, 4, 1, f);
+                std::fwrite(&mat.cutoff, 4, 1, f);
+                std::fwrite(&nb, 4, 1, f);
+                for (const auto &b : batches)
+                {
+                    const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
+                    std::fwrite(&nv, 4, 1, f);
+                    std::fwrite(&ni, 4, 1, f);
+                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    std::fwrite(b.indices.data(), 4, ni, f);
+                    tris += ni / 3;
+                }
+            }
             std::fclose(f);
             // side file for identifying the sub-material layout: per draw, the sub-material object's
             // first 0x30 bytes and the key that word +4 maps to as a texture index
@@ -559,8 +706,8 @@ namespace pop_native_live
                 }
                 std::fclose(t);
             }
-            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu textured, %u images), %zu triangles\n",
-                         g_framePath.c_str(), n, g_framePosed.size(), textured, ni0, tris);
+            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu instanced, %zu textured, %u images), %zu triangles\n",
+                         g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
         }
 
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -638,6 +785,9 @@ namespace pop_native_live
             g_origDisplay3D = runtime.lookupFunction(kDisplay3D);
             if (g_origDisplay3D)
                 runtime.replaceFunction(kDisplay3D, display3D);
+            g_origRefDisplay = runtime.lookupFunction(kRefDisplay);
+            if (g_origRefDisplay)
+                runtime.replaceFunction(kRefDisplay, refDisplay);
         }
         g_lastReport = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[pop:native] live conversion check on\n");
