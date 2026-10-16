@@ -369,3 +369,34 @@ second window toolkit in the game process would fight raylib/GLFW for the main t
   frame pacing / interpolation (it shows each game frame until the next), in-process drawing
   replacing the GS output (the reference-renderer toggle), 2D/HUD, and everything the export lacks.
 
+## Live comparison against the game's GS picture (16 Oct night)
+`POP_NATIVE_WINDOW_GS=<d>` (Mac `pop` runtime: `GS::copyLatchedHostPresentationFrame`, detected at
+compile time, so the PC build is unaffected): each live frame carries the GS pictures latched at the
+next d frame boundaries ("GSFB" trailers); the game waits for the viewer in this mode so no frame
+is dropped. The viewer's T key shows the GS picture instead of the native one
+(`Renderer::setOverlay`), and `--live-shots S` saves native + GS pictures and prints the mean
+difference. **One boundary later lines up best** (every run, 1..4 scored). Balcony (Mac, scripted
+new game `POP_INPUT='start@55,start@65,cross@85,cross@95,cross@105'`), mean absolute difference
+per channel / share of values off by more than 24, best frames:
+- first run: 4.2-5.3 / 1.8-3.1%
+- oriented particles + sheet rows from the bottom: 4.0-4.5 / 1.8-2.3%
+- **UVs and colours persist across a packet's batches** (as in VU memory; the grouping fix of the
+  same evening had cleared them, so batches without their own UV upload were flat: the curtain
+  panels): **3.4-4.1 / 0.6-1.3%**
+Later the same night: pass-2 draws (a material's second layer; ~8 static draws per frame, 2,064 in
+a balcony run, all dropped before) are now captured from their own packets (element +0x28):
+balcony 3.3-4.0 / 0.3-1.2%. The fire glow at the window base is ~10-15% wider than the GS one
+(brightness profile), not a big error. The torch bracket is drawn by no captured path (not a
+skinned draw without a palette: 0 of those; not pass 2; the CJIdxMesh draws with its texture are
+the birds): next, find its path.
+Fixes it found, in order: light sets read as `DoSetSkinLightEnv`'s point-light path does (no type
+check; the ambient-only guess left a backlit curtain panel black), PAG_GetGeneratorAxis sizes
+(fixed sizes pre-scale the axes, otherwise per particle), oriented particles (FUN_004584C0's other
+branch: per-particle axes, the angle at +0x1C via the sine table at 0x6D3400, quaternion rows for
+particle flag 8), sprite-sheet rows counted from the bottom, skinned elements without a bone
+palette posed by the object matrix (they were dropped). Remaining visible differences on the
+balcony: the fire glow at the window base (native larger and whiter), dark smoke puffs missing,
+rain streaks missing, the torch bracket.
+Tool: `tools/livecmp.py` (score, side = native | GS | |difference| x 4, crop = zoomed crops side by
+side, mean = region brightness; pure Python).
+

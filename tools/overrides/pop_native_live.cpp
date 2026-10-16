@@ -360,6 +360,7 @@ namespace pop_native_live
         // indexed by index - u16 at 0x7000025E. n >= 2: vertex slot s uses bone s - 1 (VU 0x388); one
         // bone: every vertex uses it (VU 0). Matrices are world space, row vectors.
         uint64_t g_skinnedNoPalette = 0; // skinned draws without a bone palette (posed by the object matrix)
+        uint64_t g_passDraws[8][2] = {};  // CJMeshElement::Display calls per pass, static / skinned
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
                          std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr)
         {
@@ -486,7 +487,12 @@ namespace pop_native_live
                          (unsigned long long)s.vertices, (unsigned long long)s.triangles, (unsigned long long)s.notConverted,
                          (unsigned long long)s.draws, (unsigned long long)s.drawsKnown, (unsigned long long)s.drawsUnknown,
                          (unsigned long long)s.positionsFound, (unsigned long long)s.positions, (unsigned long long)s.drawsExact);
-            std::fprintf(stderr, "[pop:native] skinned draws without a bone palette (object matrix used): %llu\n", (unsigned long long)g_skinnedNoPalette);
+            std::fprintf(stderr, "[pop:native] skinned draws without a bone palette (object matrix used): %llu; draws per pass (static/skinned):",
+                         (unsigned long long)g_skinnedNoPalette);
+            for (int pp = 0; pp < 8; ++pp)
+                if (g_passDraws[pp][0] || g_passDraws[pp][1])
+                    std::fprintf(stderr, " %d: %llu/%llu", pp, (unsigned long long)g_passDraws[pp][0], (unsigned long long)g_passDraws[pp][1]);
+            std::fprintf(stderr, "\n");
             std::fprintf(stderr, "[pop:native] unknown draws: skinned %llu, instanced %llu, no pass %llu, failed %llu, never loaded %llu\n",
                          (unsigned long long)g_unknownBy['s'], (unsigned long long)g_unknownBy['i'], (unsigned long long)g_unknownBy['n'],
                          (unsigned long long)g_unknownBy['f'], (unsigned long long)g_unknownBy['?']);
@@ -1118,6 +1124,7 @@ namespace pop_native_live
             for (unsigned link = 0; element && link < 4096; ++link)
             {
                 ++g_stats.draws;
+                ++g_passDraws[pass & 7][g_skinned.count(element) ? 1 : 0];
                 const auto it = g_elements.find(element);
                 const auto sk = g_skinned.find(element);
                 if (sk != g_skinned.end() && g_frameCapturing && (pass == 0 || pass == 1 || pass == 4) &&
@@ -1168,6 +1175,26 @@ namespace pop_native_live
                     ++g_stats.drawsUnknown;
                     const auto sk = g_skipped.find(element);
                     ++g_unknownBy[sk == g_skipped.end() ? '?' : sk->second];
+                }
+                else if (pass == 2 && g_frameCapturing && !g_skinned.count(element) &&
+                         g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(2) << 56) | alphaPassBit(rdram)).second)
+                {
+                    // pass 2 (a material's second layer, CJMeshElement::Display with the constant
+                    // colour / local alpha of ExtractLocalAlphaAndConstantColor): its own packet at
+                    // element +0x28, decoded from guest memory with its UVs and colours as sent
+                    ++g_stats.drawsKnown;
+                    const uint32_t packet = guest32(rdram, element + 0x28) & ~0xFu;
+                    std::vector<pop_assets::Batch> batches;
+                    if (packet)
+                        livePacketBatches(rdram, packet, 512.0, batches);
+                    if (!batches.empty())
+                    {
+                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                        std::array<float, 16> model;
+                        for (int k = 0; k < 16; ++k)
+                            model[k] = guestF(rdram, m + 4u * k);
+                        g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                    }
                 }
                 else if (pass == 3 && g_frameCapturing)
                 {
