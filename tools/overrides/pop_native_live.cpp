@@ -63,7 +63,7 @@ namespace pop_native_live
         // GFX draws of the captured frame (not drawn natively yet): entry type byte, element, texture key, flags
         struct GfxDraw
         {
-            uint32_t type, element, textureKey, flags;
+            uint32_t type, element, textureKey, flags, list;
         };
         std::vector<GfxDraw> g_frameGfx;
         PS2Runtime::RecompiledFunction g_origRead = nullptr, g_origDisplay = nullptr, g_origDisplay3D = nullptr, g_origRefDisplay = nullptr;
@@ -99,9 +99,23 @@ namespace pop_native_live
             float fogA = 255.0f, fogB = 0.0f;
             uint32_t fogColour = 0;
             uint32_t zTest = 1; // render state 0x70000038: 0 = ZTST ALWAYS (Display3DElements' +0x78 list)
+            // GS FRAME FBMSK as FUN_004B2000 sets it: flags 0x60 == 0x40: RGB masked (alpha only);
+            // else alpha masked unless flag 0x8 or 0x20, RGB masked with 0x40, plus ~render state
+            // 0x70000044 (0xFF000000 around list +0x98: alpha only). The frame's alpha is the glow mask
+            // (ColorDiffusion copies Cs * As).
+            uint32_t fbmsk = 0xFF000000u;
+            uint32_t list = 0;
             uint32_t seq = 0;   // the draw's position in the frame (game draw order)
         };
         uint32_t g_frameSeq = 0;
+        // dedupe key bit for the alpha-only pass (list +0x98, render state 0x44 = 0xFF000000): the game
+        // draws mask elements again there, depth-tested against the finished scene
+        uint64_t alphaPassBit(uint8_t *rdram);
+        // the element list being rendered (CElementList::Render 0x4B9440, a0 - the draw manager given to
+        // Display3DElements): EraseAlphaBuffer runs just before list +0x98, so only lists +0x98 and
+        // +0xA8 leave alpha (the glow mask) in the frame
+        uint32_t g_drawManager = 0, g_currentList = 0;
+        PS2Runtime::RecompiledFunction g_origListRender = nullptr;
         const bool g_noLighting = std::getenv("POP_NATIVE_NOLIGHT") != nullptr; // A/B: unlit characters
         uint8_t *g_rdramPtr = nullptr;
         std::vector<DrawMaterial> g_frameMaterials;
@@ -191,6 +205,22 @@ namespace pop_native_live
             std::memcpy(&dm.fogB, &fb, 4);
             dm.fogColour = guestAny(rdram, 0x70000024u) & 0xFFFFFF;
             dm.zTest = guest8(rdram, 0x70000038u);
+            if ((dm.flags & 0x60) == 0x40)
+                dm.fbmsk = 0x00FFFFFFu;
+            else
+            {
+                dm.fbmsk = 0;
+                if (!(dm.flags & 0x20) && !(dm.flags & 0x8))
+                    dm.fbmsk |= 0xFF000000u;
+                if (dm.flags & 0x40)
+                    dm.fbmsk |= 0x00FFFFFFu;
+                dm.fbmsk |= ~guestAny(rdram, 0x70000044u);
+            }
+            // EraseAlphaBuffer runs just before list +0x98, the only list drawn with render state 0x44 =
+            // 0xFF000000 (alpha only): earlier alpha writes do not survive, so only that pass makes the mask
+            if (guestAny(rdram, 0x70000044u) != 0xFF000000u)
+                dm.fbmsk |= 0xFF000000u;
+            dm.list = g_currentList;
             return dm;
         }
 
@@ -214,6 +244,7 @@ namespace pop_native_live
             std::memcpy(&f, &b, 4);
             return f;
         }
+        uint64_t alphaPassBit(uint8_t *rdram) { return guestAny(rdram, 0x70000044u) == 0xFF000000u ? uint64_t(1) << 62 : 0; }
         LightEnv readLightEnv(uint8_t *rdram)
         {
             LightEnv e;
@@ -486,7 +517,7 @@ namespace pop_native_live
                 uint32_t ref = getRegU32(ctx, 4);
                 for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 4); ++link)
                 {
-                    if (g_frameSeen.insert((uint64_t(ref) << 16) | index | (uint64_t(1) << 63)).second)
+                    if (g_frameSeen.insert((uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram)).second)
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
                         std::vector<pop_assets::Batch> batches;
@@ -519,7 +550,7 @@ namespace pop_native_live
                 for (uint32_t k = 0, n = guest8(rdram, entry + 0xC); sub && k < n; ++k)
                     sub = guestAny(rdram, sub + 0x20);
                 g_frameGfx.push_back({guest8(rdram, entry + 6), guestAny(rdram, entry) << 4,
-                                      sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u});
+                                      sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u, g_currentList});
             }
             g_origGfx(rdram, ctx, runtime);
         }
@@ -550,10 +581,32 @@ namespace pop_native_live
                 ++g_haloAddsInWindow;
             g_origAddHalo(rdram, ctx, runtime);
         }
+        // CAfterEffect::ColorDiffusion (retail 0x4AE100; prototype 0x46F680): (this, ?, levels, FIX,
+        // ?, mask, ?, convolution, strength on the stack) - the glow
+        PS2Runtime::RecompiledFunction g_origGlow = nullptr;
+        uint32_t g_glowCalls = 0, g_glow[5] = {};
+        void colorDiffusion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing || g_frameDone)
+            {
+                if (!g_glowCalls || g_frameCapturing)
+                {
+                    g_glow[0] = getRegU32(ctx, 6);
+                    g_glow[1] = getRegU32(ctx, 7);
+                    g_glow[2] = getRegU32(ctx, 9);
+                    g_glow[3] = getRegU32(ctx, 11);
+                    g_glow[4] = guestAny(rdram, getRegU32(ctx, 29));
+                }
+                if (g_glowCalls++ < 4)
+                    std::fprintf(stderr, "[pop:native] ColorDiffusion levels %u FIX %u mask %u conv %u strength %u (a1 %08x t0 %08x t2 %08x)\n",
+                                 g_glow[0], g_glow[1], g_glow[2], g_glow[3], g_glow[4], getRegU32(ctx, 5), getRegU32(ctx, 8), getRegU32(ctx, 10));
+            }
+            g_origGlow(rdram, ctx, runtime);
+        }
         struct OtherDraw
         {
             int path;
-            uint32_t textureKey, flags, object;
+            uint32_t textureKey, flags, object, list;
         };
         std::vector<OtherDraw> g_frameOther;
         template <int N>
@@ -563,7 +616,7 @@ namespace pop_native_live
             {
                 const uint32_t sub = guestAny(rdram, 0x70000034u);
                 g_frameOther.push_back({N, sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
-                                        getRegU32(ctx, 4)});
+                                        getRegU32(ctx, 4), g_currentList});
                 if (N == 0)
                 {
                     // CJIdxMesh::Display(mesh, matrix index): CALLs the packet at the low 28 bits of the
@@ -710,7 +763,7 @@ namespace pop_native_live
                 const auto it = g_elements.find(element);
                 const auto sk = g_skinned.find(element);
                 if (sk != g_skinned.end() && g_frameCapturing && (pass == 0 || pass == 1 || pass == 4) &&
-                    g_frameSeen.insert((uint64_t(element) << 16) | index).second)
+                    g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
                 {
                     std::vector<pop_assets::Batch> posed;
                     const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
@@ -743,7 +796,7 @@ namespace pop_native_live
                     g_stats.positionsFound += found;
                     if (found == pos.size() / 3 && !pos.empty())
                         ++g_stats.drawsExact;
-                    if (g_frameCapturing && g_frameSeen.insert((uint64_t(element) << 16) | index).second)
+                    if (g_frameCapturing && g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
                     {
                         // matrix pool: base pointer at scratchpad 0x70000260, 0x40 bytes per index
                         const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
@@ -798,10 +851,11 @@ namespace pop_native_live
             FILE *f = std::fopen(g_framePath.c_str(), "wb");
             if (!f)
                 return;
-            // "PNF4": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
+            // "PNF5": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
             // per draw: model[16], image index (-1: none), render state flags, AREF word, fog a, fog b,
-            // FOGCOL, Z test, batch count, batches)
-            std::fwrite("PNF4", 1, 4, f);
+            // FOGCOL, Z test, FBMSK, batch count, batches); then "GLOW" + ColorDiffusion's parameters
+            // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame
+            std::fwrite("PNF5", 1, 4, f);
             std::fwrite(g_frameClip, 4, 16, f);
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
@@ -914,6 +968,7 @@ namespace pop_native_live
                 std::fwrite(&mat.fogB, 4, 1, f);
                 std::fwrite(&mat.fogColour, 4, 1, f);
                 std::fwrite(&mat.zTest, 4, 1, f);
+                std::fwrite(&mat.fbmsk, 4, 1, f);
                 std::fwrite(&nb, 4, 1, f);
                 for (const auto &b : *batches)
                 {
@@ -925,6 +980,9 @@ namespace pop_native_live
                     tris += ni / 3;
                 }
             }
+            std::fwrite("GLOW", 1, 4, f);
+            std::fwrite(&g_glowCalls, 4, 1, f);
+            std::fwrite(g_glow, 4, 5, f);
             std::fclose(f);
             // side file for identifying the sub-material layout: per draw, the sub-material object's
             // first 0x30 bytes and the key that word +4 maps to as a texture index
@@ -940,6 +998,19 @@ namespace pop_native_live
                                  sub ? popTextureKey(g_rdramForDump(sub)) : 0u);
                 }
                 std::fclose(t);
+            }
+            {
+                int alphaWriters = 0;
+                std::map<uint32_t, int> lists;
+                for (const DrawMaterial &m : allMaterials)
+                {
+                    alphaWriters += (m.fbmsk & 0xFF000000u) == 0;
+                    ++lists[m.list];
+                }
+                std::fprintf(stderr, "[pop:native] draws writing alpha (glow mask): %d; draws per list:", alphaWriters);
+                for (const auto &kv : lists)
+                    std::fprintf(stderr, " +0x%x x%d", kv.first, kv.second);
+                std::fprintf(stderr, "\n");
             }
             {
                 // draws per render state blend kind (flags bits 16-19, SetBlending's table)
@@ -965,16 +1036,16 @@ namespace pop_native_live
                 }
                 std::fprintf(stderr, "\n");
                 for (size_t i = 0; i < g_frameGfx.size() && i < 24; ++i)
-                    std::fprintf(stderr, "[pop:native]   gfx %zu: type %02x element %08x tex %08x flags %08x\n", i, g_frameGfx[i].type,
-                                 g_frameGfx[i].element, g_frameGfx[i].textureKey, g_frameGfx[i].flags);
+                    std::fprintf(stderr, "[pop:native]   gfx %zu: type %02x element %08x tex %08x flags %08x list +0x%x\n", i, g_frameGfx[i].type,
+                                 g_frameGfx[i].element, g_frameGfx[i].textureKey, g_frameGfx[i].flags, g_frameGfx[i].list);
             }
             for (const OtherDraw &o : g_frameOther)
             {
                 pop_native::Image img;
                 const bool ok = o.textureKey && findTexture(o.textureKey, img);
-                std::fprintf(stderr, "[pop:native]   %s: object %08x tex %08x (%ux%u, image %d) flags %08x\n", g_other[o.path].name, o.object,
-                             o.textureKey, ok ? img.width : 0u, ok ? img.height : 0u,
-                             imageOf.count(o.textureKey) ? imageOf[o.textureKey] : -1, o.flags);
+                std::fprintf(stderr, "[pop:native]   %s: object %08x tex %08x (%ux%u, image %d) flags %08x list +0x%x\n", g_other[o.path].name,
+                             o.object, o.textureKey, ok ? img.width : 0u, ok ? img.height : 0u,
+                             imageOf.count(o.textureKey) ? imageOf[o.textureKey] : -1, o.flags, o.list);
             }
             {
                 const uint32_t count = guestAny(g_rdramPtr, 0x0067518Cu);
@@ -1001,9 +1072,16 @@ namespace pop_native_live
                          g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
         }
 
+        void listRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_currentList = getRegU32(ctx, 4) - g_drawManager;
+            g_origListRender(rdram, ctx, runtime);
+        }
+
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdramPtr = rdram;
+            g_drawManager = getRegU32(ctx, 4);
             if (g_frameCapturing)
             {
                 g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
@@ -1089,6 +1167,12 @@ namespace pop_native_live
             hookOther(1, otherDisplay<1>);
             hookOther(2, otherDisplay<2>);
             hookOther(3, otherDisplay<3>);
+            g_origListRender = runtime.lookupFunction(0x004B9440u);
+            if (g_origListRender)
+                runtime.replaceFunction(0x004B9440u, listRender);
+            g_origGlow = runtime.lookupFunction(0x004AE100u);
+            if (g_origGlow)
+                runtime.replaceFunction(0x004AE100u, colorDiffusion);
             g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
             if (g_origAddHalo)
                 runtime.replaceFunction(0x004AB1C0u, addHalo);

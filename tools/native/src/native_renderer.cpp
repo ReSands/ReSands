@@ -508,7 +508,8 @@ namespace pop_native
         }
 
         // Pipelines per blend state, made on first use: key = blend kind (bits 0-3), destination
-        // alpha (4), back-face culling (5), depth write (6), no depth test (7: GS ZTST ALWAYS).
+        // alpha (4), back-face culling (5), depth write (6), no depth test (7: GS ZTST ALWAYS), colour
+        // masked (8) and alpha written (9) (GS FBMSK).
         std::unordered_map<uint32_t, VkPipeline> pipelines;
         VkShaderModule vs = VK_NULL_HANDLE, fs = VK_NULL_HANDLE;
 
@@ -519,7 +520,7 @@ namespace pop_native
             const AlphaMode mode = mat->alphaMode == AlphaMode::Mask ? AlphaMode::Opaque : mat->alphaMode;
             const bool depthWrite = isBlended(mode) ? mat->depthWrite && !mat->legacyBlend : mat->depthWrite;
             return uint32_t(mode) | (mat->destAlpha ? 1u << 4 : 0u) | (!mat->doubleSided ? 1u << 5 : 0u) | (depthWrite ? 1u << 6 : 0u) |
-                   (!mat->depthTest ? 1u << 7 : 0u);
+                   (!mat->depthTest ? 1u << 7 : 0u) | (!mat->writeRgb ? 1u << 8 : 0u) | (mat->writeAlpha ? 1u << 9 : 0u);
         }
 
         VkPipeline pipeline(uint32_t key, std::string &error)
@@ -570,9 +571,11 @@ namespace pop_native
             ds.depthTestEnable = VK_TRUE;
             ds.depthWriteEnable = (key & (1u << 6)) ? VK_TRUE : VK_FALSE;
             // depth = near / w: nearer is larger
-            ds.depthCompareOp = (key & (1u << 7)) ? VK_COMPARE_OP_ALWAYS : VK_COMPARE_OP_GREATER;
+            // GS ZTST GEQUAL (TEST 0x50000), so the game's same-depth redraws (the glow mask pass) pass
+            ds.depthCompareOp = (key & (1u << 7)) ? VK_COMPARE_OP_ALWAYS : VK_COMPARE_OP_GREATER_OR_EQUAL;
             VkPipelineColorBlendAttachmentState ba{};
-            ba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            ba.colorWriteMask = ((key & (1u << 8)) ? 0u : (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT)) |
+                                ((key & (1u << 9)) ? VK_COLOR_COMPONENT_A_BIT : 0u);
             // GS (A - B) * C + D as src * S + dst * D; C = As (shader alpha) or Ad (destination alpha)
             const AlphaMode mode = AlphaMode(key & 0xF);
             const bool dest = (key & (1u << 4)) != 0;
@@ -583,9 +586,9 @@ namespace pop_native
             {
                 ba.blendEnable = VK_TRUE;
                 ba.colorBlendOp = VK_BLEND_OP_ADD;
-                // destination alpha is kept (blended draws do not change it)
-                ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-                ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                // the GS does not blend alpha: As is written where FBMSK allows (write mask above)
+                ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+                ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
                 ba.alphaBlendOp = VK_BLEND_OP_ADD;
                 switch (mode)
                 {

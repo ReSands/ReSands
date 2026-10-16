@@ -53,6 +53,8 @@ namespace pop_native
         bool destAlpha = false;     // blend with the destination alpha (flag 0x1000)
         bool depthWrite = true;     // false: ZBUF ZMSK (flag 0x200)
         bool depthTest = true;      // false: ZTST ALWAYS (render state 0x70000038 = 0)
+        bool writeRgb = true;       // GS FBMSK: colour written
+        bool writeAlpha = false;    // GS FBMSK: alpha (= As) written; the frame's alpha is the glow mask
         float fix = 1.0f;           // FIX / 128 for Subtract
         bool legacyBlend = false;   // glTF BLEND: no depth write, nearly transparent texels dropped
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
@@ -127,7 +129,7 @@ namespace pop_native
         float nearW = 0.05f;      // near plane in clip w (view depth)
         int cull = 0;             // experiment: 0 none, 1 cull clockwise, 2 cull counter-clockwise (all draws)
         bool cullClockwise = true; // single-sided materials: which screen winding is the back face
-        float clearColour[4] = {24 / 255.0f, 24 / 255.0f, 32 / 255.0f, 1.0f};
+        float clearColour[4] = {24 / 255.0f, 24 / 255.0f, 32 / 255.0f, 0.0f}; // alpha 0: EraseAlphaBuffer
         // windowed use: the instance extensions the window system needs, and a callback that creates
         // the window's surface for the instance (returns a VkSurfaceKHR handle, 0 on failure)
         std::vector<std::string> instanceExtensions;

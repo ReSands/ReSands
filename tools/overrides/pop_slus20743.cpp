@@ -735,6 +735,17 @@ namespace
             }
         Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         ExportImage(img, path.c_str());
+        // the alpha channel (the glow mask, 0x80 = 1.0) as a grey image, doubled
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                const uint32_t a = GSPSMCT32::addrPSMCT32(fbp * 32u, fbw ? fbw : 1u, x, y) % PS2_GS_VRAM_SIZE;
+                uint8_t *o = &px[(static_cast<size_t>(y) * w + x) * 4];
+                o[0] = o[1] = o[2] = static_cast<uint8_t>(std::min(255, vram[a + 3] * 2));
+            }
+        std::string apath = path;
+        apath.insert(apath.size() - 4, "_alpha");
+        ExportImage(img, apath.c_str());
     }
     void maybePassDump(const uint8_t *data, uint32_t size)
     {

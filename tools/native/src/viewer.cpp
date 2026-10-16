@@ -15,6 +15,7 @@
 #include "assets.h"
 #include "free_camera.h"
 #include "native_renderer.h"
+#include "postfx.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -153,7 +154,7 @@ int main(int argc, char **argv)
         std::ifstream peek(argv[1], std::ios::binary);
         char magic[4] = {};
         peek.read(magic, 4);
-        options.gameOrder = std::memcmp(magic, "PNF4", 4) == 0;
+        options.gameOrder = std::memcmp(magic, "PNF4", 4) == 0 || std::memcmp(magic, "PNF5", 4) == 0;
     }
     cgltf_options opt{};
     cgltf_data *data = nullptr;
@@ -478,12 +479,18 @@ int main(int argc, char **argv)
     // --frame: "PNF1", world -> clip[16], draws (model[16], batches: vertex/index counts, Vertex[],
     // u32[]), written by tools/overrides/pop_native_live.cpp; the frame's own camera replaces the
     // clip file's
+    uint32_t glow[5] = {};
+    bool glowOn = false, noGlow = false; // ColorDiffusion ran in the captured frame (PNF5); --noglow skips it
+    for (int i = 4; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--noglow"))
+            noGlow = true;
     auto addFrame = [&](const char *path) -> bool {
         std::ifstream f(path, std::ios::binary);
         char magic[4] = {};
         f.read(magic, 4);
         // PNF3: per draw the render state flags + AREF word instead of PNF2's alpha mode + cutoff
-        const bool v4 = std::memcmp(magic, "PNF4", 4) == 0; // + fog a, b, FOGCOL, Z test per draw
+        const bool v5 = std::memcmp(magic, "PNF5", 4) == 0; // + FBMSK per draw, GLOW trailer
+        const bool v4 = v5 || std::memcmp(magic, "PNF4", 4) == 0; // + fog a, b, FOGCOL, Z test per draw
         const bool v3 = v4 || std::memcmp(magic, "PNF3", 4) == 0;
         const bool v2 = v3 || std::memcmp(magic, "PNF2", 4) == 0;
         if (!v2 && std::memcmp(magic, "PNF1", 4) != 0)
@@ -520,13 +527,15 @@ int main(int argc, char **argv)
                 f.read(reinterpret_cast<char *>(&image), 4);
                 f.read(reinterpret_cast<char *>(&mode), 4);
                 f.read(reinterpret_cast<char *>(&word), 4);
-                uint32_t fogColour = 0, zTest = 1;
+                uint32_t fogColour = 0, zTest = 1, fbmsk = 0xFF000000u;
                 if (v4)
                 {
                     f.read(reinterpret_cast<char *>(&d.fogA), 4);
                     f.read(reinterpret_cast<char *>(&d.fogB), 4);
                     f.read(reinterpret_cast<char *>(&fogColour), 4);
                     f.read(reinterpret_cast<char *>(&zTest), 4);
+                    if (v5)
+                        f.read(reinterpret_cast<char *>(&fbmsk), 4);
                     d.ownFog = d.ownFogColour = true;
                     for (int k = 0; k < 3; ++k)
                         d.fogColour[k] = float((fogColour >> (8 * k)) & 0xFF) / 255.0f;
@@ -534,7 +543,7 @@ int main(int argc, char **argv)
                 const bool hasImage = image >= 0 && size_t(image) < imageIndex.size();
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest);
+                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 2u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
@@ -543,6 +552,8 @@ int main(int argc, char **argv)
                         {
                             pop_native::materialFromGsFlags(mode, word, mat);
                             mat.depthTest = zTest != 0;
+                            mat.writeRgb = (fbmsk & 0xFFFFFFu) != 0xFFFFFFu;
+                            mat.writeAlpha = (fbmsk & 0xFF000000u) == 0;
                         }
                         else
                         {
@@ -572,6 +583,18 @@ int main(int argc, char **argv)
                 triTotal += ni / 3;
                 d.mesh = r.addMesh(std::move(mesh));
                 draws.push_back(d);
+            }
+        }
+        if (v5)
+        {
+            char tag[4] = {};
+            uint32_t calls = 0;
+            if (f.read(tag, 4) && std::memcmp(tag, "GLOW", 4) == 0 && f.read(reinterpret_cast<char *>(&calls), 4))
+            {
+                f.read(reinterpret_cast<char *>(glow), sizeof glow);
+                glowOn = calls > 0;
+                std::printf("glow (ColorDiffusion): %u calls, levels %u FIX %u mask %u convolution %u strength %d\n", calls, glow[0], glow[1],
+                            glow[2], glow[3], int(glow[4]));
             }
         }
         std::printf("frame %s: %u element draws, %zu materials\n", path, n, materials.size());
@@ -732,6 +755,8 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "render: %s\n", error.c_str());
         return 1;
     }
+    if (glowOn && !noGlow)
+        pop_postfx::colorDiffusion(rgba, int(width), int(height), int(glow[0]), int(glow[1]), glow[2] != 0, glow[3] != 0, int(glow[4]));
     const auto t2 = std::chrono::steady_clock::now();
     // opaque output (the colour target's alpha is not meaningful for the comparison)
     std::vector<uint8_t> rgb(size_t(width) * height * 3);

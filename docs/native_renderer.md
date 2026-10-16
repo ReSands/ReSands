@@ -229,3 +229,27 @@ per vertex (normals now kept by `pop_assets::convertSkinned`, rotated by the bon
 point lights (types 1/2) are skipped. A/B: `POP_NATIVE_NOLIGHT=1`.
 `~/Desktop/pop_renders/30_live_prince_game_unlit_lit.png`: game, unlit, lit (trousers lose the
 warm cast, as in the game; the game's warm rim light from the curtain fire is a point light).
+
+## Glow (ColorDiffusion) natively (16 Oct)
+Pass dump (`POP_GIF_TAP=1 POP_PASSDUMP_AT=135`, now also writing each buffer's alpha as
+`*_alpha.png`) showed the balcony's curtain glow is post-processing: `CAfterEffect::ColorDiffusion`
+(retail **0x4AE100**, prototype 0x46F680; decompile `game/analysis/post/decomp/0046f680.c`) with
+`ApplyConvolution` (retail 0x4AE640):
+1. half-resolution copy of the frame, ALPHA 0x88 (Cs * As) when `mask`: the frame's **alpha
+   channel is the glow mask**;
+2. `levels - 1` times: bilinear halving into the next rectangle of the half-res buffer (it shares
+   memory with the Z buffer), then (with `convolution`) a 3x3 box: every weight 15 (retail table
+   0x63F418) + `strength`, as vertex colour / 128; centre tap copied (0x29), eight neighbours at
+   +-1 pixel added (0x68);
+3. levels `levels-1 .. 1` added onto the frame, bilinear, ALPHA 0x68 with FIX = `fix`.
+Balcony: levels 6, FIX 128, mask on, convolution on, strength 4 (args a2, a3, t1, t3, stack).
+The mask: `Display3DElements` erases the frame alpha just before list +0x98, which runs with render
+state 0x44 = 0xFF000000 (FBMSK: alpha only). Elements in that list are drawn a **second time**,
+writing only As where they pass the depth test (ZTST GEQUAL) against the finished scene: here the
+light quad behind the curtains (flags 0x440F: 0x8 = alpha written; local alpha 0x5C), visible only
+below the curtain hem. Implemented: per-draw FBMSK (frame format **PNF5**, plus a `GLOW` trailer with
+the parameters), renderer colour/alpha write masks, GEQUAL depth test, the alpha-only pass kept as
+its own draw, and `tools/native/src/postfx.h` = CPU reference of ColorDiffusion (viewer applies it;
+`--noglow` to skip). `~/Desktop/pop_renders/31_live_glow_game_vs_native.png`.
+Next: the same pass as shaders (a CPU reference to judge a GPU version against: Qwen-sized), the
+other effects when a scene uses them (DepthBlur, BrightnessContrast, SmartBlur, halos).

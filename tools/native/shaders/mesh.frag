@@ -36,6 +36,6 @@ void main()
     // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending
     base = mix(pc.fogColour.rgb, base, vFog);
     // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
-    // (pipeline) uses it as the GS ALPHA C term
-    outColour = vec4(base, (flags & 2) != 0 ? t.a * min(vColour.a, 1.0) : 1.0);
+    // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows
+    outColour = vec4(base, t.a * min(vColour.a, 1.0));
 }
