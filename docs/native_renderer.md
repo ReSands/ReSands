@@ -111,3 +111,11 @@ Moonlight (it added its own pops).
    above) running in the background during one playthrough.
 5. Then fix the flagged issues one by one. Decide the final form of the QA tooling (incl. the PCSX2
    second opinion) at that point.
+
+## Reference renderer toggle (decided 16 Oct)
+1.0 keeps the emulated GS as an optional reference renderer next to the native Vulkan one (native
+by default). A key toggles the displayed renderer. Default: the emulated path (VIF1/VU1/GS) is fed
+only while shown, and is correct again a frame or two after switching. Setting "comparison mode":
+both run every frame, so switching is instant (and a split-screen view becomes possible), at the
+cost of the VU1 + GS work. The hybrid wiring built for the frame-by-frame comparison during the
+migration is kept for this instead of being removed.
