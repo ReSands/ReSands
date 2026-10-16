@@ -78,6 +78,7 @@ namespace pop_native_live
             float cutoff = 0.5f;
         };
         std::vector<DrawMaterial> g_frameMaterials;
+        std::unordered_map<uint64_t, uint32_t> g_frameLightmap; // (element, matrix index) -> lightmap texture key (pass 3)
 
         // PS2 world packs the game has looked up (BIG_ul_SearchKeyToPos), read from the disc's
         // PRINCE.BF (POP_PS2_BIGFILE, default DATA/PRINCE.BF) and unpacked on a worker thread:
@@ -280,6 +281,13 @@ namespace pop_native_live
                     const auto sk = g_skipped.find(element);
                     ++g_unknownBy[sk == g_skipped.end() ? '?' : sk->second];
                 }
+                else if (pass == 3 && g_frameCapturing)
+                {
+                    // lightmap pass (CLMElementList::Render): note the current sub-material's texture
+                    const uint32_t sub = guestAny(rdram, 0x70000034u);
+                    const uint32_t key = sub ? popTextureKey(guestAny(rdram, sub)) : 0u;
+                    g_frameLightmap[(uint64_t(element) << 16) | index] = key;
+                }
                 else if (pass == 0 || pass == 1 || pass == 4)
                 {
                     ++g_stats.drawsKnown;
@@ -358,6 +366,19 @@ namespace pop_native_live
                     if (imageOf[m.textureKey] >= 0)
                         images.push_back(std::move(img));
                 }
+            {
+                std::unordered_map<uint32_t, int> keys;
+                for (const auto &kv : g_frameLightmap)
+                    ++keys[kv.second];
+                std::fprintf(stderr, "[pop:native] lightmap pass: %zu draws, %zu distinct keys:", g_frameLightmap.size(), keys.size());
+                for (const auto &kv : keys)
+                {
+                    pop_native::Image img;
+                    const bool ok = findTexture(kv.first, img);
+                    std::fprintf(stderr, " %08x x%d (%s %ux%u)", kv.first, kv.second, ok ? "decoded" : "not found", img.width, img.height);
+                }
+                std::fprintf(stderr, "\n");
+            }
             const uint32_t ni0 = uint32_t(images.size());
             std::fwrite(&ni0, 4, 1, f);
             for (const auto &img : images)
