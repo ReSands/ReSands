@@ -52,6 +52,20 @@ namespace pop_assets
     // converter does not draw (skinned, instanced, no pass).
     bool convertElement(const Pack &pack, uint32_t offset, double uvscale, std::vector<Batch> &out);
 
+    // A skinned element (bone palette, pass packet with bone slots and weights): bind-pose batches.
+    // Per vertex: up to 3 (slot, weight) pairs; slot k >= 1 = the k-th bone of the element's palette
+    // (0 = unused). UVs at 1/512. Posing is the caller's (the bone matrices come from the game).
+    struct SkinnedBatch
+    {
+        std::vector<float> positions; // 3 per vertex
+        std::vector<float> uvs;       // 2 per vertex
+        std::vector<float> colours;   // 4 per vertex (1.0 when the batch has none)
+        std::vector<int32_t> slots;   // 3 per vertex
+        std::vector<float> weights;   // 3 per vertex
+        std::vector<uint32_t> indices;
+    };
+    bool convertSkinned(const Pack &pack, uint32_t offset, std::vector<SkinnedBatch> &out);
+
     // An instanced element (LOD variant 3 block, no pass packet): the shared positions/UVs, with
     // the game object's per-vertex colour block (`colours`, may be null: white).
     bool isInstanced(const Pack &pack, uint32_t offset);

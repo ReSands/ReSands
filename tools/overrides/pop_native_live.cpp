@@ -78,6 +78,7 @@ namespace pop_native_live
             float cutoff = 0.5f;
         };
         std::vector<DrawMaterial> g_frameMaterials;
+        std::vector<std::pair<std::vector<pop_assets::Batch>, DrawMaterial>> g_framePosed; // skinned draws, posed in world space
         std::unordered_map<uint64_t, uint32_t> g_frameLightmap; // (element, matrix index) -> lightmap texture key (pass 3)
 
         // PS2 world packs the game has looked up (BIG_ul_SearchKeyToPos), read from the disc's
@@ -114,7 +115,94 @@ namespace pop_native_live
             std::memcpy(&v, getConstMemPtr(rdram, addr), 4);
             return v;
         }
+        uint32_t guest8(uint8_t *rdram, uint32_t addr) { return *getConstMemPtr(rdram, addr); }
+        uint32_t guest16(uint8_t *rdram, uint32_t addr)
+        {
+            uint16_t v;
+            std::memcpy(&v, getConstMemPtr(rdram, addr), 2);
+            return v;
+        }
+
+        // The render state's current sub-material (0x70000034, set by CElementList::Render before
+        // Display): word 0 = texture index, word 1 = the record's +0x1C flags (0x10: alpha test),
+        // +0x10 = its +0x28 (AREF in the top byte), word 11 = its +0x14 (0x80: blending); 16 Oct.
+        DrawMaterial currentMaterial(uint8_t *rdram)
+        {
+            DrawMaterial dm;
+            const uint32_t sub = guestAny(rdram, 0x70000034u);
+            if (!sub)
+                return dm;
+            dm.textureKey = popTextureKey(guestAny(rdram, sub));
+            const uint32_t f1c = guestAny(rdram, sub + 4), f28 = guestAny(rdram, sub + 0x10), f14 = guestAny(rdram, sub + 0x2C);
+            if (f14 & 0x80)
+                dm.mode = uint32_t(pop_native::AlphaMode::Blend);
+            else if (f1c & 0x10)
+            {
+                dm.mode = uint32_t(pop_native::AlphaMode::Mask);
+                dm.cutoff = float((f28 >> 24) / 255.0);
+            }
+            return dm;
+        }
+
+        // A skinned element drawn with matrix index `index`, posed as CJMeshElement::Display uploads
+        // its bones: palette at element +0x48 (byte 0 = bone count n, bytes 4.. = bone ids); bone k's
+        // matrix = *(0x700001D0) + (firstBone + id[k]) * 0x40, firstBone = u16 table at 0x700001DC
+        // indexed by index - u16 at 0x7000025E. n >= 2: vertex slot s uses bone s - 1 (VU 0x388); one
+        // bone: every vertex uses it (VU 0). Matrices are world space, row vectors.
+        bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
+                         std::vector<pop_assets::Batch> &out)
+        {
+            const uint32_t pal = guestAny(rdram, element + 0x48);
+            if (!pal)
+                return false;
+            const uint32_t n = guest8(rdram, pal);
+            const uint32_t base = guestAny(rdram, 0x700001D0u), baseIndex = guest16(rdram, 0x7000025Eu);
+            const uint32_t first = guest16(rdram, 0x700001DCu + ((index & 0xFFFF) - baseIndex) * 2u);
+            std::vector<std::array<float, 16>> bones(std::max(n, 1u));
+            for (uint32_t k = 0; k < bones.size(); ++k)
+            {
+                const uint32_t m = base + (first + guest8(rdram, pal + 4 + k)) * 0x40u;
+                for (int j = 0; j < 16; ++j)
+                {
+                    const uint32_t bits = guestAny(rdram, m + 4u * j);
+                    std::memcpy(&bones[k][j], &bits, 4);
+                }
+            }
+            for (const auto &b : bind)
+            {
+                const size_t nv = b.positions.size() / 3;
+                pop_assets::Batch o;
+                o.vertices.resize(nv);
+                for (size_t i = 0; i < nv; ++i)
+                {
+                    const float *v = &b.positions[3 * i];
+                    float acc[3] = {0, 0, 0}, total = 0;
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const int32_t slot = b.slots[3 * i + k];
+                        const float w = n < 2 ? (k == 0 ? 1.0f : 0.0f) : b.weights[3 * i + k];
+                        if (w == 0 || (n >= 2 && (slot < 1 || uint32_t(slot) > n)))
+                            continue;
+                        const auto &m = bones[n < 2 ? 0 : uint32_t(slot - 1)];
+                        for (int c = 0; c < 3; ++c)
+                            acc[c] += w * (v[0] * m[c] + v[1] * m[4 + c] + v[2] * m[8 + c] + m[12 + c]);
+                        total += w;
+                    }
+                    pop_native::Vertex &out1 = o.vertices[i];
+                    for (int c = 0; c < 3; ++c)
+                        out1.pos[c] = total > 0 ? acc[c] / total : v[c];
+                    out1.uv[0] = b.uvs[2 * i];
+                    out1.uv[1] = b.uvs[2 * i + 1];
+                    std::memcpy(out1.colour, &b.colours[4 * i], sizeof out1.colour);
+                    out1.uv2[0] = out1.uv2[1] = 0;
+                }
+                o.indices = b.indices;
+                out.push_back(std::move(o));
+            }
+            return true;
+        }
         std::unordered_map<uint32_t, Converted> g_elements; // element object address -> conversion
+        std::unordered_map<uint32_t, std::vector<pop_assets::SkinnedBatch>> g_skinned; // skinned elements: bind pose
         // why an element was not converted: 's' skinned, 'i' instanced (variant 3), 'n' no pass packet, 'f' failed
         std::unordered_map<uint32_t, char> g_skipped;
         std::unordered_map<char, uint64_t> g_unknownBy; // unknown draws by reason ('?': never loaded)
@@ -196,6 +284,9 @@ namespace pop_native_live
                     why = parts.boneCount && !parts.passes.empty() ? 's'
                           : parts.passes.empty() ? (pop_assets::isInstanced(pack, data) ? 'i' : 'n') : 'f';
                 g_skipped[element] = why;
+                std::vector<pop_assets::SkinnedBatch> skinned;
+                if (why == 's' && pop_assets::convertSkinned(pack, data, skinned))
+                    g_skinned[element] = std::move(skinned);
             }
             g_origRead(rdram, ctx, runtime);
         }
@@ -275,6 +366,14 @@ namespace pop_native_live
             {
                 ++g_stats.draws;
                 const auto it = g_elements.find(element);
+                const auto sk = g_skinned.find(element);
+                if (sk != g_skinned.end() && g_frameCapturing && (pass == 0 || pass == 1 || pass == 4) &&
+                    g_frameSeen.insert((uint64_t(element) << 16) | index).second)
+                {
+                    std::vector<pop_assets::Batch> posed;
+                    if (poseSkinned(rdram, element, index, sk->second, posed))
+                        g_framePosed.emplace_back(std::move(posed), currentMaterial(rdram));
+                }
                 if (it == g_elements.end())
                 {
                     ++g_stats.drawsUnknown;
@@ -316,23 +415,7 @@ namespace pop_native_live
                         // CElementList::Render before the Display call)
                         const uint32_t sub = guestAny(rdram, 0x70000034u);
                         g_frameSub.push_back(sub);
-                        // live sub-material object: word 0 = texture index, word 1 = the record's
-                        // +0x1C flags (0x10: alpha test), +0x10 = its +0x28 (AREF in the top byte),
-                        // word 11 = its +0x14 (0x80: alpha blending); measured 16 Oct
-                        DrawMaterial dm;
-                        if (sub)
-                        {
-                            dm.textureKey = popTextureKey(guestAny(rdram, sub));
-                            const uint32_t f1c = guestAny(rdram, sub + 4), f28 = guestAny(rdram, sub + 0x10), f14 = guestAny(rdram, sub + 0x2C);
-                            if (f14 & 0x80)
-                                dm.mode = uint32_t(pop_native::AlphaMode::Blend);
-                            else if (f1c & 0x10)
-                            {
-                                dm.mode = uint32_t(pop_native::AlphaMode::Mask);
-                                dm.cutoff = float((f28 >> 24) / 255.0);
-                            }
-                        }
-                        g_frameMaterials.push_back(dm);
+                        g_frameMaterials.push_back(currentMaterial(rdram));
                     }
                 }
                 element = guest32(rdram, element + 0x4C);
@@ -358,7 +441,10 @@ namespace pop_native_live
             std::fwrite(g_frameClip, 4, 16, f);
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
-            for (const DrawMaterial &m : g_frameMaterials)
+            std::vector<DrawMaterial> allMaterials = g_frameMaterials;
+            for (const auto &p : g_framePosed)
+                allMaterials.push_back(p.second);
+            for (const DrawMaterial &m : allMaterials)
                 if (m.textureKey && !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
@@ -387,7 +473,7 @@ namespace pop_native_live
                 std::fwrite(&img.height, 4, 1, f);
                 std::fwrite(img.rgba.data(), 1, img.rgba.size(), f);
             }
-            const uint32_t n = uint32_t(g_frameDraws.size());
+            const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size());
             std::fwrite(&n, 4, 1, f);
             size_t tris = 0, textured = 0;
             for (size_t di = 0; di < g_frameDraws.size(); ++di)
@@ -413,6 +499,27 @@ namespace pop_native_live
                     tris += ni / 3;
                 }
             }
+            static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            for (const auto &[batches, mat] : g_framePosed)
+            {
+                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                textured += image >= 0;
+                const uint32_t nb = uint32_t(batches.size());
+                std::fwrite(kIdentity, 4, 16, f);
+                std::fwrite(&image, 4, 1, f);
+                std::fwrite(&mat.mode, 4, 1, f);
+                std::fwrite(&mat.cutoff, 4, 1, f);
+                std::fwrite(&nb, 4, 1, f);
+                for (const auto &b : batches)
+                {
+                    const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
+                    std::fwrite(&nv, 4, 1, f);
+                    std::fwrite(&ni, 4, 1, f);
+                    std::fwrite(b.vertices.data(), sizeof(pop_native::Vertex), nv, f);
+                    std::fwrite(b.indices.data(), 4, ni, f);
+                    tris += ni / 3;
+                }
+            }
             std::fclose(f);
             // side file for identifying the sub-material layout: per draw, the sub-material object's
             // first 0x30 bytes and the key that word +4 maps to as a texture index
@@ -429,8 +536,8 @@ namespace pop_native_live
                 }
                 std::fclose(t);
             }
-            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu textured, %u images), %zu triangles\n",
-                         g_framePath.c_str(), n, textured, ni0, tris);
+            std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu textured, %u images), %zu triangles\n",
+                         g_framePath.c_str(), n, g_framePosed.size(), textured, ni0, tris);
         }
 
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

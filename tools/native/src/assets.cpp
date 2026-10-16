@@ -336,6 +336,44 @@ namespace pop_assets
         return true;
     }
 
+    bool convertSkinned(const Pack &pack, uint32_t offset, std::vector<SkinnedBatch> &out)
+    {
+        pop_mesh::ElementParts parts;
+        if (!pop_mesh::elementParts(pack.d, pack.len, offset, parts) || parts.passes.empty() || !parts.boneCount)
+            return false;
+        std::vector<pop_mesh::SkinnedBatch> batches;
+        if (!pop_mesh::skinnedBatches(pack.d, pack.len, parts.passes[0].offset, parts.passes[0].size, batches))
+            return false;
+        for (const auto &b : batches)
+        {
+            const size_t n = b.positions.size() / 3;
+            SkinnedBatch o;
+            o.positions = b.positions;
+            o.uvs.resize(2 * n);
+            o.colours.assign(4 * n, 1.0f);
+            o.slots.assign(3 * n, 0);
+            o.weights.assign(3 * n, 0.0f);
+            for (size_t i = 0; i < n; ++i)
+            {
+                // skinned UVs are at 1/512 (raw 0..512, as reference-style static meshes)
+                o.uvs[2 * i] = 2 * i < b.uvs.size() ? float(b.uvs[2 * i] / 512.0) : 0.0f;
+                o.uvs[2 * i + 1] = 2 * i + 1 < b.uvs.size() ? float(b.uvs[2 * i + 1] / 512.0) : 0.0f;
+                if (b.hasColours)
+                    for (int k = 0; k < 4 && 4 * i + k < b.colours.size(); ++k)
+                        o.colours[4 * i + k] = float(b.colours[4 * i + k]);
+                for (int k = 0; k < 3; ++k)
+                {
+                    o.slots[3 * i + k] = i < b.bones.size() && size_t(k) < b.bones[i].size() ? b.bones[i][k] : 0;
+                    o.weights[3 * i + k] = 3 * i + k < b.weights.size() ? b.weights[3 * i + k] : 0.0f;
+                }
+            }
+            strips(b.flags, n, o.indices);
+            if (!o.indices.empty())
+                out.push_back(std::move(o));
+        }
+        return !out.empty();
+    }
+
     bool isInstanced(const Pack &pack, uint32_t offset)
     {
         pop_mesh::ElementParts parts;
