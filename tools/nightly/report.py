@@ -107,11 +107,11 @@ def main(argv):
     url = argv[argv.index('--url') + 1] if '--url' in argv else 'http://127.0.0.1:11434'
     model = argv[argv.index('--model') + 1] if '--model' in argv else 'gemma4:26b'
     d = os.path.join(ROOT, 'game', 'analysis', 'nightly', date)
-    results = {f[:-5]: json.load(open(os.path.join(d, f))) for f in sorted(os.listdir(d)) if f.endswith('.json') and f != 'meshes_per_pack.json'}
+    results = {f[:-5]: json.load(open(os.path.join(d, f), encoding='utf-8')) for f in sorted(os.listdir(d)) if f.endswith('.json') and f != 'meshes_per_pack.json'}
     os.makedirs(os.path.join(ROOT, 'docs', 'nightly'), exist_ok=True)
     out_path = os.path.join(ROOT, 'docs', 'nightly', date + '.md')
     diffp = os.path.join(d, 'diff.json')
-    changes = json.load(open(diffp)).get('changes', []) if os.path.exists(diffp) else []
+    changes = json.load(open(diffp, encoding='utf-8')).get('changes', []) if os.path.exists(diffp) else []
     results.pop('diff', None)
     items = findings(results, changes)
     lines = [f'# Nightly checks {date}', '', f'{len(items)} findings (decided by script; explanations by {model}).', '']
@@ -128,7 +128,7 @@ def main(argv):
     lines += ['', '---', 'Raw numbers:', '']
     for name, r in results.items():
         lines.append(f'- {name}: ' + ', '.join(f'{k}={v}' for k, v in r.items() if not isinstance(v, (list, dict))))
-    open(out_path, 'w').write('\n'.join(lines) + '\n')
+    open(out_path, 'w', encoding='utf-8').write('\n'.join(lines) + '\n')
     print(f'{len(items)} findings -> {out_path}')
     return 0
 
