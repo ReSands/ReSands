@@ -1,0 +1,43 @@
+# Playthrough saves, 17 Oct 2026 (first ~25 min of play, 60 fps mode)
+
+51 kept quick-saves `game\ps2\disc\states\play_20261017_<hhmmss>.state` (PC; copies on the Mac in
+`game/analysis/play1017/states/`). Screenshots + fps of a 20 s boot of each (`tools/windows/state-shots.ps1`,
+no sound in save-state boots): `game/analysis/play1017/shots/`, contact sheet `game/analysis/play1017/sheet/index.html`.
+Play log: `game/analysis/play1017/play_20261017_0906.log`. # = order on the contact sheet. Reasons in quotes are the user's.
+
+## Ranking for the native renderer (most useful first)
+
+| Rank | # | Save | What | Why it matters |
+|---|---|---|---|---|
+| 1 | 50 | 093051 | "lots of sand enemies onscreen" | new enemy type, sand particles, sand-tank HUD; worst slowdown (3-18 fps), perf repro |
+| 2 | 11 | 091049 | courtyard pool, "water effects" | water (not drawn natively yet); 38 fps |
+| 3 | 22 | 091734 | healing pool + tutorial text | water close up, 2D text; 33 fps |
+| 4 | 46 | 092450 | "rewind effect" | full-screen sand-power post effect |
+| 5 | 40 | 092346 | "big glowing fire pits" | braziers: point lights, fire particles, glow |
+| 6 | 28 | 091949 | "light from dagger of time" | glow from a light-emitting object in a dark room |
+| 7 | 31 | 092046 | "rays of light" | light shafts, green fog; 30 fps |
+| 8 | 4 | 090720 | "pause menu" | 2D/menus over the stormy sky (also #37 game over) |
+| 9 | 49 | 093011 | "lots of NPCs in in-game cutscene" | many skinned characters at once |
+| 10 | 9 | 091010 | "distance" | draw distance, fog, haze |
+| 11 | 14 | 091230 | "fire" | fire sprites outdoors |
+| 12 | 19 | 091533 | "dust particles dropping from ledge" | falling particles |
+| 13 | 26 | 091848 | "prince interaction with curtains" | animated curtain mesh |
+| 14 | 42 | 092413 | "small glowing candles" | many small lights |
+| 15 | 43 | 092426 | "dagger of time" | dagger glow in a cutscene |
+| 16 | 47 | 092542 | torch corridor, cobwebs | wall torches (point lights), alpha cobwebs |
+| 17 | 38, 33 | 092300, 092130 | green vault | slow (14-18 fps), perf repro |
+| 18 | 18 | 091448 | three guards in a corridor | fight with several skinned enemies |
+| then | rest | | tutorials, ledges, letterboxed cutscenes (#1, 2, 17, 48) | coverage only |
+
+Sound marker: #7 (090902) "that's when the audio started to glitch".
+
+## Performance (17 Oct)
+
+- Frame rate falls far below 60 in many scenes, and the drops reproduce from save states (boots without sound), so
+  sound is not the cause: 60 in the opening; ~40 from #7; 30-38 in the courtyard pool (#10-11), the healing pool
+  (#22-24) and dark interiors; 14-25 in parts of the vault (#33-38) and the dagger cutscenes (#43-47); **3-18 in
+  the sand-monster fight** (#48-51; 3.6 fps in play).
+- **Audio judder lines up with the slowdown:** it started at #7, the first drop below 60. The user also noticed it
+  at the pool #10, which felt smooth but measured 31-40 fps. Working assumption: the sound is starved when a frame
+  runs late, so fix the speed first, then recheck the sound.
+- Not yet profiled. `wpr.exe` is on the PC; next: profile #50 (fight) and #11 (pool) from their saves.
