@@ -174,7 +174,9 @@ namespace pop_assets
                     const uint8_t b = vram[(n >> 1) % vram.size()];
                     const uint8_t v = static_cast<uint8_t>(17 * ((n & 1) ? (b >> 4) : (b & 0xF)));
                     uint8_t *o = &out.rgba[(size_t(y) * w + x) * 4];
-                    o[0] = o[1] = o[2] = v;
+                    // the game's lightmap CLUT (GS block 0x3EC4 in save states): index i -> grey 17 i,
+                    // alpha 0x80 i / 15, i.e. alpha = grey here; drawn with GS ALPHA 0x46 = Cd * (1 - As)
+                    o[0] = o[1] = o[2] = o[3] = v;
                 }
             return true;
         }

@@ -457,6 +457,7 @@ namespace pop_native_live
         {
             uint64_t read = 0, converted = 0, notConverted = 0, batches = 0, vertices = 0, triangles = 0;
             uint64_t draws = 0, drawsKnown = 0, drawsUnknown = 0, positions = 0, positionsFound = 0, drawsExact = 0;
+            uint64_t drawsFromPacket = 0, drawsLightmap = 0; // unknown at load (save-state scenes) and lightmap draws, from the pass packets
         } g_stats;
         std::chrono::steady_clock::time_point g_lastReport;
 
@@ -631,6 +632,7 @@ namespace pop_native_live
         }
 
         std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameRefs; // instanced draws
+        std::unordered_map<uint64_t, std::vector<pop_assets::Batch>> g_fromPacket; // (element << 8 | pass) -> decoded pass packet
 
         // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
@@ -1177,11 +1179,63 @@ namespace pop_native_live
                         g_framePosed.emplace_back(std::move(posed), dm);
                     }
                 }
-                if (it == g_elements.end())
+                if (pass == 3 && g_frameCapturing)
+                {
+                    // Lightmap pass (CLMElementList::Render 0x4B7B80): FUN_004B2000(state, texture index,
+                    // 0x30284, 0) leaves the lightmap's texture index at render state 0x70000008 and the
+                    // flags at 0x70000000 (blend kind 3 with 0x80: GS ALPHA 0x46 = Cd * (1 - As), no
+                    // depth write). The pass-3 packet (element +0x2C) uploads V3-16 lightmap UVs (ITOF15,
+                    // 1/32768) and V3-32 positions, no colours: the lightmap's alpha darkens the scene.
+                    const uint32_t key = popTextureKey(guestAny(rdram, 0x70000008u) & 0xFFFFu);
+                    g_frameLightmap[(uint64_t(element) << 16) | index] = key;
+                    const uint32_t packet = guest32(rdram, element + 0x2C) & ~0xFu;
+                    auto &batches = g_fromPacket[(uint64_t(element) << 8) | 3];
+                    if (batches.empty() && packet)
+                        livePacketBatches(rdram, packet, 32768.0, batches);
+                    if (!batches.empty() && key && g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(3) << 56)).second)
+                    {
+                        DrawMaterial dm;
+                        dm.seq = g_frameSeq++;
+                        dm.textureKey = key;
+                        dm.flags = guestAny(rdram, 0x70000000u);
+                        dm.fbmsk = 0xFF000000u; // flags 0x284: colour written, alpha kept
+                        dm.list = g_currentList;
+                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                        std::array<float, 16> model;
+                        for (int k = 0; k < 16; ++k)
+                            model[k] = guestF(rdram, m + 4u * k);
+                        g_frameRefs.emplace_back(batches, std::make_pair(model, dm));
+                        ++g_stats.drawsLightmap;
+                    }
+                }
+                else if (it == g_elements.end())
                 {
                     ++g_stats.drawsUnknown;
                     const auto sk = g_skipped.find(element);
                     ++g_unknownBy[sk == g_skipped.end() ? '?' : sk->second];
+                    // Never seen at load (a save-state load runs no ReadElement): decode the pass packet
+                    // from guest memory as sent, like pass 2 and CJIdxMesh. Static elements only (a
+                    // skinned element has a bone palette at +0x48); the decode is kept per (element,
+                    // pass), the packets do not change after load.
+                    const uint32_t palette = guest32(rdram, element + 0x48);
+                    if (sk == g_skipped.end() && !(palette && guest8(rdram, palette)) && g_frameCapturing &&
+                        (pass == 0 || pass == 1 || pass == 4) &&
+                        g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
+                    {
+                        const uint32_t packet = guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & ~0xFu;
+                        auto &batches = g_fromPacket[(uint64_t(element) << 8) | pass];
+                        if (batches.empty() && packet)
+                            livePacketBatches(rdram, packet, 512.0, batches);
+                        if (!batches.empty())
+                        {
+                            const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                            std::array<float, 16> model;
+                            for (int k = 0; k < 16; ++k)
+                                model[k] = guestF(rdram, m + 4u * k);
+                            g_frameRefs.emplace_back(batches, std::make_pair(model, currentMaterial(rdram)));
+                            ++g_stats.drawsFromPacket;
+                        }
+                    }
                 }
                 else if (pass == 2 && g_frameCapturing && !g_skinned.count(element) &&
                          g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(2) << 56) | alphaPassBit(rdram)).second)
@@ -1202,13 +1256,6 @@ namespace pop_native_live
                             model[k] = guestF(rdram, m + 4u * k);
                         g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
                     }
-                }
-                else if (pass == 3 && g_frameCapturing)
-                {
-                    // lightmap pass (CLMElementList::Render): note the current sub-material's texture
-                    const uint32_t sub = guestAny(rdram, 0x70000034u);
-                    const uint32_t key = sub ? popTextureKey(guestAny(rdram, sub)) : 0u;
-                    g_frameLightmap[(uint64_t(element) << 16) | index] = key;
                 }
                 else if (pass == 0 || pass == 1 || pass == 4)
                 {

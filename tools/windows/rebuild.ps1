@@ -215,12 +215,15 @@ Stage 'Sync game overrides'
 $buildDir = "$RT\build-win"
 if ($Play) {
     $buildDir = if ($Release) { "$RT\build-win-play-rel" } else { "$RT\build-win-play" }
-    if (-not (Test-Path "$buildDir\build.ninja")) {
+    # The play build links with /MAP (ps2EntryRunner.map next to the exe) so POP_PROFILE samples
+    # can be symbolized (tools/profsym.py); a build configured before that is reconfigured once.
+    $hasMap = (Test-Path "$buildDir\CMakeCache.txt") -and (Select-String -Path "$buildDir\CMakeCache.txt" -Pattern '/MAP' -Quiet)
+    if (-not (Test-Path "$buildDir\build.ninja") -or (-not $Release -and -not $hasMap)) {
         Stage 'Configure play build'
         $devFlags = '/O2 /Ob2 /DNDEBUG'
         $typeArgs = if ($Release) { @('-DCMAKE_BUILD_TYPE=Release') } else {
             @('-DCMAKE_BUILD_TYPE=Dev', "-DCMAKE_CXX_FLAGS_DEV=$devFlags", "-DCMAKE_C_FLAGS_DEV=$devFlags",
-              '-DCMAKE_EXE_LINKER_FLAGS_DEV=/INCREMENTAL:NO', '-DCMAKE_SHARED_LINKER_FLAGS_DEV=',
+              '-DCMAKE_EXE_LINKER_FLAGS_DEV=/INCREMENTAL:NO /MAP', '-DCMAKE_SHARED_LINKER_FLAGS_DEV=',
               '-DCMAKE_MODULE_LINKER_FLAGS_DEV=', '-DCMAKE_STATIC_LINKER_FLAGS_DEV=') }
         if (Invoke-Logged "$R\runtime_configure_play.log" cmake (@('-S', $RT, '-B', $buildDir, '-G', 'Ninja') + $typeArgs + @(
                 '-DPS2X_BUILD_RECOMP=OFF', '-DPS2X_BUILD_ANALYZER=OFF', '-DPS2X_BUILD_TEST=OFF', '-DPS2X_BUILD_STUDIO=OFF',

@@ -55,3 +55,24 @@ target_include_directories(pop_postfx_check PRIVATE src ${stb_SOURCE_DIR})
 add_executable(pop_postfx_gpu_judge src/postfx_gpu_judge.cpp src/gpu_compute.cpp)
 target_include_directories(pop_postfx_gpu_judge PRIVATE src ${stb_SOURCE_DIR})
 target_link_libraries(pop_postfx_gpu_judge PRIVATE volk Vulkan::Headers)
+
+# pop_state_frame: a native frame from a pop-sotc save state, offline, with the live code
+# (tools/overrides/pop_native_live.cpp) compiled in. Needs the runtime's headers:
+#   -DPOP_RUNTIME_SRC=<repo>/game/recomp/runtime-src (Mac) or game/recomp-sotc/runtime-src (PC)
+# Its src/runner directory sits six levels below the repository root, which the live code's
+# "../../../../../../tools/native/src/*.cpp" includes rely on.
+set(POP_RUNTIME_SRC "" CACHE PATH "PS2Recomp runtime source for pop_state_frame")
+if(POP_RUNTIME_SRC)
+  add_executable(pop_state_frame src/state_frame.cpp)
+  set_target_properties(pop_state_frame PROPERTIES CXX_STANDARD 20) # the runtime headers use C++20
+  target_include_directories(pop_state_frame PRIVATE src ${POP_RUNTIME_SRC}/ps2xRuntime/include
+                             ${POP_RUNTIME_SRC}/ps2xRuntime/src/lib/Kernel ${POP_RUNTIME_SRC}/ps2xIOP/include
+                             ${POP_RUNTIME_SRC}/ps2xRuntime/src/runner)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+    FetchContent_Declare(sse2neon GIT_REPOSITORY https://github.com/DLTcollab/sse2neon.git
+                         GIT_TAG v1.9.1 GIT_SHALLOW TRUE SOURCE_SUBDIR no-cmake)
+    FetchContent_MakeAvailable(sse2neon)
+    target_include_directories(pop_state_frame PRIVATE ${sse2neon_SOURCE_DIR})
+    target_compile_definitions(pop_state_frame PRIVATE USE_SSE2NEON)
+  endif()
+endif()
