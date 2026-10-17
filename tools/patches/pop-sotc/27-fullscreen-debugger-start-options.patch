@@ -1,0 +1,60 @@
+From 82aab10a722cf104ddded1205a2c8b99abffbcfb Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sat, 17 Oct 2026 18:30:25 +0100
+Subject: [PATCH] Start options: PS2X_FULLSCREEN=1 opens in borderless
+ fullscreen (F11 still toggles), PS2X_DEBUGGER=0 starts with the debug panel
+ hidden (F1 shows it)
+
+---
+ ps2xRuntime/src/lib/ps2_debug_panel.cpp | 10 ++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp     |  8 ++++++++
+ 2 files changed, 18 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_debug_panel.cpp b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+index c9aa2c6..2820bb6 100644
+--- a/ps2xRuntime/src/lib/ps2_debug_panel.cpp
++++ b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+@@ -1,4 +1,6 @@
+ #include "ps2_debug_panel.h"
++
++#include <cstdlib>
+ #include "ps2_runtime.h"
+ #include "ps2_runtime_macros.h"
+ #include "ps2_log.h"
+@@ -2206,6 +2208,14 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
+         return;
+     }
+ 
++    // PS2X_DEBUGGER=0: start with the panel hidden (F1 shows it)
++    static bool startHidden = [] { const char *v = std::getenv("PS2X_DEBUGGER"); return v && *v == '0'; }();
++    if (startHidden)
++    {
++        startHidden = false;
++        m_visible = false;
++    }
++
+     if (IsKeyPressed(KEY_F1))
+     {
+         toggleVisible();
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index aade6c4..bd9b1e8 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2576,6 +2576,14 @@ void PS2Runtime::run()
+ 
+     ThreadPriority::RaiseCurrentThread(ThreadPriority::Level::AboveNormal);
+     bool restoreMaximized = false;
++#if !defined(PLATFORM_VITA)
++    // PS2X_FULLSCREEN=1: start in borderless fullscreen (F11 toggles it as before)
++    if (const char *fullscreen = std::getenv("PS2X_FULLSCREEN"); fullscreen && *fullscreen == '1' && !IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE))
++    {
++        restoreMaximized = IsWindowMaximized();
++        ToggleBorderlessWindowed();
++    }
++#endif
+     uint64_t tick = 0;
+     std::ofstream frameTimes;
+     if (const char *path = std::getenv("PS2X_FRAME_TIMES"); path && *path)
+-- 
+2.54.0 (Apple Git-157)
+
