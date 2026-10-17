@@ -1133,6 +1133,37 @@ namespace pop_native_live
             for (unsigned link = 0; element && link < 4096; ++link)
             {
                 ++g_stats.draws;
+                if (g_frameCapturing && !g_elements.count(element) && !g_skipped.count(element) && !g_skinned.count(element))
+                {
+                    // Skinned, never seen at load (a save-state scene): the drawn pass's packet in memory
+                    // (+0x20 + 4 * pass, pass 4 -> 1) holds the bind-space batches inline (cnt tags up to the
+                    // RET), as in the file. Characters often have no pass-0 packet, only pass 1.
+                    const uint32_t palette = guest32(rdram, element + 0x48);
+                    const uint32_t packet = (pass == 0 || pass == 1 || pass == 4)
+                                                ? guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & 0x01FFFFF0u
+                                                : 0u;
+                    if (palette && guest8(rdram, palette) && packet)
+                    {
+                        uint32_t pc = packet;
+                        for (int steps = 0; steps < 4096 && pc + 16 <= kRam; ++steps)
+                        {
+                            const uint32_t t0 = guest32(rdram, pc), id = (t0 >> 28) & 7;
+                            pc += 16 + (id == 1 || id == 6 || id == 7 ? (t0 & 0xFFFF) * 16 : 0);
+                            if (id != 1)
+                                break;
+                        }
+                        std::vector<pop_assets::SkinnedBatch> skinned;
+                        const bool ok = pop_assets::skinnedFromPacket(rdram, kRam, packet, pc - packet, skinned);
+                        static const bool skinLog = std::getenv("POP_NATIVE_SKINLOG") != nullptr;
+                        if (skinLog)
+                            std::fprintf(stderr, "[pop:skin] el %08x from memory: packet %08x, %u bytes, %s, %zu batches\n", element, packet,
+                                         pc - packet, ok ? "decoded" : "FAILED", skinned.size());
+                        if (ok)
+                            g_skinned[element] = std::move(skinned);
+                        else
+                            g_skipped[element] = 's';
+                    }
+                }
                 ++g_passDraws[pass & 7][g_skinned.count(element) ? 1 : 0];
                 const auto it = g_elements.find(element);
                 const auto sk = g_skinned.find(element);
@@ -1147,7 +1178,7 @@ namespace pop_native_live
                         if (skinLog)
                         {
                             // per skinned draw: normals or colours, the light set, the mean vertex colour
-                            double mean[3] = {0, 0, 0};
+                            double mean[3] = {0, 0, 0}, at[3] = {0, 0, 0};
                             size_t nv = 0, withNormals = 0;
                             for (const auto &b : sk->second)
                                 withNormals += b.normals.empty() ? 0 : 1;
@@ -1155,9 +1186,15 @@ namespace pop_native_live
                                 for (const auto &v : b.vertices)
                                 {
                                     for (int c = 0; c < 3; ++c)
+                                    {
                                         mean[c] += v.colour[c];
+                                        at[c] += v.pos[c];
+                                    }
                                     ++nv;
                                 }
+                            if (nv)
+                                std::fprintf(stderr, "[pop:skin] el %08x idx %u: %zu vertices around (%.1f, %.1f, %.1f)\n", element, index, nv,
+                                             at[0] / nv, at[1] / nv, at[2] / nv);
                             const uint32_t set = guestAny(rdram, 0x700004F0u) + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
                             std::fprintf(stderr,
                                          "[pop:skin] el %08x idx %u pass %u batches %zu normals %zu | set %u amb %08x n %u pt %u | const %u %08x | "

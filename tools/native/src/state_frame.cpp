@@ -9,7 +9,8 @@
 // stands in for the runtime: it records the hooks pop_native_live::install registers and replays
 // Display3DElements (0x4BC000) -> CElementList::Render (0x4B9440) over those lists, setting the
 // render state Render sets before each Display (current sub-material 0x34, material 0x30, fog zone
-// 0x84 and FOGCOL 0x24 as SetBlending sends it, Z test 0x38, alpha-only mask 0x44), and calls the
+// 0x84 and FOGCOL 0x24 as SetBlending sends it, Z test 0x38, alpha-only mask 0x44, light set 0x88),
+// and calls the
 // same hooks the game would. Elements were not converted at load (no ReadElement), so the live code
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
@@ -89,6 +90,9 @@ namespace
                 // except for blend kinds 4, 5, 6 and 0xF (0)
                 const uint32_t colour = rd32(0x70000470u + zone * 4), blend = sub ? (rd32(sub + 4) >> 16) & 0xF : 0;
                 wr32(0x70000024u, (blend == 4 || blend == 5 || blend == 6 || blend == 0xF) ? 0 : colour);
+                // the character light set (SetSkinDriver: entry bits 42-49 -> 0x70000088)
+                if (kind == 9 || kind == 10)
+                    wr8(0x70000088u, uint8_t((word & 0x3FFFFFFFFFFFFull) >> 42));
             }
             switch (kind)
             {

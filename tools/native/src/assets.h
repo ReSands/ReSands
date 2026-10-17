@@ -67,6 +67,9 @@ namespace pop_assets
         std::vector<uint32_t> indices;
     };
     bool convertSkinned(const Pack &pack, uint32_t offset, std::vector<SkinnedBatch> &out);
+    // The same from a skinned pass packet at `packet` (`size` bytes, inline VIF data: the file's packet,
+    // or the one in game memory after load, whose tags hold no block references).
+    bool skinnedFromPacket(const uint8_t *d, size_t len, uint32_t packet, uint32_t size, std::vector<SkinnedBatch> &out);
 
     // An instanced element (LOD variant 3 block, no pass packet): the shared positions/UVs, with
     // the game object's per-vertex colour block (`colours`, may be null: white).

@@ -347,8 +347,13 @@ namespace pop_assets
         pop_mesh::ElementParts parts;
         if (!pop_mesh::elementParts(pack.d, pack.len, offset, parts) || parts.passes.empty() || !parts.boneCount)
             return false;
+        return skinnedFromPacket(pack.d, pack.len, parts.passes[0].offset, parts.passes[0].size, out);
+    }
+
+    bool skinnedFromPacket(const uint8_t *d, size_t len, uint32_t packet, uint32_t size, std::vector<SkinnedBatch> &out)
+    {
         std::vector<pop_mesh::SkinnedBatch> batches;
-        if (!pop_mesh::skinnedBatches(pack.d, pack.len, parts.passes[0].offset, parts.passes[0].size, batches))
+        if (!pop_mesh::skinnedBatches(d, len, packet, size, batches))
             return false;
         for (const auto &b : batches)
         {
