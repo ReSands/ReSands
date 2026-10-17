@@ -156,6 +156,32 @@ namespace
         }
     }
 
+    // FUN_00458FC0 (CElementList::Render's default case, GFX): render state from the entry as it sets
+    // it (fog zone, 0x70000090 = entry bits 28-37, sub-material, material), then FUN_004584C0 on the
+    // element (low word << 4), whose hook draws the particles
+    void gfxEntry(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        const uint32_t e = getRegU32(ctx, 4);
+        uint64_t word;
+        std::memcpy(&word, getConstMemPtr(g_ram.data(), e), 8);
+        uint16_t h4;
+        std::memcpy(&h4, getConstMemPtr(g_ram.data(), e + 4), 2);
+        const uint32_t material = rd32(e + 8), subIndex = *getConstMemPtr(g_ram.data(), e + 0xC);
+        uint32_t sub = material ? rd32(material + 0x10) : 0;
+        for (uint32_t k = 0; sub && k != subIndex && k < 64; ++k)
+            sub = rd32(sub + 0x20);
+        const uint32_t zone = (h4 & 0x3FF) >> 6;
+        wr32(0x70000084u, zone);
+        wr32(0x70000090u, uint32_t((word << 26) >> 54));
+        wr32(0x70000034u, sub);
+        wr32(0x70000030u, material);
+        const uint32_t colour = rd32(0x70000470u + zone * 4), blend = sub ? (rd32(sub + 4) >> 16) & 0xF : 0;
+        wr32(0x70000024u, (blend == 4 || blend == 5 || blend == 6 || blend == 0xF) ? 0 : colour);
+        R5900Context p{};
+        setArgs(p, uint32_t(word) << 4);
+        call(0x004584C0u, &p);
+    }
+
     // Display3DElements (0x4BC000): the lists in the game's order; shadows are not replayed
     void display3DElements(uint8_t *, R5900Context *ctx, PS2Runtime *)
     {
@@ -213,6 +239,8 @@ PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
         return display3DElements;
     if (address == 0x004B9440u)
         return renderList;
+    if (address == 0x00458FC0u)
+        return gfxEntry;
     return noop;
 }
 bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)

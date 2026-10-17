@@ -867,6 +867,14 @@ namespace pop_native_live
                                 model[k] = guestF(rdram, m + 4u * k);
                             if (std::getenv("POP_PARTICLE_WORLD"))
                                 model = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                            static const bool partLog = std::getenv("POP_NATIVE_PARTLOG") != nullptr;
+                            if (partLog)
+                            {
+                                const auto &v0 = b.vertices[0];
+                                std::fprintf(stderr, "[pop:part] el %08x matrix %u at (%.1f %.1f %.1f): first quad (%.2f %.2f %.2f) colour %.2f %.2f %.2f %.2f\n",
+                                             element, guestAny(rdram, 0x70000090u) & 0xFFFF, model[12], model[13], model[14], v0.pos[0], v0.pos[1],
+                                             v0.pos[2], v0.colour[0], v0.colour[1], v0.colour[2], v0.colour[3]);
+                            }
                             std::vector<pop_assets::Batch> bs;
                             bs.push_back(std::move(b));
                             DrawMaterial dm = currentMaterial(rdram);
