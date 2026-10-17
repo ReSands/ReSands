@@ -404,3 +404,46 @@ rain streaks missing, the torch bracket.
 Tool: `tools/livecmp.py` (score, side = native | GS | |difference| x 4, crop = zoomed crops side by
 side, mean = region brightness; pure Python).
 
+
+## Native frames from save states, offline (17 Oct)
+`pop_state_frame <state> <out.pnf> [--bigfile DATA/PRINCE.BF] [--packindex packindex.txt]` (run from
+game/ps2/disc; build with `-DPOP_RUNTIME_SRC=<repo>/game/recomp/runtime-src`) makes a native frame from
+any pop-sotc save in about half a second, with `pop_native_live.cpp` compiled in unchanged; render with
+`pop_native_view <pnf> identity.clip <png> --frame` (any 16 numbers as the clip file; the frame has its
+own camera). The game's own picture of the same moment: `tools/popstate.py <state> --frame <png>`
+(displayed framebuffer from the saved GS memory, 640x448, no overlays). Judge: `tools/livecmp.py score`.
+- A save holds the last frame's draw lists: draw manager at scratchpad **0x700000C0** (the a0 of
+  Display3DElements; lists +200, +0x2C, +0x3C, +0x68, +0x78, +0x4C, lightmaps +0x5C, +0x88, +0x98,
+  +0xA8). The tool stands in for the runtime (records the hooks `install()` registers) and replays
+  Display3DElements -> CElementList::Render, setting the render state Render sets per entry: sub-material
+  0x34 and material 0x30 (entry +8, list +0x10 by +0x20, index byte +0xC), fog zone 0x84 ((u16 +4 &
+  0x3FF) >> 6), FOGCOL 0x24 (zone colour table 0x70000470; 0 for blend kinds 4/5/6/0xF, as SetBlending),
+  Z test 0x38 (off for +0x78), alpha-only 0x44 (+0x98), light set 0x88 (entry bits 42-49).
+- Mesh entry: element = low word << 4, matrix index = bits 28-37, pass = byte +0xD & 0xF.
+- **Elements unknown at load** (every element after a save-state load): static ones decoded from the drawn
+  pass's packet (`livePacketBatches`, UVs 1/512); **skinned** ones (bone palette at +0x48) from the drawn
+  pass's packet too (`pop_assets::skinnedFromPacket`; characters often have only a pass-1 packet at
+  +0x24), then posed with the game's bones as before. Live on the PC this is the save-state fix.
+- **Lightmaps** (new, live too): CLMElementList::Render (0x4B7B80), 8-byte entries (element; kind 9/10
+  in the low nibble; matrix (u16 +4 & 0x3FFF) >> 4; texture index (u16 +6 & 0xFFF) >> 2), each drawn as
+  pass 3 with flags 0x30284 (GS ALPHA 0x46 = Cd * (1 - As), no depth write, fog off: UseLightmapPRMode
+  PRMODE 0x58) and vertex colour 0x80 (SetLightmapColor). Pass-3 packet (+0x2C): V3-16 lightmap UVs at
+  1/32768, V3-32 positions. **The lightmap CLUT** (GS block 0x3EC4 in the saves): index i -> grey 17 i,
+  alpha 0x80 i / 15, so index = darkness; the decoder now sets alpha = grey (it was 255: all black).
+  Instanced lightmaps (kind 10) are not drawn yet.
+- Textures: index -> key from the engine's texture list (TEX_List: count 0x6CBC50, 16-byte entries at
+  *0x6CBC58: key at +0, index at +10), packs from `tools/packindex.py` (texture key -> world pack over
+  all 566 packs; 2,386 keys; 93-98% of a save's keys).
+- After effects from the CAfterEffect object 0x6DF170 (FUN_004ABFC0): ColorDiffusion (glow) if bit 5 of
+  +0x121, arguments +0x94 +0x98 +0x9C +0x90 +0x88 +0x8C +0xA0 and +0xA4 on the stack; SmartBlur (haze)
+  if bit 7. GFX entries through FUN_00458FC0's state (0x90 = entry bits 28-37) into the particle hook.
+- **Water** (CJSmWaterElement, kind 5): Display CALLs a ready packet that sets up (12 qw V4-32 + GS
+  registers) and CALLs one sub-packet per patch; a patch uploads only V4-32 data (7 qw at VU 0, 16 at 8,
+  2 at 30, 1 at 32) and runs VU1 program 7: the surface is tessellated on VU1 from control points, so it
+  needs that VU1 program ported. With +4 set the game first copies the framebuffer (FUN_004A76C0) and
+  draws the water twice (refraction). Not drawn yet.
+- Score, mean |difference| over the 51 saves of 17 Oct (`game/analysis/play1017/native/scores_v*.txt`):
+  19.96 (geometry, textures, lightmaps, characters) -> 17.44 (+ glow, haze) -> 16.85 (+ particles).
+  Plain scenes 3-7; worst: full-screen effects (rewind flash, white-out, explosion), 2D (pause menu),
+  and 4 saves whose draw lists were empty at the save. Missing: HUD/menus/text, water, shadows, halos,
+  weaker fire/smoke/flash than the game, a dark-vs-bright doorway at the first gate (#3).

@@ -3,7 +3,8 @@
 51 kept quick-saves `game\ps2\disc\states\play_20261017_<hhmmss>.state` (PC; copies on the Mac in
 `game/analysis/play1017/states/`). Screenshots + fps of a 20 s boot of each (`tools/windows/state-shots.ps1`,
 no sound in save-state boots): `game/analysis/play1017/shots/`, contact sheet `game/analysis/play1017/sheet/index.html`.
-Play log: `game/analysis/play1017/play_20261017_0906.log`. # = order on the contact sheet. Reasons in quotes are the user's.
+Play log: `game/analysis/play1017/play_20261017_0906.log`. Native frames of every save (offline, `pop_state_frame`):
+`game/analysis/play1017/native/<#>_side.png` (game | native), scores in `scores_v3.txt`. # = order on the contact sheet. Reasons in quotes are the user's.
 
 ## Ranking for the native renderer (most useful first)
 
@@ -40,4 +41,15 @@ Sound marker: #7 (090902) "that's when the audio started to glitch".
 - **Audio judder lines up with the slowdown:** it started at #7, the first drop below 60. The user also noticed it
   at the pool #10, which felt smooth but measured 31-40 fps. Working assumption: the sound is starved when a frame
   runs late, so fix the speed first, then recheck the sound.
-- Not yet profiled. `wpr.exe` is on the PC; next: profile #50 (fight) and #11 (pool) from their saves.
+- **Not the graphics workload** (Mac, from the saves' own last frames, `tools/statechain.py`): the 3-18 fps
+  fight frames have no more draw-list entries, DMA chain size, VU1 runs, GS packets, render-target switches
+  or transfers than scenes at 60 fps (e.g. 09:22:25 at 60 fps: 9,203 chain records, 6 MB, 4,764 VU1 runs;
+  09:29:59 at 3 fps: 4,367, 5.2 MB, 3,132). So the time goes on the CPU side.
+- Suspect (not proven): VU0 microprograms run on the cycle-modelling interpreter (`executeVU0Microprogram`
+  -> `m_vu0.execute`), used for every object's visibility check (`CGraphicSystem::CheckBoundingBox`,
+  `CheckFreeShapeBoundingBox`, `GSentBoundingBoxGroupToVu0`, `CJadeShadowProjector::CheckBoundingBox`) and
+  a matrix-maths group at 0x495240-0x495C18: scales with animated characters.
+- Profiler ready: `POP_PROFILE=<file>:<start s>:<seconds>` (tools/overrides/pop_profiler.cpp, Windows and
+  macOS) + `tools/profsym.py`; the PC play build now links with /MAP. One PC job does it all:
+  `tools/windows/start-job.ps1 -Script tools/windows/profile-states.ps1` (fast build, profiles #50, #11
+  and a 60 fps reference, writes symbolized reports to game/analysis/prof/). Tested on the Mac.
