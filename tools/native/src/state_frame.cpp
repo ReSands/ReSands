@@ -15,8 +15,7 @@
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
 // from tools/packindex.py's index.
-// Not replayed yet: instanced lightmaps, shadows, the glow and haze
-// (their hooks run from the after-effect code), skinned characters (converted only at load).
+// Not replayed yet: instanced lightmaps, shadows, halos.
 // Save-state layout: tools/popstate.py.
 
 #include "../../overrides/pop_native_live.cpp"
@@ -171,6 +170,28 @@ namespace
             }
             setArgs(sub, dm + off);
             call(0x004B9440u, &sub); // listRender hook -> renderList
+        }
+        // the after-effect pass (FUN_004ABFC0 on CAfterEffect 0x6DF170, end of Display3DElements):
+        // ColorDiffusion (glow) when bit 5 of +0x121 is set, its arguments from the object (+0x94,
+        // +0x98, +0x9C, +0x90, +0x88, +0x8C, +0xA0 in a1..t3, +0xA4 on the stack); AE_ProcessSmartBlur
+        // (haze) when bit 7 is set, reading the object itself
+        constexpr uint32_t ae = 0x006DF170u;
+        const uint8_t flags = *getConstMemPtr(g_ram.data(), ae + 0x121);
+        if (flags & 0x20)
+        {
+            R5900Context g{};
+            const uint32_t regs[8] = {ae, rd32(ae + 0x94), rd32(ae + 0x98), rd32(ae + 0x9C), rd32(ae + 0x90), rd32(ae + 0x88),
+                                      rd32(ae + 0x8C), rd32(ae + 0xA0)};
+            for (int r = 0; r < 8; ++r)
+                g.r[4 + r] = _mm_set_epi32(0, 0, 0, int(regs[r]));
+            g.r[29] = _mm_set_epi32(0, 0, 0, int(ae + 0xA4)); // the stack argument
+            call(0x004AE100u, &g);
+        }
+        if (flags & 0x80)
+        {
+            R5900Context h{};
+            setArgs(h, ae);
+            call(0x004A93C0u, &h);
         }
     }
 
