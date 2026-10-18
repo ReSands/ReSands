@@ -3,7 +3,7 @@
 # cycle-modelling interpreter in the slow saves: compiled VU1 programs are looked up by the whole
 # VU1 code image, and the compiled set came from a capture of the opening (9 images, 12 Oct), so
 # scenes with other program combinations fall back to the interpreter.
-#   0. runtime patch 29 (frame-rate overlay layout) if missing;
+#   0. runtime patches 29 (frame-rate overlay layout) and 30 (no pointer in fullscreen) if missing;
 #   1. capture: every kept save loaded for a short boot with PS2X_VU1_CAPTURE into the existing
 #      capture folder (game\recomp-sotc\vu1_capture; images are added, not replaced);
 #   2. rebuild.ps1 -Fast -Play -Vu1 <capture>: vu1_recomp over all images, play build;
@@ -16,9 +16,10 @@ param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoC
 # Quick run before more play: -NoMeasure -NoNightly. Measure/nightly only: -NoCapture -NoBuild.
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
-# runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout)
+# runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout; 30: pointer)
 $Rt = 'C:\tools\PS2Recomp-sotc'
-foreach ($p in @(@{ N = 29; File = '29-frame-graph-df-layout.patch'; Mark = "Frame-rate overlay in Digital Foundry's layout" })) {
+foreach ($p in @(@{ N = 29; File = '29-frame-graph-df-layout.patch'; Mark = "Frame-rate overlay in Digital Foundry's layout" },
+                 @{ N = 30; File = '30-hide-pointer-fullscreen.patch'; Mark = 'Hide the mouse pointer in fullscreen' })) {
     if (-not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch $p.Mark)) {
         "== applying runtime patch $($p.N)"
         git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\$($p.File)"

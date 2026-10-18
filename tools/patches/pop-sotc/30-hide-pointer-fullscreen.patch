@@ -1,0 +1,97 @@
+From 74e50c4252f92f8a00a01febda80f299140355a9 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 18 Oct 2026 22:06:12 +0100
+Subject: [PATCH] Hide the mouse pointer in fullscreen while it is not locked
+ to the camera; the debug panel (F1) brings it back
+
+---
+ ps2xRuntime/src/lib/ps2_debug_panel.cpp |  2 ++
+ ps2xRuntime/src/lib/ps2_host_input.cpp  | 21 +++++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_host_input.h    |  4 ++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp     |  4 ++++
+ 4 files changed, 31 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_debug_panel.cpp b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+index 2820bb6..b9318f6 100644
+--- a/ps2xRuntime/src/lib/ps2_debug_panel.cpp
++++ b/ps2xRuntime/src/lib/ps2_debug_panel.cpp
+@@ -4,6 +4,7 @@
+ #include "ps2_runtime.h"
+ #include "ps2_runtime_macros.h"
+ #include "ps2_log.h"
++#include "ps2_host_input.h"
+ #include "runtime/ee_scheduler.h"
+ 
+ #include <unordered_set>
+@@ -2220,6 +2221,7 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
+     {
+         toggleVisible();
+     }
++    ps2_host_input::setPointerNeeded(m_visible);
+ 
+     if (!m_visible)
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_host_input.cpp b/ps2xRuntime/src/lib/ps2_host_input.cpp
+index 0715da3..416b7e6 100644
+--- a/ps2xRuntime/src/lib/ps2_host_input.cpp
++++ b/ps2xRuntime/src/lib/ps2_host_input.cpp
+@@ -610,6 +610,27 @@ namespace ps2_host_input
+         return input;
+     }
+ 
++    namespace
++    {
++        bool g_pointerNeeded = false;
++    }
++
++    void setPointerNeeded(bool needed)
++    {
++        g_pointerNeeded = needed;
++    }
++
++    void updatePointer(bool hide)
++    {
++        if (g_mouseLocked)
++            return;
++        hide = hide && !g_pointerNeeded;
++        if (hide && !IsCursorHidden())
++            HideCursor();
++        else if (!hide && IsCursorHidden())
++            ShowCursor();
++    }
++
+     void releaseMouse()
+     {
+         if (g_mouseLocked)
+diff --git a/ps2xRuntime/src/lib/ps2_host_input.h b/ps2xRuntime/src/lib/ps2_host_input.h
+index 9fdc3b1..5ffe21b 100644
+--- a/ps2xRuntime/src/lib/ps2_host_input.h
++++ b/ps2xRuntime/src/lib/ps2_host_input.h
+@@ -12,5 +12,9 @@ namespace ps2_host_input
+     void setFieldCounter(const std::atomic<uint64_t> *counter);
+     void sample();
+     void releaseMouse();
++    // Hide the pointer while true unless something (the debug panel) needs it; the mouse camera
++    // lock hides it on its own.
++    void updatePointer(bool hide);
++    void setPointerNeeded(bool needed);
+     [[nodiscard]] ps2x::iop::PadInputState padState(uint32_t port);
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 81674d4..b30a7de 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2898,6 +2898,10 @@ void PS2Runtime::run()
+         }
+ #endif
+         ps2_host_input::sample();
++#if !defined(PLATFORM_VITA)
++        // no mouse pointer over the game in fullscreen (the debug panel brings it back)
++        ps2_host_input::updatePointer(IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
++#endif
+         if (IsKeyPressed(KEY_F5))
+             ps2x::savestate::requestQuickSave();
+         if (IsKeyPressed(KEY_F9))
+-- 
+2.55.0.windows.5
+
