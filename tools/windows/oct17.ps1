@@ -1,12 +1,22 @@
 # PC job (17 Oct evening): play build with today's changes, a smoke boot, then the profiles of the
 # slow saves.
+#   0. runtime patch 27 (fullscreen / hidden panel start options) applied if missing;
 #   1. fast play build (overrides: Select quick-save, profiler, live save-state/lightmap paths;
-#      runtime patch 27 if applied; the play build now links with /MAP, reconfigured once);
+#      runtime patch 27; the play build now links with /MAP, reconfigured once);
 #   2. smoke boot: cold boot 90 s at 60 fps with the start options (fullscreen, panel hidden);
 #   3. tools\windows\profile-states.ps1 -NoBuild: the sand-monster fight, the pool, a 60 fps scene.
 # Started through start-job.ps1 (log: game\jobs\job.log).
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
+# runtime patch 27 (start options) into the pop-sotc runtime, then the build's runtime worktree to it
+$Rt = 'C:\tools\PS2Recomp-sotc'
+if (-not (git -C $Rt log --oneline -20 | Select-String 'Start options: PS2X_FULLSCREEN')) {
+    "== applying runtime patch 27"
+    git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\27-fullscreen-debugger-start-options.patch"
+    if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH 27 FAILED"; exit 1 }
+}
+git -C "$Root\game\recomp-sotc\runtime-src" checkout -q --detach (git -C $Rt rev-parse HEAD)
+"runtime at $(git -C "$Root\game\recomp-sotc\runtime-src" log --oneline -1)"
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fast play build"
 & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc
 if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
