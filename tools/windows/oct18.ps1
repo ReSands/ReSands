@@ -3,6 +3,7 @@
 # cycle-modelling interpreter in the slow saves: compiled VU1 programs are looked up by the whole
 # VU1 code image, and the compiled set came from a capture of the opening (9 images, 12 Oct), so
 # scenes with other program combinations fall back to the interpreter.
+#   0. runtime patch 29 (frame-rate overlay layout) if missing;
 #   1. capture: every kept save loaded for a short boot with PS2X_VU1_CAPTURE into the existing
 #      capture folder (game\recomp-sotc\vu1_capture; images are added, not replaced);
 #   2. rebuild.ps1 -Fast -Play -Vu1 <capture>: vu1_recomp over all images, play build;
@@ -12,6 +13,16 @@
 param([string]$Pattern = 'play_20261017_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
+# runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout)
+$Rt = 'C:\tools\PS2Recomp-sotc'
+foreach ($p in @(@{ N = 29; File = '29-frame-graph-df-layout.patch'; Mark = "Frame-rate overlay in Digital Foundry's layout" })) {
+    if (-not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch $p.Mark)) {
+        "== applying runtime patch $($p.N)"
+        git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\$($p.File)"
+        if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH $($p.N) FAILED"; exit 1 }
+    }
+}
+git -C "$Root\game\recomp-sotc\runtime-src" checkout -q --detach (git -C $Rt rev-parse HEAD)
 $capture = "$Root\game\recomp-sotc\vu1_capture"
 $states = Get-ChildItem "$Root\game\ps2\disc\states\$Pattern" | Sort-Object Name
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') capture: $((Get-ChildItem "$capture\vu1_*.bin").Count) images before"

@@ -1,0 +1,186 @@
+From 5117d83a737c5c37a365adee30a2cdcdfde9d839 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 18 Oct 2026 20:17:36 +0100
+Subject: [PATCH] Frame-rate overlay in Digital Foundry's layout: big fps top
+ right, frame rate across the bottom (10 s), small frame-time box above it (3
+ s), one line each, time-based
+
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 134 ++++++++++++++++------------
+ 1 file changed, 75 insertions(+), 59 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 65fa26f..81674d4 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2598,84 +2598,99 @@ void PS2Runtime::run()
+     const auto presentStart = PresentClock::now();
+     auto lastSwap = presentStart;
+ #if !defined(PLATFORM_VITA)
+-    // Frame-time graph (Digital Foundry style), toggled with L3 + R3 on a gamepad or F3;
+-    // PS2X_FRAME_GRAPH=1 starts with it shown. Samples the time between new game frames: with the
+-    // shared GPU presenter every new source sequence, otherwise every presented frame.
+-    static constexpr int kGraphSamples = 300;
++    // Frame-rate overlay in Digital Foundry's layout, toggled with L3 + R3 on a gamepad or F3;
++    // PS2X_FRAME_GRAPH=1 starts with it shown. One sample per new game frame (with the shared GPU
++    // presenter every new source sequence, otherwise every presented frame). Big fps number top right
++    // (frames in the last second), frame rate across the bottom (last 10 s, 0-60 fps), frame time in a
++    // small box above it (last 3 s, 0-100 ms, top = 0); one line per measurement.
++    static constexpr int kGraphSamples = 1024;
+     struct FrameGraph
+     {
+-        float ms[kGraphSamples] = {};
++        float ms[kGraphSamples] = {}, at[kGraphSamples] = {}; // frame time, seconds since start
+         int count = 0, head = 0;
+         bool visible = false, comboDown = false, haveLast = false;
+         uint64_t lastSequence = 0u;
+-        PresentClock::time_point last{};
+-        void add(float v)
++        PresentClock::time_point last{}, start = PresentClock::now();
++        void add(float v, float t)
+         {
+             ms[head] = v;
++            at[head] = t;
+             head = (head + 1) % kGraphSamples;
+             count = std::min(count + 1, kGraphSamples);
+         }
+-        float at(int i) const { return ms[(head - count + i + 2 * kGraphSamples) % kGraphSamples]; } // 0 = oldest
++        int index(int i) const { return (head - count + i + 2 * kGraphSamples) % kGraphSamples; } // 0 = oldest
+     } frameGraph;
+     if (const char *v = std::getenv("PS2X_FRAME_GRAPH"); v && *v == '1')
+         frameGraph.visible = true;
+     auto drawFrameGraph = [&frameGraph]()
+     {
+-        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+-        const int w = std::max(360, sw * 2 / 5), h = std::max(200, sh * 3 / 10);
+-        const int x = 16, y = sh - h - 16, pad = 10, font = std::max(16, sh / 45);
+-        DrawRectangle(x, y, w, h, Fade(BLACK, 0.6f));
+-        // fps over the last half second, the current frame time, the worst frame of the last 5 s
+-        float sum = 0.0f, worst = 0.0f, recent = 0.0f;
+-        int frames = 0;
+-        for (int i = frameGraph.count - 1; i >= 0; --i)
+-        {
+-            const float v = frameGraph.at(i);
+-            if (sum < 500.0f)
++        const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight());
++        const float now = std::chrono::duration<float>(PresentClock::now() - frameGraph.start).count();
++        const Color line{70, 150, 255, 255}, grid = Fade(RAYWHITE, 0.85f), back = Fade(BLACK, 0.55f);
++        const int label = std::max(14, int(sh / 40)), title = std::max(16, int(sh / 34));
++        // frames per second at sample i: samples in the second up to it
++        auto fpsAt = [&](int i) {
++            const float t = frameGraph.at[frameGraph.index(i)];
++            int n = 0;
++            for (int k = i; k >= 0 && frameGraph.at[frameGraph.index(k)] > t - 1.0f; --k)
++                ++n;
++            return float(n);
++        };
++        // big number, top right
++        const float fpsNow = frameGraph.count ? fpsAt(frameGraph.count - 1) * (now - frameGraph.at[frameGraph.index(frameGraph.count - 1)] < 1.0f ? 1.0f : 0.0f) : 0.0f;
++        const char *big = TextFormat("%.1f", fpsNow);
++        const int bigSize = std::max(32, int(sh / 11));
++        DrawText(big, int(sw - MeasureText(big, bigSize) - sw * 0.03f), int(sh * 0.04f), bigSize, RAYWHITE);
++        // frame rate across the bottom: 0-60 fps, guides every 10, last 10 s
++        const float fx = sw * 0.025f, fw = sw * 0.94f, fh = sh * 0.19f, fy = sh - fh - sh * 0.02f;
++        DrawRectangle(int(fx), int(fy), int(fw), int(fh), back);
++        for (int g = 0; g <= 60; g += 10)
++        {
++            const float y = fy + fh - fh * g / 60.0f;
++            DrawLineEx(Vector2{fx, y}, Vector2{fx + fw, y}, 2.0f, grid);
++            DrawText(TextFormat("%d", g), int(fx + fw + 8), int(y - label / 2), label, RAYWHITE);
++        }
++        DrawLineEx(Vector2{fx, fy}, Vector2{fx, fy + fh}, 2.0f, grid);
++        DrawLineEx(Vector2{fx + fw * 0.5f, fy}, Vector2{fx + fw * 0.5f, fy + fh}, 2.0f, grid);
++        DrawLineEx(Vector2{fx + fw, fy}, Vector2{fx + fw, fy + fh}, 2.0f, grid);
++        const char *rateTitle = "FRAME-RATE (FPS)";
++        DrawText(rateTitle, int(fx + fw - MeasureText(rateTitle, title)), int(fy - title - 6), title, RAYWHITE);
++        // frame time, small box above it on the left: 0 (top) to 100 ms, guides at 33.3 and 66.7, last 3 s
++        const float tx = fx, tw = sw * 0.17f, th = sh * 0.09f, ty = fy - th - title - sh * 0.03f;
++        DrawRectangle(int(tx), int(ty), int(tw), int(th), back);
++        DrawRectangleLinesEx(Rectangle{tx, ty, tw, th}, 2.0f, grid);
++        DrawLineEx(Vector2{tx + tw * 0.5f, ty}, Vector2{tx + tw * 0.5f, ty + th}, 2.0f, grid);
++        for (float g : {33.3f, 66.7f})
++            DrawLineEx(Vector2{tx, ty + th * g / 100.0f}, Vector2{tx + tw, ty + th * g / 100.0f}, 1.0f, Fade(RAYWHITE, 0.4f));
++        for (float g : {0.0f, 33.3f, 66.7f, 100.0f})
++            DrawText(g == 0.0f ? "0" : TextFormat("%.1f", g), int(tx + tw + 8), int(ty + th * g / 100.0f - label / 2), label, RAYWHITE);
++        DrawText("FRAME-TIME (MS)", int(tx), int(ty - title - 6), title, RAYWHITE);
++        // the lines (time-based x; the newest sample at the right edge)
++        Vector2 prevRate{}, prevTime{};
++        bool haveRate = false, haveTime = false;
++        for (int i = 0; i < frameGraph.count; ++i)
++        {
++            const int k = frameGraph.index(i);
++            const float age = now - frameGraph.at[k];
++            if (age <= 10.0f)
+             {
+-                sum += v;
+-                ++frames;
++                const Vector2 p{fx + fw * (1.0f - age / 10.0f), fy + fh - fh * std::clamp(fpsAt(i), 0.0f, 60.0f) / 60.0f};
++                if (haveRate)
++                    DrawLineEx(prevRate, p, 3.0f, line);
++                prevRate = p;
++                haveRate = true;
+             }
+-            if (recent < 5000.0f)
++            if (age <= 3.0f)
+             {
+-                recent += v;
+-                worst = std::max(worst, v);
++                const Vector2 p{tx + tw * (1.0f - age / 3.0f), ty + th * std::clamp(frameGraph.ms[k], 0.0f, 100.0f) / 100.0f};
++                if (haveTime)
++                    DrawLineEx(Vector2{p.x, prevTime.y}, p, 2.0f, line); // a frame time holds until the next frame
++                if (haveTime)
++                    DrawLineEx(prevTime, Vector2{p.x, prevTime.y}, 2.0f, line);
++                prevTime = p;
++                haveTime = true;
+             }
+         }
+-        const float fps = sum > 0.0f ? frames * 1000.0f / sum : 0.0f;
+-        const float current = frameGraph.count ? frameGraph.at(frameGraph.count - 1) : 0.0f;
+-        const Color fpsColour = fps >= 57.0f ? GREEN : fps >= 28.0f ? GOLD : RED;
+-        DrawText(TextFormat("%.0f fps", fps), x + pad, y + pad, font * 2, fpsColour);
+-        DrawText(TextFormat("%.1f ms   worst %.1f ms (5 s)", current, worst), x + pad + MeasureText("000 fps", font * 2) + 16,
+-                 y + pad + font / 2, font, RAYWHITE);
+-        const int gx = x + pad, gw = w - 2 * pad, top = y + pad + font * 2 + 8, bottom = y + h - pad;
+-        const int split = top + (bottom - top) * 55 / 100;
+-        // upper: frames per second, 0..65, guides at 30 and 60
+-        auto fpsY = [&](float f) { return float(split) - std::clamp(f, 0.0f, 65.0f) / 65.0f * float(split - top - 4); };
+-        // lower: frame time, 0..100 ms, guides at 16.7 and 33.3 ms
+-        auto msY = [&](float v) { return float(bottom) - std::clamp(v, 0.0f, 100.0f) / 100.0f * float(bottom - split - 6); };
+-        for (float f : {30.0f, 60.0f})
+-        {
+-            DrawLine(gx, int(fpsY(f)), gx + gw, int(fpsY(f)), Fade(RAYWHITE, 0.25f));
+-            DrawText(TextFormat("%.0f", f), gx + gw - 22, int(fpsY(f)) - font * 3 / 4, font * 3 / 4, Fade(RAYWHITE, 0.6f));
+-        }
+-        for (float v : {16.7f, 33.3f})
+-        {
+-            DrawLine(gx, int(msY(v)), gx + gw, int(msY(v)), Fade(RAYWHITE, 0.25f));
+-            DrawText(TextFormat("%.1f ms", v), gx + gw - 60, int(msY(v)) - font * 3 / 4, font * 3 / 4, Fade(RAYWHITE, 0.6f));
+-        }
+-        DrawLine(gx, split, gx + gw, split, Fade(RAYWHITE, 0.15f));
+-        const float step = float(gw) / float(kGraphSamples - 1);
+-        const int first = kGraphSamples - frameGraph.count; // newest sample at the right edge
+-        for (int i = 1; i < frameGraph.count; ++i)
+-        {
+-            const float a = frameGraph.at(i - 1), b = frameGraph.at(i);
+-            const float x0 = gx + (first + i - 1) * step, x1 = gx + (first + i) * step;
+-            const float fa = a > 0.0f ? 1000.0f / a : 0.0f, fb = b > 0.0f ? 1000.0f / b : 0.0f;
+-            const Color c = fb >= 57.0f ? GREEN : fb >= 28.0f ? GOLD : RED;
+-            DrawLineEx(Vector2{x0, fpsY(fa)}, Vector2{x1, fpsY(fb)}, 2.0f, c);
+-            DrawLineEx(Vector2{x0, msY(a)}, Vector2{x1, msY(b)}, 2.0f, b <= 17.5f ? GREEN : b <= 34.5f ? GOLD : RED);
+-        }
+     };
+ #endif
+     const bool tracingFrames = frameTimes.is_open() && frameTimes.good();
+@@ -2776,7 +2791,8 @@ void PS2Runtime::run()
+             {
+                 const auto now = PresentClock::now();
+                 if (frameGraph.haveLast)
+-                    frameGraph.add(std::chrono::duration<float, std::milli>(now - frameGraph.last).count());
++                    frameGraph.add(std::chrono::duration<float, std::milli>(now - frameGraph.last).count(),
++                                   std::chrono::duration<float>(now - frameGraph.start).count());
+                 frameGraph.last = now;
+                 frameGraph.haveLast = true;
+                 frameGraph.lastSequence = sharedFrame.sequence;
+-- 
+2.54.0 (Apple Git-157)
+
