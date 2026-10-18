@@ -67,3 +67,13 @@ Sound marker: #7 (090902) "that's when the audio started to glitch".
 - Fix in progress: `tools/windows/oct18.ps1` captures VU1 images from all 51 saves, compiles them
   (`rebuild.ps1 -Vu1`), then re-measures every save's fps and re-profiles. VU0 microprograms (36 call sites)
   are the next candidate (see docs/reference.md, CPU-side re-survey).
+
+## First-person camera flag (18 Oct, not found yet)
+
+Problem: `PS2X_INVERT_RIGHT_STICK=x` (modern camera orbit) also reverses first-person look, which already
+uses the modern direction. Fix idea: invert only when the game is not in first-person view. One
+first-person save (play_20261018_202311, tutorial "First-person view ... press R2 to return") against 55
+normal saves: no global (0x600000-0x700000) or scratchpad word is the mode (3 hits: two sound-callback
+pointers, one -0.0 float). The flag is likely in a heap camera object (addresses move between levels).
+Needed: paired saves at one spot (normal, first-person, normal, first-person within a minute), then diff all
+of RAM among them.
