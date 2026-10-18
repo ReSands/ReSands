@@ -9,11 +9,11 @@
 #   2. rebuild.ps1 -Fast -Play -Vu1 <capture>: vu1_recomp over all images, play build;
 #   3. measure: the fps of a 20 s boot of every save (game\analysis\stateshots\fps_after_vu1.txt,
 #      to compare with the job log of state-shots.ps1, 17 Oct), then profile-states.ps1 -NoBuild;
-#   4. the nightly checks (llm-job.ps1 -Job nightly) on the new build, then the PC goes to sleep.
+#   4. the nightly checks (llm-job.ps1 -Job nightly) on the new build (-Sleep: then the PC sleeps).
 # Run through start-job.ps1 (the window needs the desktop session).
 param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture, [switch]$NoBuild,
-      [switch]$NoMeasure, [switch]$NoNightly, [switch]$NoSleep)
-# Quick run before more play: -NoMeasure -NoNightly -NoSleep. Overnight after that: -NoCapture -NoBuild.
+      [switch]$NoMeasure, [switch]$NoNightly, [switch]$Sleep)
+# Quick run before more play: -NoMeasure -NoNightly. Measure/nightly only: -NoCapture -NoBuild.
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 # runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout)
@@ -59,5 +59,5 @@ foreach ($st in $states) {
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') nightly checks on the new build"
 if (-not $NoNightly) { & "$Root\tools\windows\llm-job.ps1" -Job nightly }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done"
-# sleep, not shut down: wake-on-LAN does not work from a full shutdown (17 Oct)
-if (-not $NoSleep) { "putting the PC to sleep"; Start-Process rundll32.exe -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0' }
+# -Sleep puts the PC to sleep at the end (off by default: the user shuts it down or asks for it)
+if ($Sleep) { "putting the PC to sleep"; Start-Process rundll32.exe -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0' }
