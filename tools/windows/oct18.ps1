@@ -21,6 +21,8 @@ param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoC
 # Quick run before more play: -NoMeasure -NoNightly. Measure/nightly only: -NoCapture -NoBuild.
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
+# start-job.ps1 passes arguments as one string: 'a,b' arrives as a single element
+$ProfileStates = @($ProfileStates | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 # runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout; 30: pointer)
 $Rt = 'C:\tools\PS2Recomp-sotc'
 foreach ($p in @(@{ N = 29; File = '29-frame-graph-df-layout.patch'; Mark = "Frame-rate overlay in Digital Foundry's layout" },

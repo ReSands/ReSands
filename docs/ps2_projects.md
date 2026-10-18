@@ -22,6 +22,10 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | lombyte-project/Lombyte | Ratchet & Clank matching decomp | not useful (matching-decomp route) |
 | SirBraga/black-recomp | Black | EE, VU0, VU1, IOP all recompiled (VU0 lead, 18 Oct) |
 | sp00nznet/reo | Resident Evil Outbreak | own VU0/VU1 microcode translator (18 Oct) |
+| TaylorNAlbarnaz/PS2Recomp `sotc-port` 17 Oct | our base, newer commits | VU1 zero-padded prefix matching, hot paths: our patches 32-34 (18 Oct) |
+| KIexster/god-of-war-recomp | God of War (SotC base) | `docs/RENDIMIENTO.md`: getenv in hot loops 38%, IOP scheduler 41% (18 Oct) |
+| catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS | Road Trip | VU1 AOT with build-time pipeline scheduling, ~60x (18 Oct) |
+| Harold0777/eagle_five_recomp | Ace Combat 5 perf fork | VU1 100%, GS state cache, VBlank condvars (18 Oct) |
 
 ## From the surveys
 
