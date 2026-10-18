@@ -1521,9 +1521,10 @@ namespace
         active = true;
     }
 
-    // Controller quick-save: Select (user's choice, 17 Oct; PoP gives it no job in play) or both stick
-    // buttons (L3 + R3) together do what F5 does. Needs a runtime with save states (the SotC base); a
-    // no-op elsewhere. Every quick-save is also kept as states/play_<date>_<time>.state (keepQuickSaves).
+    // Controller quick-save: Select (user's choice, 17 Oct; PoP gives it no job in play) does what F5
+    // does (L3 + R3 toggles the runtime's frame-time graph since patch 28). Needs a runtime with save
+    // states (the SotC base); a no-op elsewhere. Every quick-save is also kept as
+    // states/play_<date>_<time>.state (keepQuickSaves).
     void maybePadQuickSave()
     {
 #if POP_HAVE_QUICKSAVE
@@ -1531,15 +1532,14 @@ namespace
         static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
         bool combo = false;
         for (int g = 0; g < 4; ++g)
-            if (IsGamepadAvailable(g) && (IsGamepadButtonDown(g, GAMEPAD_BUTTON_MIDDLE_LEFT) ||
-                                          (IsGamepadButtonDown(g, GAMEPAD_BUTTON_LEFT_THUMB) && IsGamepadButtonDown(g, GAMEPAD_BUTTON_RIGHT_THUMB))))
+            if (IsGamepadAvailable(g) && IsGamepadButtonDown(g, GAMEPAD_BUTTON_MIDDLE_LEFT))
                 combo = true;
         const auto now = std::chrono::steady_clock::now();
         if (combo && !was && now - last > std::chrono::seconds(2))
         {
             last = now;
             ps2x::savestate::requestQuickSave();
-            std::cerr << "[pop] quick-save requested from the controller (Select or L3 + R3)" << std::endl;
+            std::cerr << "[pop] quick-save requested from the controller (Select)" << std::endl;
         }
         was = combo;
 #endif

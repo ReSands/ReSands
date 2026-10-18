@@ -4,7 +4,7 @@
 # Desktop shortcuts (made by -Shortcuts): "PoP 60 fps" and "PoP 30 fps (recheck)".
 # Starts in borderless fullscreen with the debug panel hidden (PS2X_FULLSCREEN=1, PS2X_DEBUGGER=0; runtime
 # patch 27): F11 toggles fullscreen, F1 shows the panel.
-# While playing: Select (or L3 + R3, or F5) quick-saves; every quick-save is also kept as
+# While playing: Select (or F5) quick-saves; L3 + R3 (or F3) shows/hides the frame-time graph (patch 28); every quick-save is also kept as
 # game\ps2\disc\states\play_<date>_<time>.state. Alt+F4 or closing the window quits. Avoid F9 (quick-load).
 # Log: game\recomp-sotc\play_<date>_<time>.log, written when the game window is closed.
 param([switch]$Fps30, [string]$Env = '', [switch]$Shortcuts)

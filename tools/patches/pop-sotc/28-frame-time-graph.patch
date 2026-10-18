@@ -1,0 +1,155 @@
+From c769c8e8b6b25f1de8056ba878f0f384e213c15b Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 18 Oct 2026 14:40:53 +0100
+Subject: [PATCH] Frame-time graph overlay (Digital Foundry style): fps and
+ frame-time lines over the last 300 game frames, toggled with L3 + R3 or F3,
+ PS2X_FRAME_GRAPH=1 starts it shown
+
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 109 ++++++++++++++++++++++++++++
+ 1 file changed, 109 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index bd9b1e8..65fa26f 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2597,6 +2597,87 @@ void PS2Runtime::run()
+     using PresentClock = std::chrono::steady_clock;
+     const auto presentStart = PresentClock::now();
+     auto lastSwap = presentStart;
++#if !defined(PLATFORM_VITA)
++    // Frame-time graph (Digital Foundry style), toggled with L3 + R3 on a gamepad or F3;
++    // PS2X_FRAME_GRAPH=1 starts with it shown. Samples the time between new game frames: with the
++    // shared GPU presenter every new source sequence, otherwise every presented frame.
++    static constexpr int kGraphSamples = 300;
++    struct FrameGraph
++    {
++        float ms[kGraphSamples] = {};
++        int count = 0, head = 0;
++        bool visible = false, comboDown = false, haveLast = false;
++        uint64_t lastSequence = 0u;
++        PresentClock::time_point last{};
++        void add(float v)
++        {
++            ms[head] = v;
++            head = (head + 1) % kGraphSamples;
++            count = std::min(count + 1, kGraphSamples);
++        }
++        float at(int i) const { return ms[(head - count + i + 2 * kGraphSamples) % kGraphSamples]; } // 0 = oldest
++    } frameGraph;
++    if (const char *v = std::getenv("PS2X_FRAME_GRAPH"); v && *v == '1')
++        frameGraph.visible = true;
++    auto drawFrameGraph = [&frameGraph]()
++    {
++        const int sw = GetScreenWidth(), sh = GetScreenHeight();
++        const int w = std::max(360, sw * 2 / 5), h = std::max(200, sh * 3 / 10);
++        const int x = 16, y = sh - h - 16, pad = 10, font = std::max(16, sh / 45);
++        DrawRectangle(x, y, w, h, Fade(BLACK, 0.6f));
++        // fps over the last half second, the current frame time, the worst frame of the last 5 s
++        float sum = 0.0f, worst = 0.0f, recent = 0.0f;
++        int frames = 0;
++        for (int i = frameGraph.count - 1; i >= 0; --i)
++        {
++            const float v = frameGraph.at(i);
++            if (sum < 500.0f)
++            {
++                sum += v;
++                ++frames;
++            }
++            if (recent < 5000.0f)
++            {
++                recent += v;
++                worst = std::max(worst, v);
++            }
++        }
++        const float fps = sum > 0.0f ? frames * 1000.0f / sum : 0.0f;
++        const float current = frameGraph.count ? frameGraph.at(frameGraph.count - 1) : 0.0f;
++        const Color fpsColour = fps >= 57.0f ? GREEN : fps >= 28.0f ? GOLD : RED;
++        DrawText(TextFormat("%.0f fps", fps), x + pad, y + pad, font * 2, fpsColour);
++        DrawText(TextFormat("%.1f ms   worst %.1f ms (5 s)", current, worst), x + pad + MeasureText("000 fps", font * 2) + 16,
++                 y + pad + font / 2, font, RAYWHITE);
++        const int gx = x + pad, gw = w - 2 * pad, top = y + pad + font * 2 + 8, bottom = y + h - pad;
++        const int split = top + (bottom - top) * 55 / 100;
++        // upper: frames per second, 0..65, guides at 30 and 60
++        auto fpsY = [&](float f) { return float(split) - std::clamp(f, 0.0f, 65.0f) / 65.0f * float(split - top - 4); };
++        // lower: frame time, 0..100 ms, guides at 16.7 and 33.3 ms
++        auto msY = [&](float v) { return float(bottom) - std::clamp(v, 0.0f, 100.0f) / 100.0f * float(bottom - split - 6); };
++        for (float f : {30.0f, 60.0f})
++        {
++            DrawLine(gx, int(fpsY(f)), gx + gw, int(fpsY(f)), Fade(RAYWHITE, 0.25f));
++            DrawText(TextFormat("%.0f", f), gx + gw - 22, int(fpsY(f)) - font * 3 / 4, font * 3 / 4, Fade(RAYWHITE, 0.6f));
++        }
++        for (float v : {16.7f, 33.3f})
++        {
++            DrawLine(gx, int(msY(v)), gx + gw, int(msY(v)), Fade(RAYWHITE, 0.25f));
++            DrawText(TextFormat("%.1f ms", v), gx + gw - 60, int(msY(v)) - font * 3 / 4, font * 3 / 4, Fade(RAYWHITE, 0.6f));
++        }
++        DrawLine(gx, split, gx + gw, split, Fade(RAYWHITE, 0.15f));
++        const float step = float(gw) / float(kGraphSamples - 1);
++        const int first = kGraphSamples - frameGraph.count; // newest sample at the right edge
++        for (int i = 1; i < frameGraph.count; ++i)
++        {
++            const float a = frameGraph.at(i - 1), b = frameGraph.at(i);
++            const float x0 = gx + (first + i - 1) * step, x1 = gx + (first + i) * step;
++            const float fa = a > 0.0f ? 1000.0f / a : 0.0f, fb = b > 0.0f ? 1000.0f / b : 0.0f;
++            const Color c = fb >= 57.0f ? GREEN : fb >= 28.0f ? GOLD : RED;
++            DrawLineEx(Vector2{x0, fpsY(fa)}, Vector2{x1, fpsY(fb)}, 2.0f, c);
++            DrawLineEx(Vector2{x0, msY(a)}, Vector2{x1, msY(b)}, 2.0f, b <= 17.5f ? GREEN : b <= 34.5f ? GOLD : RED);
++        }
++    };
++#endif
+     const bool tracingFrames = frameTimes.is_open() && frameTimes.good();
+     std::vector<uint64_t> screenshotFields;
+     if (const char *fields = std::getenv("PS2X_SCREENSHOT_FIELDS"))
+@@ -2687,6 +2768,21 @@ void PS2Runtime::run()
+             sharedFrame.height = presentHeight;
+         }
+ 
++#if !defined(PLATFORM_VITA)
++        {
++            // one frame-graph sample per new game frame
++            const bool newFrame = shared ? (sharedFrame.sequence != 0u && sharedFrame.sequence != frameGraph.lastSequence) : true;
++            if (newFrame)
++            {
++                const auto now = PresentClock::now();
++                if (frameGraph.haveLast)
++                    frameGraph.add(std::chrono::duration<float, std::milli>(now - frameGraph.last).count());
++                frameGraph.last = now;
++                frameGraph.haveLast = true;
++                frameGraph.lastSequence = sharedFrame.sequence;
++            }
++        }
++#endif
+         BeginDrawing();
+         ClearBackground(BLACK);
+         if (displayTex.id != 0 && presentWidth != 0u && presentHeight != 0u)
+@@ -2713,6 +2809,10 @@ void PS2Runtime::run()
+         {
+             m_debugUiDrawCallback(*this, m_debugUiUserData);
+         }
++#if !defined(PLATFORM_VITA)
++        if (frameGraph.visible)
++            drawFrameGraph();
++#endif
+         {
+             std::string stateText;
+             float stateAlpha = 0.0f;
+@@ -2761,6 +2861,15 @@ void PS2Runtime::run()
+             lastSwap = now;
+         }
+ #if !defined(PLATFORM_VITA)
++        {
++            bool combo = false;
++            for (int pad = 0; pad < 4; ++pad)
++                if (IsGamepadAvailable(pad) && IsGamepadButtonDown(pad, GAMEPAD_BUTTON_LEFT_THUMB) && IsGamepadButtonDown(pad, GAMEPAD_BUTTON_RIGHT_THUMB))
++                    combo = true;
++            if ((combo && !frameGraph.comboDown) || IsKeyPressed(KEY_F3))
++                frameGraph.visible = !frameGraph.visible;
++            frameGraph.comboDown = combo;
++        }
+         if (IsKeyPressed(KEY_F11))
+         {
+             ps2_host_input::releaseMouse();
+-- 
+2.54.0 (Apple Git-157)
+
