@@ -10,7 +10,7 @@
 #   3. measure: the fps of a 20 s boot of every save (game\analysis\stateshots\fps_after_vu1.txt,
 #      to compare with the job log of state-shots.ps1, 17 Oct), then profile-states.ps1 -NoBuild.
 # Run through start-job.ps1 (the window needs the desktop session).
-param([string]$Pattern = 'play_20261017_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture)
+param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 # runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout)
