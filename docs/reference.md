@@ -34,6 +34,8 @@ Build requirements: CMake 3.20+, C++20, mainly tested with MSVC, SSE4/AVX host s
 - No competing PS2 recompiler found. PSRetroX (an earlier attempt) went inactive.
 - Fallback if this stalls: PCSX2 with HD texture packs gives most of the visual benefit today.
 
+- PS2Recomp wiki (https://github.com/ran-j/PS2Recomp/wiki, read 18 Oct 2026; last edit Aug 2026): a getting-started guide (EE overview marked outdated, ELF files, analyzer/recompiler/runtime pages, override hooks, a "stripped game walkthrough for LLMs"). Nothing we had not already learned: no save states, VU0 performance, GS backends or rumble. One rule matches ours: a handler bound to an address with `bindAddressHandler` must advance `ctx->pc` (else it redispatches forever); for anything non-trivial use `registerFunction` with `if (ctx->pc == entryPc) ctx->pc = $ra`.
+
 ## Tooling to add
 
 - Ghidra plus **ghidra-emotionengine-reloaded** (https://github.com/chaoticgd/ghidra-emotionengine-reloaded): disassembles/decompiles EE instructions (MMI, VU0 macro mode), recovers types/functions/globals from ELFs with `.mdebug` sections (STABS analyzer), imports PCSX2 save states. Match the release to the Ghidra version. First check whether the US ELF carries debug symbols; that would give function names for free. PCSX2 save states let us inspect live game memory.
