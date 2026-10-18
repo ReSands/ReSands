@@ -19,7 +19,17 @@ $StdOut = "$Log.stdout"
 $Err  = "$Log.stderr"
 
 # -Env 'A=1;B=2' sets extra environment variables for the game (applied first, so they win).
-foreach ($pair in ($Env -split ';')) { if ($pair -match '^\s*([^=]+)=(.*)$') { Set-Item "env:$($Matches[1].Trim())" $Matches[2] } }
+# They are set in this PowerShell process, which the calling job shares, so they are put back at the
+# end: before that fix (19 Oct) a -Env setting stayed on for every later boot of the same job
+# (PS2X_VU1_CAPTURE and PS2X_VU0_VERIFY slowed the 18 Oct night's measurements).
+$restoreEnv = @{}
+foreach ($pair in ($Env -split ';')) {
+    if ($pair -match '^\s*([^=]+)=(.*)$') {
+        $k = $Matches[1].Trim()
+        if (-not $restoreEnv.ContainsKey($k)) { $restoreEnv[$k] = [Environment]::GetEnvironmentVariable($k) }
+        Set-Item "env:$k" $Matches[2]
+    }
+}
 # Runtime settings the SotC port documents (Docs/CONFIGURATION.md), for the pop-sotc setup:
 # GPU GS renderer on its own thread, VU1 on its own thread, compiled VU1 microcode, SIMD paths.
 # Values already set in the environment win.
@@ -55,6 +65,7 @@ if (-not $p.WaitForExit($Seconds * 1000)) {
     $p.WaitForExit()
     $result = 'timeout'
 }
+foreach ($k in $restoreEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $restoreEnv[$k]) }
 Get-Content $StdOut, $Err | Set-Content $Log
 Remove-Item $StdOut, $Err
 $lines = (Get-Content $Log | Measure-Object -Line).Lines
