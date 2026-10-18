@@ -30,6 +30,15 @@ foreach ($pair in ($Env -split ';')) {
         Set-Item "env:$k" $Matches[2]
     }
 }
+# 60 fps mode: the runtime models VU1's speed (PS2X_VU1_TIMING scales its modelled cycles, 1.0 = the
+# console). The game waits for modelled VU1 time, and at 60 fps the heavy scenes need more than a real
+# PS2's VU1 has: the sand-monster fights fell to 4-45 fps waiting with the VU1 thread mostly idle (A/B of
+# 19 Oct: 0.5 and 0 both gave 37-56). So 60 fps models VU1 at twice the console's speed, as the frame rate
+# is doubled; 30 fps (the faithful mode) keeps 1.0. An explicit PS2X_VU1_TIMING wins.
+if ($env:POP_60FPS -eq '1' -and -not $env:PS2X_VU1_TIMING) {
+    if (-not $restoreEnv.ContainsKey('PS2X_VU1_TIMING')) { $restoreEnv['PS2X_VU1_TIMING'] = $null }
+    $env:PS2X_VU1_TIMING = '0.5'
+}
 # Runtime settings the SotC port documents (Docs/CONFIGURATION.md), for the pop-sotc setup:
 # GPU GS renderer on its own thread, VU1 on its own thread, compiled VU1 microcode, SIMD paths.
 # Values already set in the environment win.

@@ -15,9 +15,12 @@
 # code images come from the saves themselves (tools/vuimages.py; PoP uploads one VU0 image at boot,
 # the same in all 84 saves), then the -Vu1 build, verify boots (PS2X_VU0_VERIFY=1: every compiled VU0
 # run checked against the interpreter), and the measure/profile steps into *_after_vu0 files.
+# -Final (third run): the measurements again without leaked switches (boot.ps1 used to keep -Env
+# settings for later boots, so capture and VU0 verify stayed on), with 60 fps modelling VU1 at twice
+# the console's speed (boot.ps1); a fast build only (overrides: profiler module names), fps_final.txt.
 # Run through start-job.ps1 (the window needs the desktop session).
 param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture, [switch]$NoBuild,
-      [switch]$NoMeasure, [switch]$NoNightly, [switch]$Sleep, [switch]$Vu0, [string[]]$ProfileStates = @())
+      [switch]$NoMeasure, [switch]$NoNightly, [switch]$Sleep, [switch]$Vu0, [string[]]$ProfileStates = @(), [switch]$Final)
 # Quick run before more play: -NoMeasure -NoNightly. Measure/nightly only: -NoCapture -NoBuild.
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
@@ -42,8 +45,8 @@ foreach ($p in @(@{ N = 29; File = '29-frame-graph-df-layout.patch'; Mark = "Fra
 git -C "$Root\game\recomp-sotc\runtime-src" checkout -q --detach (git -C $Rt rev-parse HEAD)
 $capture = "$Root\game\recomp-sotc\vu1_capture"
 $states = Get-ChildItem "$Root\game\ps2\disc\states\$Pattern" | Sort-Object Name
+if ($Vu0 -or $Final) { $NoCapture = $true }
 if ($Vu0) {
-    $NoCapture = $true
     "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') VU code images from the saves"
     python -I "$Root\tools\vuimages.py" $capture (Get-ChildItem "$Root\game\ps2\disc\states\*.state" | ForEach-Object FullName)
 }
@@ -57,7 +60,8 @@ if (-not $NoCapture) {
 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') rebuild with the compiled VU1 microcode"
 if (-not $NoBuild) {
-    & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -Vu1 $capture
+    if ($Final) { & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc }
+    else { & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -Vu1 $capture }
     if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
 }
 if ($Vu0) {
@@ -72,7 +76,7 @@ if ($Vu0) {
 }
 if ($NoMeasure) { "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done (no measuring)"; exit 0 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fps of every save"
-$fpsOut = if ($Vu0) { "$Root\game\analysis\stateshots\fps_after_vu0.txt" } else { "$Root\game\analysis\stateshots\fps_after_vu1.txt" }
+$fpsOut = if ($Final) { "$Root\game\analysis\stateshots\fps_final.txt" } elseif ($Vu0) { "$Root\game\analysis\stateshots\fps_after_vu0.txt" } else { "$Root\game\analysis\stateshots\fps_after_vu1.txt" }
 Remove-Item $fpsOut -ErrorAction SilentlyContinue
 foreach ($st in $states) {
     & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 20 -Name "fpscheck" `
@@ -84,8 +88,8 @@ foreach ($st in $states) {
     Add-Content -Path $fpsOut -Value $line
 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') profiles"
-if ($Vu0) {
-    # keep the VU1-only profiles for comparison
+if ($Vu0 -or $Final) {
+    # keep the earlier profiles for comparison
     New-Item -ItemType Directory -Force "$Root\game\analysis\prof\after_vu1" | Out-Null
     Copy-Item "$Root\game\analysis\prof\*.txt" "$Root\game\analysis\prof\after_vu1\" -ErrorAction SilentlyContinue
 }

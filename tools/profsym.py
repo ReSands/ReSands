@@ -4,7 +4,7 @@ the functions with the most samples: self (the sampled pc) and inclusive (anywhe
 Usage: python3 -I tools/profsym.py PROFILE SYMBOLS [--top N] [--threads N]
   SYMBOLS: the executable (macOS: read with nm -n, names demangled with c++filt) or an MSVC
   linker map (*.map, link /MAP; names undecorated loosely). Addresses outside the image are
-  shown as [outside image] (system libraries, e.g. waits in the kernel).
+  shown as [module name] when the profile lists the loaded modules (Windows), else [outside image].
 """
 import bisect
 import re
@@ -55,7 +55,7 @@ def main(argv):
     prof, symfile = argv[0], argv[1]
     preferred, syms = load_map(symfile) if symfile.lower().endswith('.map') else load_nm(symfile)
     addrs = [a for a, _ in syms]
-    base, threads, stacks = None, {}, []
+    base, threads, stacks, modules = None, {}, [], []
     for line in open(prof, encoding='utf-8', errors='replace'):
         p = line.split()
         if not p or p[0] == '#':
@@ -64,6 +64,8 @@ def main(argv):
             continue
         if p[0] == 'image':
             base = int(p[1], 16)
+        elif p[0] == 'module':
+            modules.append((int(p[1], 16), int(p[2], 16), ' '.join(p[3:])))
         elif p[0] == 'thread':
             threads[int(p[1])] = (int(p[2]), ' '.join(p[3:]))
         elif p[0] == 's':
@@ -77,7 +79,10 @@ def main(argv):
             return cache[pc]
         a = pc - slide
         i = bisect.bisect_right(addrs, a) - 1
-        n = syms[i][1] if 0 <= i and addrs[0] <= a < hi else '[outside image]'
+        if 0 <= i and addrs[0] <= a < hi:
+            n = syms[i][1]
+        else:
+            n = next((f'[{m}]' for b, size, m in modules if b <= pc < b + size and b != base), '[outside image]')
         cache[pc] = n
         return n
 
@@ -90,7 +95,8 @@ def main(argv):
         selfc[name(pcs[0])] += count
         for n in set(name(pc) for pc in pcs):
             incl[n] += count
-    busy_of = {t: threads[t][0] - per.get(t, (Counter(), None))[0].get('[outside image]', 0) for t in threads}
+    outside = lambda n: n.startswith('[')
+    busy_of = {t: threads[t][0] - sum(c for n, c in per.get(t, (Counter(), None))[0].items() if outside(n)) for t in threads}
     for t in sorted(threads, key=lambda t: -busy_of[t])[:nthreads]:
         samples, tname = threads[t]
         selfc, incl = per.get(t, (Counter(), Counter()))

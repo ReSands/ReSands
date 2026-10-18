@@ -54,6 +54,17 @@ keeps only what carries over to other projects.
 - **Judge pictures with numbers.** Mean pixel difference against the emulated output of the same frame, over a
   fixed set of scenes, catches regressions that eyes miss and shows real progress.
 - **Separate "game too slow" from "sound broken".** Our audio judder followed the frame rate. Fix speed first.
+- **Check that a measurement ran with the settings you think.** A launcher that sets debug switches in its own
+  process leaked them into every later run of the same job: a night's fps comparison ran with the VU capture
+  hook and a "check every VU0 run against the interpreter" mode still on. The profile gave it away (the
+  verifier showed up in the hot functions). Restore the environment after each run, and log the effective
+  switches next to every number.
+- **"Waiting" in a profile is a lead, not a dead end.** After the VU microcode was compiled, the game thread
+  spent most of a slow scene waiting for VU1 while the VU1 thread was mostly idle: the runtime was modelling
+  the console's VU1 speed (a real PS2 cannot run those scenes at 60 either). Ask what the wait is for.
+- **A sampler that lumps everything outside your executable together hides where threads are.** "Outside the
+  image" can be kernel waits, the graphics driver or the C runtime's memcpy, and the report cannot tell them
+  apart; name the module (or read the inclusive view: which of your functions called out).
 
 ## Replacing hardware with native code
 

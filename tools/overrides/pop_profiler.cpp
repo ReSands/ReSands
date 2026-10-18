@@ -10,7 +10,8 @@
 // follows the frame-pointer chain. Nothing is allocated while a thread is suspended (it may hold
 // the heap lock). Other platforms: no-op.
 //
-// Output (text): "image <load address hex> <path>", "thread <index> <samples> <name>", then one
+// Output (text): "image <load address hex> <path>", (Windows) "module <base> <size> <name>" per loaded
+// module, "thread <index> <samples> <name>", then one
 // line per distinct stack: "s <thread index> <count> <pc> <caller> ..." (absolute addresses, hex).
 
 #include <chrono>
@@ -142,6 +143,30 @@ namespace
                       reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))), path);
         return line;
     }
+
+    // "module <base> <size> <name>" for every loaded module, so samples outside the executable can be
+    // told apart (kernel waits in ntdll, the GL driver, the C runtime's memcpy, ...).
+    std::string moduleLines()
+    {
+        std::string out;
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+        if (snap == INVALID_HANDLE_VALUE)
+            return out;
+        MODULEENTRY32W me{};
+        me.dwSize = sizeof(me);
+        for (BOOL ok = Module32FirstW(snap, &me); ok; ok = Module32NextW(snap, &me))
+        {
+            char name[MAX_PATH] = {};
+            WideCharToMultiByte(CP_UTF8, 0, me.szModule, -1, name, sizeof(name), nullptr, nullptr);
+            char line[MAX_PATH + 64];
+            std::snprintf(line, sizeof(line), "module %llx %lx %s\n",
+                          static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(me.modBaseAddr)),
+                          static_cast<unsigned long>(me.modBaseSize), name);
+            out += line;
+        }
+        CloseHandle(snap);
+        return out;
+    }
 #elif defined(__APPLE__) && defined(__aarch64__)
     using ThreadKey = thread_act_t;
 
@@ -264,6 +289,9 @@ namespace
         }
         std::fprintf(f, "# pop profile v1, %llu rounds over %.1f s\n%s\n", static_cast<unsigned long long>(rounds),
                      seconds, imageLine().c_str());
+#if defined(_WIN32)
+        std::fputs(moduleLines().c_str(), f);
+#endif
         int index = 0;
         for (auto &[id, info] : threads)
         {
