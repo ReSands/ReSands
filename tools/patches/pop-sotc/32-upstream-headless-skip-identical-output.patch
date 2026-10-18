@@ -1,0 +1,112 @@
+From 3828c40d0e0918d29ee98b9238d85eebea4825b0 Mon Sep 17 00:00:00 2001
+From: "Taylor N. Albarnaz" <veloxgods@gmail.com>
+Date: Sat, 17 Oct 2026 00:46:58 -0300
+Subject: [PATCH 32/34] Add headless mode and skip-identical recompiler output
+
+---
+ ps2xRecomp/src/lib/ps2_recompiler.cpp         | 15 +++++++++++++
+ .../include/runtime/ps2_display_options.h     |  1 +
+ ps2xRuntime/src/lib/ps2_runtime.cpp           | 21 ++++++++++++++++---
+ ps2xTest/CMakeLists.txt                       |  1 +
+ 4 files changed, 35 insertions(+), 3 deletions(-)
+
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index 04ebce0..b16a3bc 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -2337,6 +2337,21 @@ namespace ps2recomp
+ 
+     bool PS2Recompiler::writeToFile(const std::string &path, const std::string &content)
+     {
++        std::filesystem::path filePath(path);
++        if (std::filesystem::exists(filePath))
++        {
++            std::ifstream existing(filePath, std::ios::in | std::ios::binary);
++            if (existing)
++            {
++                std::ostringstream existingContent;
++                existingContent << existing.rdbuf();
++                if (existingContent.str() == content)
++                {
++                    return true;
++                }
++            }
++        }
++
+         std::ofstream file(path);
+         if (!file)
+         {
+diff --git a/ps2xRuntime/include/runtime/ps2_display_options.h b/ps2xRuntime/include/runtime/ps2_display_options.h
+index feb889f..98e2d69 100644
+--- a/ps2xRuntime/include/runtime/ps2_display_options.h
++++ b/ps2xRuntime/include/runtime/ps2_display_options.h
+@@ -6,4 +6,5 @@ namespace ps2_host_display
+     float aspect();
+     void setFitWindow(bool enabled);
+     void setStartMaximized(bool enabled);
++    void setHeadless(bool enabled);
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index b30a7de..9a90ef0 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -46,6 +46,7 @@ namespace ps2_host_display
+     std::atomic<float> windowAspect{4.0f / 3.0f};
+     std::atomic<bool> fitWindow{false};
+     bool startMaximized = false;
++    bool headless = false;
+ 
+     void setAspect(float aspect)
+     {
+@@ -76,6 +77,11 @@ namespace ps2_host_display
+     {
+         startMaximized = enabled;
+     }
++
++    void setHeadless(bool enabled)
++    {
++        headless = enabled;
++    }
+ }
+ 
+ #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
+@@ -838,12 +844,21 @@ bool PS2Runtime::initialize(const char *title)
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
+ #else
+         SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_ALWAYS_RUN);
++        if (ps2_host_display::headless)
++            SetConfigFlags(FLAG_WINDOW_HIDDEN);
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+-        if (ps2_host_display::startMaximized)
++        if (ps2_host_display::startMaximized && !ps2_host_display::headless)
+             MaximizeWindow();
+         SetExitKey(KEY_NULL);
+-        InitAudioDevice();
+-        m_audioBackend.setAudioReady(IsAudioDeviceReady());
++        if (ps2_host_display::headless)
++        {
++            m_audioBackend.setAudioReady(false);
++        }
++        else
++        {
++            InitAudioDevice();
++            m_audioBackend.setAudioReady(IsAudioDeviceReady());
++        }
+         GSSharedPresent::CaptureHostContext();
+ #endif
+         const bool coreReady = syncCoreSubsystems();
+diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
+index 1b3d29e..c79e230 100644
+--- a/ps2xTest/CMakeLists.txt
++++ b/ps2xTest/CMakeLists.txt
+@@ -18,6 +18,7 @@ add_library(ps2_gs_reference STATIC
+ target_include_directories(ps2_gs_reference PUBLIC
+     ${CMAKE_CURRENT_LIST_DIR}/gs_reference
+     ${CMAKE_CURRENT_LIST_DIR}/../ps2xRuntime/include
++    ${CMAKE_CURRENT_LIST_DIR}/../ps2xIOP/include
+ )
+ 
+ target_link_libraries(ps2_gs_reference PUBLIC ps2_runtime)
+-- 
+2.55.0.windows.5
+

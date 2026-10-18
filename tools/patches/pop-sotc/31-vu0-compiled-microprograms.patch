@@ -1,0 +1,541 @@
+From 9f540368faa8ff0b2845977c71889b580e09f929 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 18 Oct 2026 22:19:28 +0100
+Subject: [PATCH] Compiled VU0 microprograms: vu1_recomp also compiles 4 KB VU0
+ images (vu0_*.bin), the runtime runs VCALLMS programs compiled
+
+VU0 microprograms ran on the cycle-modelling interpreter (about 38% of the game thread in slow
+PoP scenes). They now go through the same compiled path as VU1:
+- PS2X_VU1_CAPTURE also records VU0 images (vu0_<hash>.bin, entries_vu0.txt);
+- vu1_recomp compiles vu0_*.bin with the VU0 decoder (no EFU/XGKICK), 4 KB code (branch and
+  JR masks) and 4 KB data (qaddr0), and registers them with registerVu0CompiledProgram;
+- the runtime looks VU0 programs up in their own registry (by the whole 4 KB image and the
+  VU0 code generation); PS2X_VU0_RECOMP=0 turns it off, PS2X_VU0_VERIFY=1 checks every run
+  against the interpreter like PS2X_VU1_VERIFY;
+- the fast path takes the data size from the unit (Vu1FastCtx::memSize), and VU0 has its own
+  norm shadow, verifier shadow and stats (thread_local), since VU0 runs on the EE thread.
+---
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp | 129 ++++++++++++++++++------
+ ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |  27 +++--
+ ps2xTest/tools/vu1_recomp.cpp           |  60 ++++++-----
+ 3 files changed, 152 insertions(+), 64 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index 2fec4a8..8d4c1d0 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -44,20 +44,24 @@ namespace
+         uint64_t calls = 0;
+     };
+ 
+-    Vu1ProgramCapture *vu1ProgramCapture()
++    Vu1ProgramCapture *makeVuProgramCapture()
+     {
+-        static Vu1ProgramCapture *capture = []() -> Vu1ProgramCapture *
+-        {
+-            const char *value = std::getenv("PS2X_VU1_CAPTURE");
+-            if (!value || !*value)
+-                return nullptr;
+-            auto *result = new Vu1ProgramCapture();
+-            result->directory = value;
+-            std::error_code error;
+-            std::filesystem::create_directories(result->directory, error);
+-            return result;
+-        }();
+-        return capture;
++        const char *value = std::getenv("PS2X_VU1_CAPTURE");
++        if (!value || !*value)
++            return nullptr;
++        auto *result = new Vu1ProgramCapture();
++        result->directory = value;
++        std::error_code error;
++        std::filesystem::create_directories(result->directory, error);
++        return result;
++    }
++
++    // PS2X_VU1_CAPTURE records both units' images into one folder: vu1_<hash>.bin (16 KB) and
++    // vu0_<hash>.bin (4 KB, VCALLMS microprograms); vu1_recomp compiles both.
++    Vu1ProgramCapture *vu1ProgramCapture(bool vu0)
++    {
++        static Vu1ProgramCapture *const captures[2] = {makeVuProgramCapture(), makeVuProgramCapture()};
++        return captures[vu0 ? 1 : 0];
+     }
+ 
+     struct Vu1ImageCacheEntry
+@@ -229,6 +233,30 @@ namespace
+         return enabled;
+     }
+ 
++    bool vu0VerifyEnabled()
++    {
++        static const bool enabled = []
++        {
++            const char *value = std::getenv("PS2X_VU0_VERIFY");
++            return value && *value && std::strcmp(value, "0") != 0;
++        }();
++        return enabled;
++    }
++
++    // Compiled VU0 microprograms (VCALLMS), keyed by the whole 4 KB VU0 code image; PS2X_VU0_RECOMP=0
++    // runs them on the interpreter again.
++    Vu1CompiledRegistry &vu0CompiledRegistry()
++    {
++        static Vu1CompiledRegistry registry = []
++        {
++            Vu1CompiledRegistry result;
++            const char *value = std::getenv("PS2X_VU0_RECOMP");
++            result.enabled = !(value && std::strcmp(value, "0") == 0);
++            return result;
++        }();
++        return registry;
++    }
++
+     Vu1CompiledRegistry &vu1CompiledRegistry()
+     {
+         static Vu1CompiledRegistry registry = []
+@@ -257,19 +285,40 @@ namespace
+         return registry.current;
+     }
+ 
+-    void captureVu1Program(const uint8_t *vuCode, uint32_t codeSize, const PS2Memory *memory, uint32_t pc)
++    VU1InterpreterAccess::CompiledProgram lookupCompiledVu0Program(const uint8_t *vuCode, uint32_t codeSize, const PS2Memory *memory)
+     {
+-        Vu1ProgramCapture *capture = vu1ProgramCapture();
++        Vu1CompiledRegistry &registry = vu0CompiledRegistry();
++        if (!registry.enabled || registry.programs.empty() || !memory)
++            return nullptr;
++        const uint64_t generation = memory->getVU0CodeGeneration();
++        if (registry.memory != memory || registry.code != vuCode || registry.generation != generation)
++        {
++            registry.memory = memory;
++            registry.code = vuCode;
++            registry.generation = generation;
++            registry.current = findCompiledVu1Image(registry, vuCode, codeSize);
++        }
++        return registry.current;
++    }
++
++    VU1InterpreterAccess::CompiledProgram lookupCompiledProgram(bool vu0, const uint8_t *vuCode, uint32_t codeSize, const PS2Memory *memory)
++    {
++        return vu0 ? lookupCompiledVu0Program(vuCode, codeSize, memory) : lookupCompiledVu1Program(vuCode, codeSize, memory);
++    }
++
++    void captureVu1Program(const uint8_t *vuCode, uint32_t codeSize, const PS2Memory *memory, uint32_t pc, bool vu0)
++    {
++        Vu1ProgramCapture *capture = vu1ProgramCapture(vu0);
+         if (!capture || !memory)
+             return;
+-        const uint64_t generation = memory->getVU1CodeGeneration();
++        const uint64_t generation = vu0 ? memory->getVU0CodeGeneration() : memory->getVU1CodeGeneration();
+         if (capture->memory != memory || capture->generation != generation)
+         {
+             capture->memory = memory;
+             capture->generation = generation;
+             capture->imageHash = fnv1a64(vuCode, codeSize);
+             char name[64];
+-            std::snprintf(name, sizeof(name), "vu1_%016llx.bin", static_cast<unsigned long long>(capture->imageHash));
++            std::snprintf(name, sizeof(name), "vu%d_%016llx.bin", vu0 ? 0 : 1, static_cast<unsigned long long>(capture->imageHash));
+             const std::filesystem::path path = capture->directory / name;
+             std::error_code error;
+             if (!std::filesystem::exists(path, error))
+@@ -284,7 +333,7 @@ namespace
+         const uint64_t key = (capture->imageHash & ~0x3FFFull) ^ pc;
+         if (capture->entryCalls[key]++ == 0u)
+         {
+-            if (FILE *file = std::fopen((capture->directory / "entries.txt").string().c_str(), "a"))
++            if (FILE *file = std::fopen((capture->directory / (vu0 ? "entries_vu0.txt" : "entries.txt")).string().c_str(), "a"))
+             {
+                 std::fprintf(file, "%016llx %04x\n", static_cast<unsigned long long>(capture->imageHash), pc);
+                 std::fclose(file);
+@@ -292,7 +341,7 @@ namespace
+         }
+         if (++capture->calls % 100000u == 0u)
+         {
+-            if (FILE *file = std::fopen((capture->directory / "calls.txt").string().c_str(), "w"))
++            if (FILE *file = std::fopen((capture->directory / (vu0 ? "calls_vu0.txt" : "calls.txt")).string().c_str(), "w"))
+             {
+                 std::fprintf(file, "calls %llu entries %zu\n", static_cast<unsigned long long>(capture->calls), capture->entryCalls.size());
+                 std::fclose(file);
+@@ -384,8 +433,7 @@ void VU1Interpreter::reset()
+     m_state.r = 0x3F800000u;
+     m_cycle = 0;
+     resetScheduler();
+-    if (m_unit == Unit::VU1)
+-        vu1NormShadow.valid = false;
++    (m_unit == Unit::VU1 ? vu1NormShadow : vu0NormShadow).valid = false;
+ }
+ 
+ bool VU1Interpreter::pipelinesPending() const
+@@ -971,7 +1019,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+ {
+     if (m_unit == Unit::VU1)
+     {
+-        captureVu1Program(vuCode, codeSize, memory, m_state.pc);
++        captureVu1Program(vuCode, codeSize, memory, m_state.pc, false);
+         traceVu1Run(*this, vuCode, codeSize, vuData, dataSize, memory, maxCycles);
+         if (vu1VerifyEnabled() && lookupCompiledVu1Program(vuCode, codeSize, memory))
+         {
+@@ -979,6 +1027,15 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+             return;
+         }
+     }
++    else
++    {
++        captureVu1Program(vuCode, codeSize, memory, m_state.pc, true);
++        if (vu0VerifyEnabled() && lookupCompiledVu0Program(vuCode, codeSize, memory))
++        {
++            VU1InterpreterAccess::runVerified(*this, vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
++            return;
++        }
++    }
+     VU1InterpreterAccess::runLoop(*this, vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles, true);
+ }
+ 
+@@ -986,7 +1043,7 @@ bool VU1InterpreterAccess::runLoop(VU1Interpreter &vu, uint8_t *vuCode, uint32_t
+                                    GS &gs, PS2Memory *memory, uint32_t maxCycles, bool allowCompiled)
+ {
+     const CompiledProgram compiled =
+-        allowCompiled && vu.m_unit == VU1Interpreter::Unit::VU1 ? lookupCompiledVu1Program(vuCode, codeSize, memory) : nullptr;
++        allowCompiled ? lookupCompiledProgram(vu.m_unit == VU1Interpreter::Unit::VU0, vuCode, codeSize, memory) : nullptr;
+     return runLoopWith(vu, vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles, compiled);
+ }
+ 
+@@ -1022,8 +1079,7 @@ bool VU1InterpreterAccess::runLoopWith(VU1Interpreter &vu, uint8_t *vuCode, uint
+             continue;
+         }
+         interpretNextPair = false;
+-        if (vu.m_unit == VU1Interpreter::Unit::VU1)
+-            vu1NormShadow.valid = false;
++        (vu.m_unit == VU1Interpreter::Unit::VU1 ? vu1NormShadow : vu0NormShadow).valid = false;
+ 
+         vu.commitReadyPipelines();
+         if (vu.m_state.pc + 8u > codeSize)
+@@ -1110,17 +1166,19 @@ namespace
+ void VU1InterpreterAccess::runVerified(VU1Interpreter &vu, uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
+                                        GS &gs, PS2Memory *memory, uint32_t maxCycles)
+ {
+-    runVerifiedWith(vu, vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles, lookupCompiledVu1Program(vuCode, codeSize, memory), true);
++    runVerifiedWith(vu, vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles,
++                    lookupCompiledProgram(vu.m_unit == VU1Interpreter::Unit::VU0, vuCode, codeSize, memory), true);
+ }
+ 
+ bool VU1InterpreterAccess::runVerifiedWith(VU1Interpreter &vu, uint8_t *vuCode, uint32_t codeSize, uint8_t *vuData, uint32_t dataSize,
+                                            GS &gs, PS2Memory *memory, uint32_t maxCycles, CompiledProgram compiled, bool forward)
+ {
+-    static std::unique_ptr<VU1Interpreter> shadow;
+-    static std::vector<uint8_t> shadowData;
+-    static Vu1VerifyStats stats;
++    // per thread: VU0 programs are verified on the EE thread, VU1 programs on the VU1 thread
++    thread_local std::unique_ptr<VU1Interpreter> shadow;
++    thread_local std::vector<uint8_t> shadowData;
++    thread_local Vu1VerifyStats stats;
+     if (!shadow)
+-        shadow = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
++        shadow = std::make_unique<VU1Interpreter>(vu.m_unit);
+     *shadow = vu;
+     shadowData.assign(vuData, vuData + dataSize);
+     const uint32_t startPc = vu.m_state.pc;
+@@ -1241,15 +1299,15 @@ bool VU1InterpreterAccess::runVerifiedWith(VU1Interpreter &vu, uint8_t *vuCode,
+         ++stats.mismatches;
+         if (stats.mismatches <= 50u)
+         {
+-            std::fprintf(stderr, "[vu1-verify] mismatch #%llu run %llu image %016llx entry %04x -> pc %04x/%04x:%s\n",
+-                         static_cast<unsigned long long>(stats.mismatches), static_cast<unsigned long long>(stats.runs),
++            std::fprintf(stderr, "[vu%d-verify] mismatch #%llu run %llu image %016llx entry %04x -> pc %04x/%04x:%s\n",
++                         vu.m_unit == VU1Interpreter::Unit::VU0 ? 0 : 1, static_cast<unsigned long long>(stats.mismatches), static_cast<unsigned long long>(stats.runs),
+                          static_cast<unsigned long long>(fnv1a64(vuCode, codeSize)), startPc, a.pc, b.pc, diff.c_str());
+             std::fflush(stderr);
+         }
+     }
+     if ((stats.runs & 0x3FFFu) == 0u)
+     {
+-        std::fprintf(stderr, "[vu1-verify] %llu runs, %llu mismatches\n", static_cast<unsigned long long>(stats.runs),
++        std::fprintf(stderr, "[vu%d-verify] %llu runs, %llu mismatches\n", vu.m_unit == VU1Interpreter::Unit::VU0 ? 0 : 1, static_cast<unsigned long long>(stats.runs),
+                      static_cast<unsigned long long>(stats.mismatches));
+         std::fflush(stderr);
+     }
+@@ -1268,6 +1326,11 @@ void registerVu1CompiledProgram(uint64_t imageHash, VU1InterpreterAccess::Compil
+     vu1CompiledRegistry().programs[imageHash] = program;
+ }
+ 
++void registerVu0CompiledProgram(uint64_t imageHash, VU1InterpreterAccess::CompiledProgram program)
++{
++    vu0CompiledRegistry().programs[imageHash] = program;
++}
++
+ void saveVuState(VU1Interpreter &vu, ps2x::state::Writer &out)
+ {
+     VU1InterpreterAccess::serializeState(vu, out);
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl b/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
+index 651fb08..d4fa64a 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
+@@ -2415,6 +2415,7 @@ struct Vu1FastCtx
+     Vu1FlagRecord flags[kFlagCapacity];
+     Vu1FlagRecord clips[kClipCapacity];
+     float (*norm)[4] = nullptr;
++    uint32_t memSize = 0x4000u;
+ };
+ 
+ struct Vu1NormShadow
+@@ -2425,6 +2426,8 @@ struct Vu1NormShadow
+ };
+ 
+ inline Vu1NormShadow vu1NormShadow;
++// VU0 microprograms run on the EE thread, VU1 on its own: one shadow each.
++inline Vu1NormShadow vu0NormShadow;
+ 
+ struct VU1InterpreterAccess
+ {
+@@ -2477,6 +2480,7 @@ struct VU1InterpreterAccess
+     static constexpr unsigned kPipeXgkick = VU1Interpreter::PipelineXgkick;
+     static constexpr uint32_t kFastMemSize = 0x4000u;
+     static constexpr uint32_t kFastCodeSize = 0x4000u;
++    static constexpr uint32_t kFastVu0Size = 0x1000u; // VU0 code and data memory
+ 
+     template <uint64_t ImageHash>
+     static StepResult runImage(VU1Interpreter &vu, const Vu1RunArgs &args);
+@@ -3373,6 +3377,11 @@ struct VU1InterpreterAccess
+         return (static_cast<uint32_t>(base + imm) * 16u) & (kFastMemSize - 1u);
+     }
+ 
++    static VU1_FORCE_INLINE uint32_t qaddr0(int32_t base, int32_t imm)
++    {
++        return (static_cast<uint32_t>(base + imm) * 16u) & (kFastVu0Size - 1u);
++    }
++
+     static VU1_FORCE_INLINE __m128 ldq(const uint8_t *mem, uint32_t address)
+     {
+         return _mm_loadu_ps(reinterpret_cast<const float *>(mem + address));
+@@ -3553,7 +3562,7 @@ struct VU1InterpreterAccess
+         storeFlags(vu, ctx);
+         commitEfu(vu, cycle);
+         xgkickSync(vu, ctx, cycle);
+-        vu.execLower(lower, ctx.mem, kFastMemSize, *ctx.gs, ctx.memory, upper);
++        vu.execLower(lower, ctx.mem, ctx.memSize, *ctx.gs, ctx.memory, upper);
+         for (uint32_t mask = vu.m_storeValid; mask != 0u; mask &= mask - 1u)
+         {
+             const uint32_t index = static_cast<uint32_t>(std::countr_zero(mask));
+@@ -3612,18 +3621,23 @@ struct VU1InterpreterAccess
+ 
+     static StepResult runFast(VU1Interpreter &vu, const Vu1RunArgs &args, const FastBlock *table, uint32_t entries)
+     {
++        const bool vu1 = vu.m_unit == VU1Interpreter::Unit::VU1;
++        const uint32_t memSize = vu1 ? kFastMemSize : kFastVu0Size;
++        const uint32_t codeSize = vu1 ? kFastCodeSize : kFastVu0Size;
+         if (vu.m_state.branchPending || vu.m_state.ebit || vu.m_state.haltAfterDelaySlot || vu.m_stopRequested ||
+-            args.dataSize != kFastMemSize || args.codeSize != kFastCodeSize || !args.vuData || vu.m_storeValid != 0u)
++            args.dataSize != memSize || args.codeSize != codeSize || !args.vuData || vu.m_storeValid != 0u)
+             return StepResult::Fallback;
+         materializeWrites(vu);
+         Vu1FastCtx ctx;
+-        ctx.norm = vu1NormShadow.norm;
+-        if (!vu1NormShadow.valid || vu1NormShadow.owner != &vu)
++        Vu1NormShadow &normShadow = vu1 ? vu1NormShadow : vu0NormShadow;
++        ctx.norm = normShadow.norm;
++        if (!normShadow.valid || normShadow.owner != &vu)
+         {
+             syncAllNorm(vu, ctx);
+-            vu1NormShadow.owner = &vu;
+-            vu1NormShadow.valid = true;
++            normShadow.owner = &vu;
++            normShadow.valid = true;
+         }
++        ctx.memSize = memSize;
+         ctx.cycle = vu.m_cycle;
+         ctx.budget = args.budgetEnd;
+         ctx.xgkickDone = vu.m_cycle;
+@@ -3850,4 +3864,5 @@ struct VU1InterpreterAccess
+ };
+ 
+ void registerVu1CompiledProgram(uint64_t imageHash, VU1InterpreterAccess::CompiledProgram program);
++void registerVu0CompiledProgram(uint64_t imageHash, VU1InterpreterAccess::CompiledProgram program);
+ VU1InterpreterAccess::CompiledProgram findCompiledVu1ProgramByHash(uint64_t imageHash);
+diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
+index c6780ee..1a3bbaf 100644
+--- a/ps2xTest/tools/vu1_recomp.cpp
++++ b/ps2xTest/tools/vu1_recomp.cpp
+@@ -17,7 +17,9 @@ namespace
+ {
+     using A = VU1InterpreterAccess;
+ 
+-    constexpr uint32_t kCodeSize = 16u * 1024u;
++    // per image: 16 KB for VU1 images (vu1_*.bin), 4 KB for VU0 microprograms (vu0_*.bin)
++    uint32_t g_codeSize = 16u * 1024u;
++    bool g_vu0 = false;
+     constexpr uint32_t kDefaultBlockPairs = 128u;
+     constexpr uint32_t kMaxVfLatency = 4u;
+     constexpr uint32_t kMaxViLatency = 4u;
+@@ -51,6 +53,12 @@ namespace
+         return text;
+     }
+ 
++    // data address of a quadword: VU0 data memory is 4 KB, VU1's 16 KB
++    std::string qa()
++    {
++        return g_vu0 ? "qaddr0(" : "qaddr(";
++    }
++
+     std::string hexPcId(uint32_t index)
+     {
+         char text[16];
+@@ -77,7 +85,7 @@ namespace
+ 
+     uint32_t nextPc(uint32_t pc)
+     {
+-        return pc + 8u >= kCodeSize ? 0u : pc + 8u;
++        return pc + 8u >= g_codeSize ? 0u : pc + 8u;
+     }
+ 
+     uint8_t fDest(uint32_t i) { return static_cast<uint8_t>((i >> 21) & 0xFu); }
+@@ -460,18 +468,18 @@ namespace
+         switch (opHi)
+         {
+         case 0x00:
+-            loadVf(ft, "qaddr(" + vi(is) + ", " + num(imm) + ")");
++            loadVf(ft, qa() + vi(is) + ", " + num(imm) + ")");
+             return e;
+         case 0x01:
+-            storeVf(fs, "qaddr(" + vi(it) + ", " + num(imm) + ")");
++            storeVf(fs, qa() + vi(it) + ", " + num(imm) + ")");
+             return e;
+         case 0x04:
+             if (it != 0u)
+-                viSet(it, "ldw(mem, qaddr(" + vi(is) + ", " + num(imm) + ") + " + num(firstComponent(dest) * 4u) + "u) & 0xFFFFu");
++                viSet(it, "ldw(mem, " + qa() + vi(is) + ", " + num(imm) + ") + " + num(firstComponent(dest) * 4u) + "u) & 0xFFFFu");
+             return e;
+         case 0x05:
+             if (dest != 0u)
+-                e.code = "stw(vu, ctx, cyc, qaddr(" + vi(is) + ", " + num(imm) + "), " + vi(it) + ", " + dst + ");";
++                e.code = "stw(vu, ctx, cyc, " + qa() + vi(is) + ", " + num(imm) + "), " + vi(it) + ", " + dst + ");";
+             return e;
+         case 0x08:
+         case 0x09:
+@@ -538,10 +546,10 @@ namespace
+             viSet(it, num((pc + 16u) / 8u));
+             return e;
+         case 0x24:
+-            e.code = "jt = (static_cast<uint32_t>(static_cast<uint16_t>(" + br(is) + ")) * 8u) & 0x3FFFu;";
++            e.code = "jt = (static_cast<uint32_t>(static_cast<uint16_t>(" + br(is) + ")) * 8u) & " + hx(g_codeSize - 1u) + ";";
+             return e;
+         case 0x25:
+-            e.code = "jt = (static_cast<uint32_t>(static_cast<uint16_t>(" + br(is) + ")) * 8u) & 0x3FFFu;";
++            e.code = "jt = (static_cast<uint32_t>(static_cast<uint16_t>(" + br(is) + ")) * 8u) & " + hx(g_codeSize - 1u) + ";";
+             viSet(it, num((pc + 16u) / 8u));
+             return e;
+         case 0x28:
+@@ -619,20 +627,20 @@ namespace
+             }
+             return e;
+         case 0x34:
+-            loadVf(ft, "qaddr(" + vi(is) + ", 0)");
++            loadVf(ft, qa() + vi(is) + ", 0)");
+             viSet(is, vi(is) + " + 1");
+             return e;
+         case 0x35:
+-            storeVf(fs, "qaddr(" + vi(it) + ", 0)");
++            storeVf(fs, qa() + vi(it) + ", 0)");
+             viSet(it, vi(it) + " + 1");
+             return e;
+         case 0x36:
+             viSet(is, vi(is) + " - 1");
+-            loadVf(ft, "qaddr(" + vi(is) + ", 0)");
++            loadVf(ft, qa() + vi(is) + ", 0)");
+             return e;
+         case 0x37:
+             viSet(it, vi(it) + " - 1");
+-            storeVf(fs, "qaddr(" + vi(it) + ", 0)");
++            storeVf(fs, qa() + vi(it) + ", 0)");
+             return e;
+         case 0x38:
+             e.code = "divOp(vu, ctx, cyc, " + laneFloat(fs, fsf) + ", " + laneFloat(ft, ftf) + ");";
+@@ -659,11 +667,11 @@ namespace
+             return e;
+         case 0x3E:
+             if (it != 0u)
+-                viSet(it, "ldw(mem, qaddr(" + vi(is) + ", 0) + " + num(firstComponent(dest) * 4u) + "u) & 0xFFFFu");
++                viSet(it, "ldw(mem, " + qa() + vi(is) + ", 0) + " + num(firstComponent(dest) * 4u) + "u) & 0xFFFFu");
+             return e;
+         case 0x3F:
+             if (dest != 0u)
+-                e.code = "stw(vu, ctx, cyc, qaddr(" + vi(is) + ", 0), " + vi(it) + ", " + dst + ");";
++                e.code = "stw(vu, ctx, cyc, " + qa() + vi(is) + ", 0), " + vi(it) + ", " + dst + ");";
+             return e;
+         case 0x64:
+             if (dest != 0u)
+@@ -1380,12 +1388,12 @@ namespace
+     bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
+                     std::map<std::string, uint32_t> &stats)
+     {
+-        VU1Interpreter vu(VU1Interpreter::Unit::VU1);
++        VU1Interpreter vu(g_vu0 ? VU1Interpreter::Unit::VU0 : VU1Interpreter::Unit::VU1);
+         uint32_t used = 0u;
+         for (uint32_t pc = 0; pc + 8u <= code.size(); pc += 8u)
+             if (std::any_of(code.begin() + pc, code.begin() + pc + 8u, [](uint8_t b) { return b != 0u; }))
+                 used = pc / 8u + 1u;
+-        const uint32_t total = kCodeSize / 8u;
++        const uint32_t total = g_codeSize / 8u;
+         const uint32_t count = std::min(total, used + 2u);
+ 
+         Emitter emitter;
+@@ -1402,7 +1410,7 @@ namespace
+                 const uint32_t opHi = (p.d.lower >> 25) & 0x7Fu;
+                 p.dynamic = opHi == 0x24u || opHi == 0x25u;
+                 p.conditional = opHi >= 0x28u;
+-                p.target = (p.pc + 8u + static_cast<uint32_t>(fImm11(p.d.lower) * 8)) & 0x3FFFu;
++                p.target = (p.pc + 8u + static_cast<uint32_t>(fImm11(p.d.lower) * 8)) & (g_codeSize - 1u);
+             }
+         }
+         for (uint32_t index = 0; index < count; ++index)
+@@ -1563,38 +1571,40 @@ int main(int argc, char **argv)
+     for (const auto &entry : std::filesystem::directory_iterator(captureDir))
+     {
+         const std::string name = entry.path().filename().string();
+-        if (name.rfind("vu1_", 0) == 0 && entry.path().extension() == ".bin")
++        if ((name.rfind("vu1_", 0) == 0 || name.rfind("vu0_", 0) == 0) && entry.path().extension() == ".bin")
+             images.push_back(entry.path());
+     }
+     std::sort(images.begin(), images.end());
+ 
+-    std::vector<uint64_t> hashes;
++    std::vector<std::pair<uint64_t, bool>> hashes;
+     std::map<std::string, uint32_t> stats;
+     for (const auto &path : images)
+     {
++        g_vu0 = path.filename().string().rfind("vu0_", 0) == 0;
++        g_codeSize = g_vu0 ? 4u * 1024u : 16u * 1024u;
+         std::ifstream file(path, std::ios::binary);
+         std::vector<uint8_t> code((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+-        if (code.size() != kCodeSize)
++        if (code.size() != g_codeSize)
+         {
+-            std::cerr << path << ": expected " << kCodeSize << " bytes\n";
++            std::cerr << path << ": expected " << g_codeSize << " bytes\n";
+             return 1;
+         }
+         const uint64_t hash = fnv1a64(code.data(), code.size());
+         if (!writeImage(outDir, hash, code, blockPairs, stats))
+             return 1;
+-        hashes.push_back(hash);
++        hashes.emplace_back(hash, g_vu0);
+     }
+     for (const auto &[name, value] : stats)
+         std::cout << name << ": " << value << "\n";
+ 
+     std::ostringstream reg;
+     reg << "#include \"ps2_vu1_impl.inl\"\n\n";
+-    for (const uint64_t hash : hashes)
++    for (const auto &[hash, vu0] : hashes)
+         reg << "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::runImage<" << hex64(hash)
+             << ">(VU1Interpreter &, const Vu1RunArgs &);\n";
+     reg << "\nvoid registerGeneratedVu1Programs()\n{\n";
+-    for (const uint64_t hash : hashes)
+-        reg << "    registerVu1CompiledProgram(" << hex64(hash) << ", &VU1InterpreterAccess::runImage<" << hex64(hash) << ">);\n";
++    for (const auto &[hash, vu0] : hashes)
++        reg << (vu0 ? "    registerVu0CompiledProgram(" : "    registerVu1CompiledProgram(") << hex64(hash) << ", &VU1InterpreterAccess::runImage<" << hex64(hash) << ">);\n";
+     reg << "}\n";
+     std::ofstream file(outDir / "vu1_programs.cpp", std::ios::binary);
+     file << reg.str();
+-- 
+2.55.0.windows.5
+
