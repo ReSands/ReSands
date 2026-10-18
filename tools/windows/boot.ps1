@@ -26,10 +26,10 @@ foreach ($pair in ($Env -split ';')) { if ($pair -match '^\s*([^=]+)=(.*)$') { S
 if ($Out -ne 'game\recomp') {
     $sotc = [ordered]@{ PS2X_GS_GPU = '1'; PS2X_GS_THREAD = '1'; PS2X_GS_DIRECT_PRESENT = '1'; PS2X_GS_COMPACT_QUEUE = '1';
                         PS2X_GS_QUEUE_CHUNKS = '8'; PS2X_VIF_SIMD_UNPACK = '1'; PS2X_VU1_SIMD_CLIP = '1'; PS2X_MTVU = '1';
-                        PS2X_VU1_RECOMP = '1';
-                        # Camera stick: modern horizontal direction (PoP orbits the camera the other way
-                        # and has no option for it). -Env 'PS2X_INVERT_RIGHT_STICK=0' restores the original.
-                        PS2X_INVERT_RIGHT_STICK = 'x' }
+                        PS2X_VU1_RECOMP = '1' }
+# Camera stick: the override inverts the right stick's X in the third-person camera only (modern
+# direction; first-person already turns that way). -Env 'POP_CAMERA_CLASSIC=1' keeps the game's own
+# directions; PS2X_INVERT_RIGHT_STICK, if set, overrides both.
     foreach ($k in $sotc.Keys) { if (-not [Environment]::GetEnvironmentVariable($k)) { Set-Item "env:$k" $sotc[$k] } }
 }
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null

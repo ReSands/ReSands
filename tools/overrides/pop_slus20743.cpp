@@ -17,6 +17,12 @@ namespace { void reportRpcCalls(); void reportSndCounts(); bool g_sndLog = false
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#if __has_include("runtime/ps2_input_options.h") // the SotC runtime's right-stick options
+#include "runtime/ps2_input_options.h"
+#define POP_HAVE_INPUT_OPTIONS 1
+#else
+#define POP_HAVE_INPUT_OPTIONS 0
+#endif
 #if __has_include("runtime/ps2_save_state.h") // the SotC runtime's save states (F5/F9)
 #include "runtime/ps2_save_state.h"
 #define POP_HAVE_QUICKSAVE 1
@@ -1521,6 +1527,25 @@ namespace
         active = true;
     }
 
+    // Camera stick: PoP's third-person camera orbits the old way round, so the right stick's X is
+    // inverted for a modern feel, but not in first-person view, which already turns the modern way.
+    // The view flag, found from paired saves (18 Oct): *(0x672B04) + 0x90 = 1 in the normal camera,
+    // 0 in first-person (all 51 saves of 17 Oct and every pair of 18 Oct agree). PS2X_INVERT_RIGHT_STICK,
+    // if set, still wins; POP_CAMERA_CLASSIC=1 keeps the game's own directions.
+    void updateCameraInvert(uint8_t *rdram)
+    {
+#if POP_HAVE_INPUT_OPTIONS
+        static const bool classic = [] { const char *v = std::getenv("POP_CAMERA_CLASSIC"); return v && *v == '1'; }();
+        if (classic)
+            return;
+        const uint32_t view = guestU32(rdram, 0x00672B04u);
+        const bool firstPerson = view && (view & 0x1FFFFFFFu) < 0x02000000u && guestU32(rdram, view + 0x90u) == 0u;
+        ps2_host_input::setRightStickInvertDefault(firstPerson ? 0u : ps2_host_input::kInvertRightX);
+#else
+        (void)rdram;
+#endif
+    }
+
     // Controller quick-save: Select (user's choice, 17 Oct; PoP gives it no job in play) does what F5
     // does (L3 + R3 toggles the runtime's frame-time graph since patch 28). Needs a runtime with save
     // states (the SotC base); a no-op elsewhere. Every quick-save is also kept as
@@ -1955,6 +1980,7 @@ namespace
             std::memcpy(rdram + 0x0066D044u, &one, sizeof(one));
         }
         keepQuickSaves();
+        updateCameraInvert(rdram);
         drainAsyncGs();
         g_origFlip(rdram, ctx, runtime);
         pop_drawprobe::onFrameEnd();

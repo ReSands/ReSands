@@ -68,7 +68,7 @@ Sound marker: #7 (090902) "that's when the audio started to glitch".
   (`rebuild.ps1 -Vu1`), then re-measures every save's fps and re-profiles. VU0 microprograms (36 call sites)
   are the next candidate (see docs/reference.md, CPU-side re-survey).
 
-## First-person camera flag (18 Oct, not found yet)
+## First-person camera flag (18 Oct, found)
 
 Problem: `PS2X_INVERT_RIGHT_STICK=x` (modern camera orbit) also reverses first-person look, which already
 uses the modern direction. Fix idea: invert only when the game is not in first-person view. One
@@ -77,3 +77,8 @@ normal saves: no global (0x600000-0x700000) or scratchpad word is the mode (3 hi
 pointers, one -0.0 float). The flag is likely in a heap camera object (addresses move between levels).
 Needed: paired saves at one spot (normal, first-person, normal, first-person within a minute), then diff all
 of RAM among them.
+Found the same evening from four paired saves (21:40:02/07 normal, 21:40:05/09 first-person): `*(0x672B04) + 0x90`
+(object at 0xBE36B4) = 1 in the normal camera, 0 in first-person; agrees in all 51 saves of 17 Oct and every
+save of 18 Oct (also 20:23:11 and 21:39:57, first-person). Fix: the override sets the runtime's default
+right-stick inversion each frame (X inverted only in the normal camera); boot.ps1 no longer forces
+PS2X_INVERT_RIGHT_STICK=x. POP_CAMERA_CLASSIC=1 keeps the original directions.
