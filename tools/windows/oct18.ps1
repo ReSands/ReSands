@@ -11,7 +11,9 @@
 #      to compare with the job log of state-shots.ps1, 17 Oct), then profile-states.ps1 -NoBuild;
 #   4. the nightly checks (llm-job.ps1 -Job nightly) on the new build, then the PC goes to sleep.
 # Run through start-job.ps1 (the window needs the desktop session).
-param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture)
+param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture, [switch]$NoBuild,
+      [switch]$NoMeasure, [switch]$NoNightly, [switch]$NoSleep)
+# Quick run before more play: -NoMeasure -NoNightly -NoSleep. Overnight after that: -NoCapture -NoBuild.
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 # runtime patches not applied yet (29: the frame-rate overlay in Digital Foundry's layout)
@@ -35,8 +37,11 @@ if (-not $NoCapture) {
     }
 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') rebuild with the compiled VU1 microcode"
-& "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -Vu1 $capture
-if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
+if (-not $NoBuild) {
+    & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -Vu1 $capture
+    if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
+}
+if ($NoMeasure) { "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done (no measuring)"; exit 0 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fps of every save"
 $fpsOut = "$Root\game\analysis\stateshots\fps_after_vu1.txt"
 Remove-Item $fpsOut -ErrorAction SilentlyContinue
@@ -52,7 +57,7 @@ foreach ($st in $states) {
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') profiles"
 & "$Root\tools\windows\profile-states.ps1" -NoBuild
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') nightly checks on the new build"
-& "$Root\tools\windows\llm-job.ps1" -Job nightly
-"== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done; putting the PC to sleep"
+if (-not $NoNightly) { & "$Root\tools\windows\llm-job.ps1" -Job nightly }
+"== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done"
 # sleep, not shut down: wake-on-LAN does not work from a full shutdown (17 Oct)
-Start-Process rundll32.exe -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0'
+if (-not $NoSleep) { "putting the PC to sleep"; Start-Process rundll32.exe -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0' }
