@@ -8,7 +8,8 @@
 #      capture folder (game\recomp-sotc\vu1_capture; images are added, not replaced);
 #   2. rebuild.ps1 -Fast -Play -Vu1 <capture>: vu1_recomp over all images, play build;
 #   3. measure: the fps of a 20 s boot of every save (game\analysis\stateshots\fps_after_vu1.txt,
-#      to compare with the job log of state-shots.ps1, 17 Oct), then profile-states.ps1 -NoBuild.
+#      to compare with the job log of state-shots.ps1, 17 Oct), then profile-states.ps1 -NoBuild;
+#   4. the nightly checks (llm-job.ps1 -Job nightly) on the new build, then the PC goes to sleep.
 # Run through start-job.ps1 (the window needs the desktop session).
 param([string]$Pattern = 'play_*.state', [int]$CaptureSeconds = 16, [switch]$NoCapture)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -50,4 +51,8 @@ foreach ($st in $states) {
 }
 "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') profiles"
 & "$Root\tools\windows\profile-states.ps1" -NoBuild
-"== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done"
+"== $(Get-Date -Format 'yyyy-MM-dd HH:mm') nightly checks on the new build"
+& "$Root\tools\windows\llm-job.ps1" -Job nightly
+"== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done; putting the PC to sleep"
+# sleep, not shut down: wake-on-LAN does not work from a full shutdown (17 Oct)
+Start-Process rundll32.exe -ArgumentList 'powrprof.dll,SetSuspendState 0,1,0'
