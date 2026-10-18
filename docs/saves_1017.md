@@ -53,3 +53,17 @@ Sound marker: #7 (090902) "that's when the audio started to glitch".
   macOS) + `tools/profsym.py`; the PC play build now links with /MAP. One PC job does it all:
   `tools/windows/start-job.ps1 -Script tools/windows/profile-states.ps1` (fast build, profiles #50, #11
   and a 60 fps reference, writes symbolized reports to game/analysis/prof/). Tested on the Mac.
+
+## Profile result (18 Oct, PC, `tools/windows/profile-states.ps1`, reports in game/analysis/prof/)
+
+- Fight #50 (2.3-16 fps) and pool #11 (29-42 fps): the busiest thread is the **VU1 thread**, mostly in the
+  cycle-modelling **VU1 interpreter** (stepPair, execUpper, commitReadyPipelines, FMAC flag code); compiled
+  VU1 programs (`fastBlock<hash,...>`) are a small share. 60 fps reference #40: the game thread, with a
+  visible share in the same interpreter class running **VU0** microprograms.
+- Why: compiled VU1 programs are found by the **whole 16 KB VU1 code image** (ps2_vu1_core.cpp,
+  findCompiledVu1Image). PoP swaps microprograms per scene (ExchangeVu1Code), and the compiled set came from a
+  12 Oct capture of the opening (9 images), so later scenes' program combinations fall back to the interpreter.
+  (Correction to 17 Oct: the VU1 *workload* is not bigger in slow frames, but it runs on the slow path.)
+- Fix in progress: `tools/windows/oct18.ps1` captures VU1 images from all 51 saves, compiles them
+  (`rebuild.ps1 -Vu1`), then re-measures every save's fps and re-profiles. VU0 microprograms (36 call sites)
+  are the next candidate (see docs/reference.md, CPU-side re-survey).
