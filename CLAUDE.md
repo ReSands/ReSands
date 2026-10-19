@@ -66,7 +66,7 @@ Older status blocks: `docs/history.md` (last one: "19 Oct 2026 evening"). Tonigh
      (`tools/vu1sched/loops.py`), a VU variant of `tools/llm_port/generic/` (test the runner end to end with a
      known-good answer first, e.g. vu1_recomp's code for one stage), start the queue (model on the PC via
      llama-serve, judge on the Mac under caffeinate). Set it up early so it runs while step 1 is worked on.
-  Leave for the user: PC on, TV off, Mac awake.
+  Leave for the user: PC shut down once the overnight jobs finish (user, 19 Oct; wake-on-LAN for the morning), Mac awake.
 - **Rules from the user (19 Oct):** the PC's TV is off unless the user is playing: ask before any job that boots
   the game (`nvidia-smi --query-gpu=display_active` must be Enabled, else boots run at ~4 fps; `oct19.ps1 -Native`
   refuses). Survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); general
