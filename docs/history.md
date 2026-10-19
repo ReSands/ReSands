@@ -282,3 +282,50 @@ the first-person flag: `docs/saves_1017.md`. Native renderer: `docs/native_rende
 - **Native renderer (1.0's main job):** frames from any save offline (`pop_state_frame`, ~0.5 s) with lightmaps, characters from memory, glow/haze, particles; all 51 saves of 17 Oct render, mean difference 16.85. Missing: HUD/menus/text, water (VU1 program 7 tessellates it), shadows, halos. Live window and comparison mode exist (Mac). Details `docs/native_renderer.md`.
 - **Rules from the user:** survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); add general learnings to `docs/lessons.md`; one dated job script per night (`tools/windows/<mon><day>.ps1`; 18 Oct night: `oct18.ps1`, runs `-Vu0`, `-Final`).
 
+## Status block of CLAUDE.md as of 19 Oct 2026 evening (moved verbatim on 19 Oct night)
+
+The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summarised here).
+
+- **Playtest 19 Oct evening (user, 43 saves `play_20261019_18*/19*`):** fights better but still the worst dips;
+  dips also in the earthquake and when pushing/pulling the bookcase / puzzle block. Audio bugs for later: one
+  combat scene sounded like a track was quiet/missing; Prince-Farah in-engine cutscene dialogue out of sync.
+  First-person X wrong again -> **fixed** (override now reads the view flag via the main-actor table, see
+  `docs/saves_1017.md`; built on the PC 19 Oct evening, not yet confirmed by the user).
+- **Where the time goes (19 Oct evening, scheduled build, save-state boots = no sound):** all-saves sweep
+  (`game\analysis\stateshots`): new saves hold 60 standing still except fights `185602` 46-48, `185837` 47-50.
+  Profiles (`game\analysis\prof`): fights = VU thread ~88% busy (processVIF1Data/VU1 programs), game thread
+  waits 40-45% in sceGsSyncPath for it; game logic itself small (AI_MainCall 6.5%, GRO_Render 9%). Earthquake
+  save holds 60 (game thread 72% busy, VU 69%); scripted push (`POP_INPUT=r1@3:20,lleft@4:4,...`) holds 60
+  (not confirmed the block moved). So: no game-logic bottleneck found; fights are VU1-bound; the earthquake and
+  block dips do not reproduce silently (suspect: sound emulation, which save-state boots lack). Runtime
+  overhead on the game thread (EeScheduler, dispatchGuestBranch, timers) ~15% self in the earthquake save.
+- **Rolling profiles of live dips (19 Oct ~20:10, with sound; `play_20261019_2009..2011*.prof`, reports in
+  `game\ps2\disc\states\*.report.txt`):** load from the menu (`200959`), bookcase (`201047`/`201053`), light-pillar
+  scenes (`201025`/`201149`). Over each 12 s window no thread is saturated: game thread idle (waiting for the next
+  vblank, `processDueDeadlines`) 31-53%, waiting on VU1/GS 8-16%; game code small (GRO_Render 6-9%, AI ~5%);
+  sound emulation (IOP `runEeCycles`) 4-5%; VU thread 27-50%. So the dips are short spikes the 12 s average
+  hides, and the 1-s fps samples of 30.0 in the 18:45 log suggest vsync quantisation (a frame just over 16.7 ms
+  waits for the next vblank). No game-logic hot spot found. **Recommended: back to the native renderer** (user
+  leaning that way; it removes the VU1/GS work that dominates fights). To pin spikes later: per-second slices in
+  the rolling profile instead of one merged window.
+- **Playtest 19 Oct morning (user):** sound, cursor, feel good; death scene dropped to 40 fps (save
+  `play_20261019_082854`); the big fight 40-50 fps. Sound slows with the frame rate (user: investigate later).
+- **ELF VU programs (done, in the play build):** every VU image is one of PoP's 10 microprograms in the ELF plus a
+  stale tail; `tools/vu1progs.py` writes them from the user's own ELF (also solves the 1.0 "image recipe").
+  Patch 35 (pairs past a program's end -> interpreter). Death save 40 -> 60; all-saves sweep `fps_progs.txt`:
+  59/77 hold 60 (unchanged otherwise).
+- **Build-time VU1 scheduling (runtime patch 37, in progress): read `docs/vu1_scheduling.md` "Progress" first.**
+  19 Oct afternoon: EFU (EATAN, not ESIN) scheduled + parts now keep real loops whole (JR edges ignored when
+  splitting): exact, fights 53-58 fps (morning 46-52, off 39-46), 3 of the 9 slow saves at 60, 3 more at 57-60.
+  Next: profile the fight on this build. The PC's play build is the scheduled one with gate statistics (`PS2X_VU1_SCHED=0` turns scheduling off, `PS2X_VU1_SCHED_STATS=1` prints why runs are
+  not scheduled). User's instruction: optimise in order of biggest win.
+- **Mac check of the scheduler:** `tools/vu1sched/check.sh` (x86_64 vu1_recomp + syntax check of generated code).
+- **PC job mechanics learned today:** start-job `-Arguments` loses switches: use a wrapper script in `game\jobs\`
+  (current: `game\jobs\sched.ps1`). `findstr` cannot read `job.log` (UTF-16?): wait with PowerShell
+  `Select-String` or `tools/windows/watch-job.sh` under Monitor. Runtime-src patch 37 on the PC is re-applied by
+  `sched.ps1` (it drops the old commit first).
+- **Rules from the user:** survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`);
+  add general learnings to `docs/lessons.md`; one dated job script per night (`tools/windows/<mon><day>.ps1`;
+  today: `oct19.ps1`, modes `-Sched`, `-Experiments`).
+- **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner.
+- **Native renderer (1.0's main job):** unchanged since 18 Oct; details `docs/native_renderer.md`.

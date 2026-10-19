@@ -475,4 +475,46 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   paths return without building DMA, so the picture is wrong): `tools/windows/oct19.ps1 -Native` measures fps
   per group on the fight and slow saves, profiles the fight with nothing/everything skipped, and records VU1
   traces (`PS2X_VU1_TRACE`, already in the runtime: registers + VU data per run) of two water saves as inputs
-  for a P6 port. Results: see below once the job is in.
+  for a P6 port.
+- **Results (PC, 19 Oct 21:31-21:57, TV on; `game\analysis\native\prize\fps_<group>.txt`, 8 saves: the
+  fights 185602/185837 and the six slowest saves of 17-19 Oct):**
+  | Skipped | Fights | Other slow saves |
+  |---|---|---|
+  | nothing | 46-56 | 47-60 |
+  | **static** (non-skinned CJMeshElement + CJMeshElementRef + CJIdxMesh) | **60** | **60** |
+  | skinned (only calls that switch no driver; most character calls stay) | 48-55 | 52-60 |
+  | lightmap (CLMElementList::Render) | 49-60 | 33-60 (one 9 fps second) |
+  | gfx (FUN_00458FC0 particles) | 44-53 | 48-60 |
+  | all | 60 | 60 |
+  Fight profiles (`game/analysis/native/prize/prize_{none,all}.report.txt`): nothing skipped, VU thread 88%
+  busy and the game thread 46% in sceGsSyncPath; all skipped, VU thread 53% (the kept character draws), game
+  thread 35% idle in processDueDeadlines (waiting for vblank), PS2_Flip 8.6%. **The static world's VU1/GS work
+  is the fight dips;** native static geometry alone gives a steady 60.
+- **Pitfalls hit on the way** (also in `docs/lessons.md`): (1) the mesh Display paths switch the VU1 driver
+  (CVuManager::DoSetShadowDriver / FUN_004B7480, state byte 0x700000a8) before skinned draws, so the skip keeps
+  any chain that would switch; (2) with the PC's TV off the GPU has no active display and every boot runs at
+  ~4 fps (OpenGL Present stalls): the first two evening runs were invalid; (3) the VU1 trace counts GS fields,
+  which a save load restores to the save's field and which advance only with presented frames.
+
+## Plan of attack (agreed with the user 19 Oct night)
+Renderer, in order:
+1. **Native static world in the game window**: in-process Vulkan drawing (the live window exists only as a
+   separate process today; recommend porting the presenter to Vulkan over GL interop), the static draw paths
+   no longer build DMA (as `POP_NATIVE_SKIP=static`, keeping the driver switches), the emulated GS draws the
+   rest on top. The 60 fps win. Open design point: depth for GS draws over the native world (characters and
+   particles test against it) - step 2 makes that moot.
+2. **Characters and particles native** (decoders exist): the GS stops drawing 3D.
+3. **Gaps**: water (P6 on VU1: Qwen port judged by the trace replayer), sprites (P9), shadows, halos, light
+   shafts / the mirror beam (191059: not type 0x18), full-screen flashes and white-outs, UV animation details.
+4. **2D**: HUD, menus, text, loading screens, letterbox bars, the movie picture.
+5. **GS off by default** (reference renderer toggle).
+Sound: (1) sound in save-state boots (enables offline sound work from saves); (2) map the DARE/UbiSound calls;
+(3) native mixer (ADPCM, ADSR, pitch, volume/pan, streams, reverb; OpenGOAL ISC as reference); (4) dual render
+against the SPU2 emulation + glitch detectors + every-sound-alone overnight; the known audio bugs checked on both.
+Then: IOP (pad via SDL incl. rumble later, memory card as native files; the IOP goes once sound is native),
+native frame pacing (EeScheduler/vsync overhead ~15%), 1.0 at 30 fps.
+Playtesting: renderer 1-2 low (existing saves); 3 medium-high (saves of later levels' effects); 4 medium
+(saves on every menu/screen); sound high until save-state boots have sound; final full playthrough with the QA
+checks. **Agreed: a data-gathering playthrough on the current build soon** (quick-saves at every new
+room/effect/menu/cutscene, in chunks; each batch is scored/inventoried offline), then the user checks
+milestones, then one verification playthrough at the end.
