@@ -353,6 +353,9 @@ namespace
                 for (ThreadKey id : ids)
                     if (!names.count(id))
                         names[id] = threadName(id);
+                // Only the runtime's named threads (game, VU, GS, GIF, ...): suspending all ~43 threads of the
+                // process every round cost 1-3 fps in a fight, and the unnamed ones (drivers) are idle.
+                std::erase_if(ids, [&](ThreadKey id) { return names[id].rfind("tid", 0) == 0 || names[id].rfind("port", 0) == 0; });
                 slices.emplace_back();
                 while (static_cast<int>(slices.size()) > keepSeconds)
                     slices.pop_front();
