@@ -1,10 +1,12 @@
 #version 450
 // Native static-world pass. The game's world -> clip matrix uses the PS2 conventions: screen y
-// grows downwards (as Vulkan's), w = view depth. Depth is near / w (reversed: nearer = larger,
-// cleared to 0, compare GREATER), so Vulkan's 0 <= z <= w clip does the near-plane clipping.
+// grows downwards (as Vulkan's), w = view depth. Depth is zScale * (w - z) / w: the GS Z the VU1
+// programs compute (viewport 0x280: Z = 2^23 * (1 - z / w)) scaled by zScale (the game's z - w is
+// about -0.2, so depth ~ 0.2 * zScale / w; reversed: nearer = larger, cleared to 0, compare
+// GREATER), and Vulkan's 0 <= z <= w clip does the near-plane clipping at w ~ 0.2 * zScale.
 layout(push_constant) uniform Push {
     mat4 mvp;          // game clip matrix * object matrix (column-major)
-    vec4 params;       // x: flags (1 alpha test, 2 blended, 4 test LESS, 8 legacy blend), y: cutoff, z: lightmap strength, w: near
+    vec4 params;       // x: flags (1 alpha test, 2 blended, 4 test LESS, 8 legacy blend), y: cutoff, z: lightmap strength, w: zScale
     vec4 fog;          // x, y: GS fog factor F = x + y * w (clamped 0..255, 255 = no fog), z: enabled
     vec4 fogColour;    // FOGCOL (0..1)
 } pc;
@@ -20,7 +22,7 @@ layout(location = 3) noperspective out float vFog;
 void main()
 {
     vec4 c = pc.mvp * vec4(inPos, 1.0);
-    gl_Position = vec4(c.x, c.y, pc.params.w, c.w);
+    gl_Position = vec4(c.x, c.y, pc.params.w * (c.w - c.z), c.w);
     vUv = inUv;
     vColour = inColour;
     vUv2 = inUv2;

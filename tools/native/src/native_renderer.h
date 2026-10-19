@@ -133,11 +133,14 @@ namespace pop_native
         float hazeFade = 0.0f;   // +0x144
     };
 
+    // the game's projection: clip z = w - 0.2 (graphics object +0x300), so 1 - z / w ~ 0.2 / w
+    constexpr float kGsZNear = 0.2f;
+
     struct Options
     {
         bool linearFilter = true; // bilinear texture filtering (the PS2's usual setting) or nearest
         bool gameOrder = false;   // one pass in the given draw order (live frames, already in the game's order)
-        float nearW = 0.05f;      // near plane in clip w (view depth)
+        float nearW = 0.05f;      // near plane in clip w (view depth); depth = nearW / kGsZNear * (1 - z / w)
         int cull = 0;             // experiment: 0 none, 1 cull clockwise, 2 cull counter-clockwise (all draws)
         bool cullClockwise = true; // single-sided materials: which screen winding is the back face
         float clearColour[4] = {24 / 255.0f, 24 / 255.0f, 32 / 255.0f, 0.0f}; // alpha 0: EraseAlphaBuffer
@@ -167,9 +170,11 @@ namespace pop_native
         void reset(bool keepImages = false);
         // renders the draws through `clip` (the game's world -> clip matrix, row vectors as the game
         // stores them) into a width x height RGBA image
-        // depthOut (optional): per-pixel view depth w (0 where nothing was drawn)
+        // depthOut (optional): per-pixel view depth w (0 where nothing was drawn); gsZOut (optional):
+        // per-pixel GS Z as the game's VU1 programs write it (Z24, 2^23 * (1 - z / w); 0 = nothing drawn)
         bool renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
-                             std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr);
+                             std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr,
+                             std::vector<uint32_t> *gsZOut = nullptr);
         // windowed: renders the frame at internalWidth x internalHeight and shows it scaled into the
         // window (aspect kept, bars around it); recreates the swapchain when the window size changes
         bool present(uint32_t windowWidth, uint32_t windowHeight, uint32_t internalWidth, uint32_t internalHeight,

@@ -347,7 +347,10 @@ namespace pop_native
             rb.clearValueCount = 2;
             rb.pClearValues = clear;
             vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
-            VkViewport vp{0, 0, float(width), float(height), 0.0f, 1.0f};
+            // the GS samples a pixel at its integer coordinate, Vulkan at its centre: shift the picture by
+            // half a GS pixel (640x448 across the target) so both sample the same points (Z then matches
+            // the game's to ~5e-5, 19 Oct)
+            VkViewport vp{0.5f * float(width) / 640.0f, 0.5f * float(height) / 448.0f, float(width), float(height), 0.0f, 1.0f};
             VkRect2D sc{{0, 0}, {width, height}};
             vkCmdSetViewport(cb, 0, 1, &vp);
             vkCmdSetScissor(cb, 0, 1, &sc);
@@ -395,7 +398,7 @@ namespace pop_native
                     push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
-                    push.params[3] = options.nearW;
+                    push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)
                     push.fog[0] = d.ownFog ? d.fogA : fog.a;
                     push.fog[1] = d.ownFog ? d.fogB : fog.b;
                     push.fog[2] = fog.enabled || d.ownFog ? 1.0f : 0.0f;
@@ -1355,7 +1358,8 @@ namespace pop_native
     }
 
     bool Renderer::renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
-                                   std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut)
+                                   std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut,
+                                   std::vector<uint32_t> *gsZOut)
     {
         Texture colour, depth;
         Buffer readback, depthReadback;
@@ -1389,7 +1393,7 @@ namespace pop_native
                 region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.imageExtent = {width, height, 1};
                 vkCmdCopyImageToBuffer(cb, colour.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
-                if (depthOut)
+                if (depthOut || gsZOut)
                 {
                     Impl::barrier(cb, depth.image, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
@@ -1405,14 +1409,25 @@ namespace pop_native
             vkMapMemory(m->device, readback.memory, 0, readback.size, 0, &p);
             rgbaOut.assign(static_cast<uint8_t *>(p), static_cast<uint8_t *>(p) + size_t(width) * height * 4);
             vkUnmapMemory(m->device, readback.memory);
-            if (depthOut)
+            if (depthOut || gsZOut)
             {
-                // stored depth = near / w (0 = nothing drawn)
+                // stored depth = zScale * (1 - z / w), ~ near / w (0 = nothing drawn); GS Z = 2^23 * depth / zScale
                 vkMapMemory(m->device, depthReadback.memory, 0, depthReadback.size, 0, &p);
                 const float *z = static_cast<const float *>(p);
-                depthOut->resize(size_t(width) * height);
-                for (size_t i = 0; i < depthOut->size(); ++i)
-                    (*depthOut)[i] = z[i] > 0.0f ? m->options.nearW / z[i] : 0.0f;
+                const size_t n = size_t(width) * height;
+                if (depthOut)
+                {
+                    depthOut->resize(n);
+                    for (size_t i = 0; i < n; ++i)
+                        (*depthOut)[i] = z[i] > 0.0f ? m->options.nearW / z[i] : 0.0f;
+                }
+                if (gsZOut)
+                {
+                    gsZOut->resize(n);
+                    const double toGs = 8388608.0 * kGsZNear / m->options.nearW;
+                    for (size_t i = 0; i < n; ++i)
+                        (*gsZOut)[i] = uint32_t(std::min(16777215.0, std::max(0.0, double(z[i]) * toGs + 0.5)));
+                }
                 vkUnmapMemory(m->device, depthReadback.memory);
             }
         }
