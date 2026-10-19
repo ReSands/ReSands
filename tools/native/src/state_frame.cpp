@@ -259,6 +259,21 @@ namespace pop_hdtex
 {
     bool readEntry(const std::string &path, uint32_t key, std::vector<uint8_t> &out) { return pop_bigfile::readEntry(path, key, out); }
 }
+// POP_NATIVE_WORLD offline (--world): the frame's native draws as pop_native_world would get them
+namespace
+{
+    std::vector<uint8_t> g_worldFrame;
+    uint32_t g_worldFrameSeq = 0;
+}
+namespace pop_native_world
+{
+    bool active() { return true; }
+    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf)
+    {
+        g_worldFrameSeq = seq;
+        g_worldFrame = std::move(pnf);
+    }
+}
 namespace pop_live_client
 {
     void start(int) {}
@@ -272,16 +287,20 @@ int main(int argc, char **argv)
 {
     if (argc < 3)
     {
-        std::fprintf(stderr, "usage: pop_state_frame <state> <out.pnf> [--bigfile PRINCE.BF] [--packindex packindex.txt]\n");
+        std::fprintf(stderr, "usage: pop_state_frame <state> <out.pnf> [--bigfile PRINCE.BF] [--packindex packindex.txt] [--world]\n"
+                             "  --world: <out.pnf> = only the draws POP_NATIVE_WORLD would draw natively\n");
         return 2;
     }
     std::string index = "../../analysis/packindex.txt";
-    for (int i = 3; i + 1 < argc; i += 2)
+    bool world = false;
+    for (int i = 3; i < argc; ++i)
     {
-        if (!std::strcmp(argv[i], "--bigfile"))
-            g_bigfile = argv[i + 1];
-        else if (!std::strcmp(argv[i], "--packindex"))
-            index = argv[i + 1];
+        if (!std::strcmp(argv[i], "--world"))
+            world = true;
+        else if (i + 1 < argc && !std::strcmp(argv[i], "--bigfile"))
+            g_bigfile = argv[++i];
+        else if (i + 1 < argc && !std::strcmp(argv[i], "--packindex"))
+            index = argv[++i];
     }
     if (!loadState(argv[1]))
     {
@@ -327,7 +346,10 @@ int main(int argc, char **argv)
                  packsOf.empty() ? "no index" : index.c_str());
 
     setenv("POP_NATIVE_LIVE", "1", 1);
-    setenv("POP_NATIVE_FRAME", (std::string(argv[2]) + ":0").c_str(), 1);
+    if (world)
+        setenv("POP_NATIVE_WORLD", "1", 1);
+    else
+        setenv("POP_NATIVE_FRAME", (std::string(argv[2]) + ":0").c_str(), 1);
     setenv("POP_PS2_BIGFILE", g_bigfile.c_str(), 1);
     alignas(PS2Runtime) static unsigned char storage[sizeof(PS2Runtime)];
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
@@ -350,6 +372,28 @@ int main(int argc, char **argv)
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
+    if (world)
+    {
+        // one Display3DElements (marker, lists), then PS2_Flip's DMA kick (return address in PS2_Flip)
+        R5900Context ctx{};
+        setArgs(ctx, 0x700000C0u);
+        call(0x004BC000u, &ctx);
+        ctx.r[31] = _mm_set_epi32(0, 0, 0, 0x004A2100);
+        call(0x004A2C80u, &ctx);
+        if (g_worldFrame.empty())
+        {
+            std::fprintf(stderr, "[state] no world frame\n");
+            return 1;
+        }
+        std::ofstream(argv[2], std::ios::binary).write(reinterpret_cast<const char *>(g_worldFrame.data()), std::streamsize(g_worldFrame.size()));
+        // the marker as the DMA list now holds it (graphics object +0xEC moved past it)
+        const uint32_t cursor = rd32(0x70000620u + 0xECu) - 0x30u;
+        std::fprintf(stderr, "[state] world frame %u: %zu bytes; marker at %08x: %08x %08x %08x %08x | %08x %08x %08x %08x | %08x %08x %08x %08x\n",
+                     g_worldFrameSeq, g_worldFrame.size(), cursor, rd32(cursor), rd32(cursor + 4), rd32(cursor + 8), rd32(cursor + 12),
+                     rd32(cursor + 16), rd32(cursor + 20), rd32(cursor + 24), rd32(cursor + 28), rd32(cursor + 32), rd32(cursor + 36),
+                     rd32(cursor + 40), rd32(cursor + 44));
+        return 0;
+    }
     // two Display3DElements calls: the first starts the capture and replays the lists, the second writes
     R5900Context ctx{};
     setArgs(ctx, 0x700000C0u);

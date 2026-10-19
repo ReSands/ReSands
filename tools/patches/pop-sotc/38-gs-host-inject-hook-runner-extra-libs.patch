@@ -1,0 +1,115 @@
+From 069cb77768d07b3aa98edb38d2faeceffc5b981b Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 19 Oct 2026 22:25:09 +0100
+Subject: [PATCH] gs: host-inject hook for game overrides; runner extra
+ libraries
+
+GSHostInject::setHook: a hook sees every GIF packet before the frontend processes it (with the
+drawing context's FRAME/ZBUF) and can consume it, e.g. replace a marker packet in the game's DMA
+list with host-made images through GS::uploadImageNative, in order with the rest. The header is
+new and only included by gs_frontend.cpp and overrides, so generated code does not recompile.
+PS2X_RUNNER_EXTRA_LIBS links prebuilt libraries (a native renderer) privately into the runner.
+---
+ ps2xRuntime/CMakeLists.txt                    |  7 +++++
+ .../include/runtime/gs/gs_host_inject.h       | 22 ++++++++++++++++
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        | 26 +++++++++++++++++++
+ 3 files changed, 55 insertions(+)
+ create mode 100644 ps2xRuntime/include/runtime/gs/gs_host_inject.h
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index cd4c44e..e7842d0 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -522,6 +522,13 @@ target_link_libraries(ps2EntryRunner
+     ps2_runtime
+ )
+ 
++# Prebuilt libraries the game's overrides call (e.g. a native renderer), as full paths. Linked
++# privately, so the runner's compile flags (and its unity/PCH objects) are unchanged.
++set(PS2X_RUNNER_EXTRA_LIBS "" CACHE STRING "Extra libraries to link into ps2EntryRunner (;-separated paths)")
++if(PS2X_RUNNER_EXTRA_LIBS)
++    target_link_libraries(ps2EntryRunner PRIVATE ${PS2X_RUNNER_EXTRA_LIBS})
++endif()
++
+ if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
+     target_sources(ps2EntryRunner PRIVATE
+         src/lib/ps2_debug_panel.cpp
+diff --git a/ps2xRuntime/include/runtime/gs/gs_host_inject.h b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+new file mode 100644
+index 0000000..1c27ce6
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++#include <cstdint>
++
++class GS;
++
++// Host data in the GIF stream (for game overrides). A hook sees every GIF packet the GS frontend
++// receives, before it is processed and on the thread that processes it, with the drawing context's
++// frame and Z buffers; returning true consumes the packet. The hook may call GS::uploadImageNative
++// (the frontend's lock is recursive), e.g. to replace a marker packet the game's DMA list carries
++// with host-made images, in order with everything else the GS draws.
++namespace GSHostInject
++{
++    struct Targets
++    {
++        uint32_t fbp = 0, fbw = 0, fpsm = 0, fbmsk = 0; // FRAME (FBP in 2048-word units, FBW in 64 pixels)
++        uint32_t zbp = 0, zpsm = 0;                     // ZBUF (ZBP in 2048-word units, PSM 0x30 | psm)
++        bool zmask = false;
++    };
++    using Hook = bool (*)(GS &gs, const uint8_t *data, uint32_t sizeBytes, const Targets &targets);
++    void setHook(Hook hook);
++}
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index a0256ef..06ebd77 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/gs/gs_frontend.h"
++#include "runtime/gs/gs_host_inject.h"
+ #include "runtime/gs/gs_cpu_backend.h"
+ #include "runtime/gs/gs_recording.h"
+ #include "runtime/gs/gs_threaded_backend.h"
+@@ -767,12 +768,37 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+     return true;
+ }
+ 
++namespace
++{
++    std::atomic<GSHostInject::Hook> s_hostInjectHook{nullptr};
++}
++
++void GSHostInject::setHook(Hook hook)
++{
++    s_hostInjectHook.store(hook);
++}
++
+ void GS::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+ {
+     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
+     if (!data || sizeBytes < 16 || !m_backend)
+         return;
+ 
++    if (const GSHostInject::Hook hook = s_hostInjectHook.load(std::memory_order_relaxed))
++    {
++        const GSContext &c = m_ctx[0];
++        GSHostInject::Targets targets;
++        targets.fbp = c.frame.fbp;
++        targets.fbw = c.frame.fbw;
++        targets.fpsm = c.frame.psm;
++        targets.fbmsk = c.frame.fbmsk;
++        targets.zbp = c.zbuf.zbp;
++        targets.zpsm = c.zbuf.psm;
++        targets.zmask = c.zbuf.zmask;
++        if (hook(*this, data, sizeBytes, targets))
++            return;
++    }
++
+     if (tryProcessNativeImageUploadPacket(data, sizeBytes))
+     {
+         m_backend->Flush();
+-- 
+2.54.0 (Apple Git-157)
+

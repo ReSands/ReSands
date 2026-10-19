@@ -52,6 +52,11 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 #include <vector>
 
 uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> bigfile key
+namespace pop_native_world // pop_native_world.cpp: draws the native world frames into the GS memory
+{
+    bool active();                                            // the runtime can inject (GS host hook + renderer)
+    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF6)
+}
 namespace pop_hdtex
 {
     bool readEntry(const std::string &path, uint32_t key, std::vector<uint8_t> &out); // pop_hdtextures.cpp
@@ -121,6 +126,7 @@ namespace pop_native_live
             // u' = u * m0 + v * m2 + m4, v' = u * m1 + v * m3 + m5
             bool hasUvm = false;
             float uvm[6] = {1, 0, 0, 1, 0, 0};
+            bool native = false; // POP_NATIVE_WORLD: drawn natively (its Display call skipped)
         };
         uint32_t g_frameSeq = 0;
         const bool g_noUvMatrix = std::getenv("POP_NATIVE_NOUVM") != nullptr; // A/B: no UV animation
@@ -132,6 +138,41 @@ namespace pop_native_live
         // +0xA8 leave alpha (the glow mask) in the frame
         uint32_t g_drawManager = 0, g_currentList = 0;
         PS2Runtime::RecompiledFunction g_origListRender = nullptr;
+
+        // POP_NATIVE_WORLD=1 (renderer step 1, docs/native_renderer.md "Native world in the game
+        // window"): opaque static draws of the first lists are drawn natively and their Display calls
+        // skipped (no VIF1/VU1/GS work); the native picture and its GS Z go into the GS frame and Z
+        // buffers where the frame's 3D starts, so the GS draws everything else over it, depth-tested.
+        // Display3DElements puts a marker in the frame's DMA list (graphics object +0xEC, the list
+        // being built): VIF FLUSHA + DIRECT of a GIF A+D write to GS register 0x7F (none; the GS
+        // ignores it) with "PNWD" and the frame number. At the frame's DMA kick (from PS2_Flip) the
+        // frame's native draws go to pop_native_world, whose GS hook swaps the marker for the images.
+        bool g_world = false;     // the mode is on
+        bool g_worldMarked = false; // this frame has a marker (Display3DElements ran since the kick)
+        bool g_worldOpen = false; // draws may go native: the frame's first Display3DElements call
+        uint32_t g_worldSeq = 0;
+        std::unordered_set<uint64_t> g_worldBase; // (element << 16 | matrix index) drawn natively this frame
+        std::unordered_set<uint32_t> g_worldLmRefs; // instanced elements with a lightmap entry (not native yet)
+        struct WorldStats
+        {
+            uint64_t frames = 0, skipped = 0, kept = 0, lightmaps = 0, noTexture = 0, notRecorded = 0, bytes = 0;
+        } g_worldStats;
+        constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
+        bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
+
+        // The render state of a Display call allows a native draw: lists +200, +0x2C, +0x3C (before
+        // Display3DElements' first Z-test-less and alpha passes), opaque (blend kind 0; alpha test
+        // allowed), writes depth and RGB, Z test on, not the alpha-only pass.
+        bool worldStateOk(uint8_t *rdram);
+        // the records a Display call added (kind 0: g_frameMaterials index, 2: g_frameRefs index)
+        struct WorldRecord
+        {
+            int kind;
+            size_t index;
+        };
+        size_t worldCount0();
+        size_t worldCount2();
+        DrawMaterial &worldMaterial(const WorldRecord &r);
         const bool g_noLighting = std::getenv("POP_NATIVE_NOLIGHT") != nullptr; // A/B: unlit characters
         uint8_t *g_rdramPtr = nullptr;
         std::vector<DrawMaterial> g_frameMaterials;
@@ -185,6 +226,20 @@ namespace pop_native_live
             float f;
             std::memcpy(&f, &b, 4);
             return f;
+        }
+
+        bool worldStateOk(uint8_t *rdram)
+        {
+            if (!g_worldOpen || (g_currentList != 200u && g_currentList != 0x2Cu && g_currentList != 0x3Cu))
+                return false;
+            const uint32_t sub = guestAny(rdram, 0x70000034u);
+            if (!sub)
+                return false;
+            const uint32_t flags = guestAny(rdram, sub + 4);
+            if (((flags >> 16) & 0xF) != 0 || (flags & 0x200) || (flags & 0x40) || !guest8(rdram, 0x70000038u) ||
+                guestAny(rdram, 0x70000044u) != 0xFFFFFFFFu)
+                return false;
+            return true;
         }
 
         // The render state's current sub-material (0x70000034, set by CElementList::Render before
@@ -634,19 +689,59 @@ namespace pop_native_live
         std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameRefs; // instanced draws
         std::unordered_map<uint64_t, std::vector<pop_assets::Batch>> g_fromPacket; // (element << 8 | pass) -> decoded pass packet
 
+        size_t worldCount0() { return g_frameMaterials.size(); }
+        size_t worldCount2() { return g_frameRefs.size(); }
+        DrawMaterial &worldMaterial(const WorldRecord &r) { return r.kind == 0 ? g_frameMaterials[r.index] : g_frameRefs[r.index].second.second; }
+        // A Display call's records go native if each has its texture: marks them, notes the drawn
+        // bases (for their lightmap passes); false: the call runs as usual (its records stay GS-only)
+        bool worldFinish(const std::vector<WorldRecord> &recs, const std::vector<uint64_t> &base)
+        {
+            for (const WorldRecord &r : recs)
+            {
+                const DrawMaterial &m = worldMaterial(r);
+                if (!m.textureKey || !worldTextureReady(m.textureKey))
+                {
+                    ++g_worldStats.noTexture;
+                    ++g_worldStats.kept;
+                    return false;
+                }
+            }
+            for (const WorldRecord &r : recs)
+                worldMaterial(r).native = true;
+            g_worldBase.insert(base.begin(), base.end());
+            ++g_worldStats.skipped;
+            return true;
+        }
+
         // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
         void refDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             ++g_refPassDraws[getRegU32(ctx, 6) & 7];
+            // POP_NATIVE_WORLD: as CJMeshElement::Display; never instances with a lightmap entry
+            // (instanced lightmaps are not drawn natively yet)
+            bool worldOk = false;
+            std::vector<WorldRecord> worldRecs;
+            std::vector<uint64_t> worldBase;
             if (g_frameCapturing)
             {
                 const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
                 uint32_t ref = getRegU32(ctx, 4);
+                worldOk = g_world && pass != 3 && worldStateOk(rdram);
                 // passes 0, 1, 4 (main) and 2 (second layer); 3 is the lightmap pass
                 for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 2 || pass == 4); ++link)
                 {
-                    if (g_frameSeen.insert((uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram)).second)
+                    const uint64_t key = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram);
+                    const uint64_t base = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63);
+                    const bool seen = worldOk && g_frameSeen.count(key);
+                    const size_t world2 = worldOk ? worldCount2() : 0;
+                    if (worldOk)
+                    {
+                        const uint32_t el = guestAny(rdram, ref + 0x20u);
+                        if ((el && guestAny(rdram, el + 0x48u)) || g_worldLmRefs.count(ref))
+                            worldOk = false;
+                    }
+                    if (g_frameSeen.insert(key).second)
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
                         std::vector<pop_assets::Batch> batches;
@@ -661,9 +756,22 @@ namespace pop_native_live
                         if (!batches.empty())
                             g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
                     }
+                    if (worldOk)
+                    {
+                        if (worldCount2() > world2)
+                            worldRecs.push_back({2, world2});
+                        else if (!(seen && g_worldBase.count(base)))
+                        {
+                            worldOk = false;
+                            ++g_worldStats.notRecorded;
+                        }
+                        worldBase.push_back(base);
+                    }
                     ref = guestAny(rdram, ref + 0x1C);
                 }
             }
+            if (worldOk && worldFinish(worldRecs, worldBase))
+                return;
             g_origRefDisplay(rdram, ctx, runtime);
         }
 
@@ -1017,7 +1125,13 @@ namespace pop_native_live
                     if (logged++ < 4)
                         std::fprintf(stderr, "[pop:native] CJIdxMesh %08x packet %08x: %zu batches\n", mesh, packet, batches.size());
                     if (!batches.empty())
+                    {
                         g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                        // POP_NATIVE_WORLD: one mesh, no chain
+                        std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+                        if (g_world && worldStateOk(rdram) && worldFinish(recs, {}))
+                            return;
+                    }
                 }
             }
             g_other[N].original(rdram, ctx, runtime);
@@ -1138,9 +1252,19 @@ namespace pop_native_live
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
             uint32_t element = getRegU32(ctx, 4);
+            // POP_NATIVE_WORLD: the call is skipped if every element of the chain is static and was
+            // recorded for the native frame now (or earlier in the frame and drawn natively then);
+            // a lightmap pass (CLMElementList::Render) only over natively drawn elements
+            bool worldOk = g_world && g_frameCapturing && (pass == 3 ? g_worldOpen && g_currentList == 0x5Cu : worldStateOk(rdram));
+            std::vector<WorldRecord> worldRecs;
+            std::vector<uint64_t> worldBase;
             for (unsigned link = 0; element && link < 4096; ++link)
             {
                 ++g_stats.draws;
+                const uint64_t worldKey = (uint64_t(element) << 16) | index | (pass == 2 ? uint64_t(2) << 56 : 0) |
+                                          (pass == 3 ? uint64_t(3) << 56 : alphaPassBit(rdram));
+                const bool worldSeen = worldOk && g_frameSeen.count(worldKey);
+                const size_t world0 = worldOk ? worldCount0() : 0, world2 = worldOk ? worldCount2() : 0;
                 if (g_frameCapturing && !g_elements.count(element) && !g_skipped.count(element) && !g_skinned.count(element))
                 {
                     // Skinned, never seen at load (a save-state scene): the drawn pass's packet in memory
@@ -1307,7 +1431,8 @@ namespace pop_native_live
                     ++g_stats.drawsKnown;
                     const uint32_t packet = guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass));
                     std::vector<float> pos;
-                    packetPositions(rdram, packet, pos);
+                    if (!g_world) // the conversion check (diagnostic; costs game-thread time per draw)
+                        packetPositions(rdram, packet, pos);
                     size_t found = 0;
                     for (size_t k = 0; k + 3 <= pos.size(); k += 3)
                         found += it->second.positions.count(key3(&pos[k]));
@@ -1333,9 +1458,34 @@ namespace pop_native_live
                         g_frameMaterials.push_back(currentMaterial(rdram));
                     }
                 }
+                if (worldOk)
+                {
+                    bool recorded = false;
+                    if (worldCount0() > world0)
+                        worldRecs.push_back({0, world0}), recorded = true;
+                    if (worldCount2() > world2)
+                        worldRecs.push_back({2, world2}), recorded = true;
+                    const uint64_t base = (uint64_t(element) << 16) | index;
+                    if (guest32(rdram, element + 0x48))
+                        worldOk = false; // a skinned element (bone palette): characters stay on the GS
+                    else if (pass == 3 && !g_worldBase.count(base))
+                        worldOk = false; // its base was drawn by the GS
+                    else if (!recorded && !(worldSeen && (pass == 3 || g_worldBase.count(base))))
+                    {
+                        worldOk = false; // nothing decoded for it
+                        ++g_worldStats.notRecorded;
+                    }
+                    worldBase.push_back(base);
+                }
                 element = guest32(rdram, element + 0x4C);
             }
             report();
+            if (worldOk && worldFinish(worldRecs, pass == 3 ? std::vector<uint64_t>{} : worldBase))
+            {
+                if (pass == 3)
+                    ++g_worldStats.lightmaps;
+                return; // like a stub: leave pc, the dispatcher returns to the caller
+            }
             g_origDisplay(rdram, ctx, runtime);
         }
     }
@@ -1363,6 +1513,23 @@ namespace pop_native_live
         }
         std::unordered_map<uint32_t, pop_native::Image> g_liveImages; // live window: decoded textures by key
         std::unordered_set<uint32_t> g_liveSent;                       // texture keys the viewer already has
+        std::unordered_set<uint32_t> g_worldSent;                      // POP_NATIVE_WORLD: keys pop_native_world has
+        std::unordered_set<uint32_t> g_worldMissing;                   // keys not decodable yet (retried each frame)
+        bool worldTextureReady(uint32_t key)
+        {
+            if (g_liveImages.count(key))
+                return true;
+            if (g_worldMissing.count(key))
+                return false; // tried this frame
+            pop_native::Image img;
+            if (!findTexture(key, img))
+            {
+                g_worldMissing.insert(key);
+                return false;
+            }
+            g_liveImages.emplace(key, std::move(img));
+            return true;
+        }
         std::deque<std::pair<std::vector<uint8_t>, int>> g_liveDelayed; // frames waiting for GS pictures (count so far)
         uint64_t g_liveConnection = 0;
 
@@ -1396,8 +1563,12 @@ namespace pop_native_live
         std::function<uint32_t(uint32_t)> g_rdramForDump;
         // live: the frame goes to the live native window instead of a file, and the one-off
         // diagnostics (side files, stderr reports) are skipped
-        void writeFrame(bool live = false)
+        // worldOut (POP_NATIVE_WORLD): only the draws marked native, as PNF6 for pop_native_world
+        // (textures by key, pixels once), returned instead of written or sent
+        void writeFrame(bool live = false, std::vector<uint8_t> *worldOut = nullptr)
         {
+            if (worldOut)
+                live = true;
             std::vector<uint8_t> f;
             f.reserve(8u << 20);
             // "PNF5": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
@@ -1411,19 +1582,24 @@ namespace pop_native_live
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
             std::vector<uint32_t> imageKeys;
-            std::vector<DrawMaterial> allMaterials = g_frameMaterials;
+            std::vector<DrawMaterial> allMaterials;
+            for (const DrawMaterial &m : g_frameMaterials)
+                if (!worldOut || m.native)
+                    allMaterials.push_back(m);
             for (const auto &p : g_framePosed)
-                allMaterials.push_back(p.second);
+                if (!worldOut)
+                    allMaterials.push_back(p.second);
             for (const auto &r : g_frameRefs)
-                allMaterials.push_back(r.second.second);
-            for (const OtherDraw &o : g_frameOther) // other paths' textures too (image list only)
+                if (!worldOut || r.second.second.native)
+                    allMaterials.push_back(r.second.second);
+            for (const OtherDraw &o : worldOut ? std::vector<OtherDraw>{} : g_frameOther) // other paths' textures too (image list only)
             {
                 DrawMaterial m;
                 m.textureKey = o.textureKey;
                 m.flags = o.flags;
                 allMaterials.push_back(m);
             }
-            for (const GfxDraw &g : g_frameGfx) // GFX textures too (image list only, for inspection)
+            for (const GfxDraw &g : worldOut ? std::vector<GfxDraw>{} : g_frameGfx) // GFX textures too (image list only, for inspection)
             {
                 DrawMaterial m;
                 m.textureKey = g.textureKey;
@@ -1484,18 +1660,19 @@ namespace pop_native_live
             }
             const uint32_t ni0 = uint32_t(images.size());
             putBytes(f, &ni0, size_t(4) * size_t(1));
-            if (live && g_liveConnection != pop_live_client::connection())
+            if (live && !worldOut && g_liveConnection != pop_live_client::connection())
             {
                 g_liveConnection = pop_live_client::connection(); // a new viewer has none of our textures
                 g_liveSent.clear();
             }
+            std::unordered_set<uint32_t> &sent = worldOut ? g_worldSent : g_liveSent;
             for (size_t i = 0; i < images.size(); ++i)
             {
                 const auto &img = images[i];
                 if (live)
                 {
                     putBytes(f, &imageKeys[i], 4);
-                    if (!g_liveSent.insert(imageKeys[i]).second)
+                    if (!sent.insert(imageKeys[i]).second)
                     {
                         const uint32_t zero[2] = {0, 0};
                         putBytes(f, zero, 8);
@@ -1506,22 +1683,24 @@ namespace pop_native_live
                 putBytes(f, &img.height, size_t(4) * size_t(1));
                 putBytes(f, img.rgba.data(), img.rgba.size());
             }
-            const uint32_t n = uint32_t(g_frameDraws.size() + g_framePosed.size() + g_frameRefs.size());
-            putBytes(f, &n, size_t(4) * size_t(1));
             size_t tris = 0, textured = 0;
             static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             // every draw in the game's order: (seq, kind 0 static / 1 skinned / 2 instanced, index)
             std::vector<std::array<uint32_t, 3>> order;
             for (size_t i = 0; i < g_frameDraws.size(); ++i)
-                order.push_back({g_frameMaterials[i].seq, 0u, uint32_t(i)});
-            for (size_t i = 0; i < g_framePosed.size(); ++i)
+                if (!worldOut || g_frameMaterials[i].native)
+                    order.push_back({g_frameMaterials[i].seq, 0u, uint32_t(i)});
+            for (size_t i = 0; i < g_framePosed.size() && !worldOut; ++i)
                 order.push_back({g_framePosed[i].second.seq, 1u, uint32_t(i)});
             for (size_t i = 0; i < g_frameRefs.size(); ++i)
-                order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
+                if (!worldOut || g_frameRefs[i].second.second.native)
+                    order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
             std::sort(order.begin(), order.end());
+            const uint32_t n = uint32_t(order.size());
+            putBytes(f, &n, size_t(4) * size_t(1));
             // side file: per written draw its kind, source index, render state, texture key and mean
             // vertex colour (0x80 = 1.0), to identify draws found by bisecting a frame in the viewer
-            FILE *dl = live ? nullptr : std::fopen((g_framePath + ".draws.txt").c_str(), "w");
+            FILE *dl = live || g_framePath.empty() ? nullptr : std::fopen((g_framePath + ".draws.txt").c_str(), "w");
             uint32_t drawNo = 0;
             for (const auto &o : order)
             {
@@ -1590,12 +1769,20 @@ namespace pop_native_live
             }
             if (dl)
                 std::fclose(dl);
+            // the world frame has no post effects of its own (the GS runs them over the whole picture)
+            const uint32_t noCalls = 0;
             putBytes(f, "GLOW", size_t(1) * size_t(4));
-            putBytes(f, &g_glowCalls, size_t(4) * size_t(1));
+            putBytes(f, worldOut ? &noCalls : &g_glowCalls, size_t(4) * size_t(1));
             putBytes(f, g_glow, size_t(4) * size_t(5));
             putBytes(f, "HAZE", size_t(1) * size_t(4));
-            putBytes(f, &g_hazeCalls, size_t(4) * size_t(1));
+            putBytes(f, worldOut ? &noCalls : &g_hazeCalls, size_t(4) * size_t(1));
             putBytes(f, g_haze, size_t(4) * size_t(2));
+            if (worldOut)
+            {
+                g_worldStats.bytes += f.size();
+                *worldOut = std::move(f);
+                return;
+            }
             // POP_NATIVE_WINDOW_GS=<d>: the emulated GS picture for the viewer's comparison toggle
             // ("GSFB" + w + h + RGBA). The picture the runtime presents lags the frame being drawn, so
             // a frame waits for the pictures latched at the next d frame boundaries and carries all
@@ -1748,11 +1935,84 @@ namespace pop_native_live
             g_haloAddsInWindow = 0;
         }
 
+        // POP_NATIVE_WORLD: the frame's first Display3DElements starts its capture and puts the marker
+        // in the DMA list; a later one in the same frame (another view) leaves its draws to the GS
+        void worldDisplay3D(uint8_t *rdram)
+        {
+            if (g_worldMarked)
+            {
+                g_worldOpen = false;
+                return;
+            }
+            resetFrameCapture();
+            g_worldBase.clear();
+            g_worldMissing.clear();
+            const uint32_t gs = guestAny(rdram, 0x00675148u);
+            if (!gs)
+                return;
+            for (int k = 0; k < 16; ++k)
+                g_frameClip[k] = guestF(rdram, gs + 0x240u + 4u * k);
+            // instanced elements with a lightmap entry (CLMElementList at +0x5C: 8-byte entries, kind
+            // 10 in the low nibble of the second word): their lightmaps are drawn by the GS, so they are too
+            g_worldLmRefs.clear();
+            const uint32_t lm = g_drawManager + 0x5Cu, entries = guestAny(rdram, lm), count = guestAny(rdram, lm + 4);
+            for (uint32_t i = 0; i < count && i < 4096; ++i)
+                if ((guestAny(rdram, entries + 8 * i + 4) & 0xF) == 10)
+                    g_worldLmRefs.insert(guestAny(rdram, entries + 8 * i));
+            // the marker: CNT tag (2 qw) with VIF FLUSHA (all paths idle, so nothing drawn before is
+            // reordered after it) + DIRECT 2; GIF tag (NLOOP 1, EOP, PACKED, NREG 1, A+D); A+D data
+            const uint32_t cursor = guestAny(rdram, gs + 0xECu);
+            const uint32_t qw[12] = {0x10000002u, 0u, 0x13000000u, 0x50000002u, 0x00008001u, 0x10000000u, 0xEu, 0u, ++g_worldSeq, kWorldMagic, 0x7Fu, 0u};
+            const uint32_t next = cursor + 0x30u;
+            std::memcpy(getMemPtr(rdram, cursor), qw, sizeof qw);
+            std::memcpy(getMemPtr(rdram, gs + 0xECu), &next, 4);
+            g_frameCapturing = true;
+            g_worldMarked = true;
+            g_worldOpen = true;
+        }
+
+        // the frame's DMA kick (0x4A2C80) from PS2_Flip: the frame's native draws go to pop_native_world
+        PS2Runtime::RecompiledFunction g_origKick = nullptr;
+        void worldKick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = getRegU32(ctx, 31);
+            if (g_worldMarked && ra >= 0x004A20C0u && ra < 0x004A2200u)
+            {
+                std::vector<uint8_t> f;
+                writeFrame(true, &f);
+                pop_native_world::submitFrame(g_worldSeq, std::move(f));
+                resetFrameCapture();
+                g_frameCapturing = false;
+                g_worldMarked = g_worldOpen = false;
+                if (++g_worldStats.frames % 300 == 0)
+                    std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame\n",
+                                 (unsigned long long)g_worldStats.frames, (unsigned long long)g_worldStats.skipped,
+                                 (unsigned long long)g_worldStats.noTexture, (unsigned long long)g_worldStats.notRecorded,
+                                 (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames));
+            }
+            g_origKick(rdram, ctx, runtime);
+        }
+
+        // CLMElementList::Render (0x4B7B80): its Display calls (pass 3) belong to list +0x5C
+        PS2Runtime::RecompiledFunction g_origLmRender = nullptr;
+        void lmRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_currentList = getRegU32(ctx, 4) - g_drawManager;
+            g_origLmRender(rdram, ctx, runtime);
+        }
+
         void display3D(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_rdramPtr = rdram;
             g_runtimePtr = runtime;
             g_drawManager = getRegU32(ctx, 4);
+            if (g_world)
+            {
+                g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
+                worldDisplay3D(rdram);
+                g_origDisplay3D(rdram, ctx, runtime);
+                return;
+            }
             if (g_frameCapturing)
             {
                 g_rdramForDump = [rdram](uint32_t a) { return guestAny(rdram, a); };
@@ -1915,6 +2175,39 @@ namespace pop_native_live
     void install(PS2Runtime &runtime)
     {
         const char *v = std::getenv("POP_NATIVE_LIVE");
+        if (const char *world = std::getenv("POP_NATIVE_WORLD"); world && *world == '1')
+        {
+            // renderer step 1: the static world drawn natively into the GS buffers (see g_world)
+            if (!pop_native_world::active())
+            {
+                std::fprintf(stderr, "[pop:world] POP_NATIVE_WORLD=1 but this runtime cannot inject (no GS host hook or no Vulkan renderer)\n");
+                return;
+            }
+            const struct
+            {
+                uint32_t address;
+                PS2Runtime::RecompiledFunction hook, *original;
+            } hooks[] = {{kReadElement, readElement, &g_origRead},
+                         {kMeshDisplay, display, &g_origDisplay},
+                         {kDisplay3D, display3D, &g_origDisplay3D},
+                         {kRefDisplay, refDisplay, &g_origRefDisplay},
+                         {0x004B9440u, listRender, &g_origListRender},
+                         {0x004B7B80u, lmRender, &g_origLmRender},
+                         {0x004A2C80u, worldKick, &g_origKick},
+                         {g_other[0].address, otherDisplay<0>, &g_other[0].original}};
+            for (const auto &h : hooks)
+                if (!(*h.original = runtime.lookupFunction(h.address)))
+                {
+                    std::fprintf(stderr, "[pop:world] function %08x not found\n", h.address);
+                    return;
+                }
+            for (const auto &h : hooks)
+                runtime.replaceFunction(h.address, h.hook);
+            g_live = g_world = true;
+            g_start = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "[pop:world] native static world on\n");
+            return;
+        }
         if (const char *skip = std::getenv("POP_NATIVE_SKIP"); skip && *skip)
         {
             if (v && std::strcmp(v, "1") == 0)
