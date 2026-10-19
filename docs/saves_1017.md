@@ -82,3 +82,9 @@ Found the same evening from four paired saves (21:40:02/07 normal, 21:40:05/09 f
 save of 18 Oct (also 20:23:11 and 21:39:57, first-person). Fix: the override sets the runtime's default
 right-stick inversion each frame (X inverted only in the normal camera); boot.ps1 no longer forces
 PS2X_INVERT_RIGHT_STICK=x. POP_CAMERA_CLASSIC=1 keeps the original directions.
+19 Oct: the user found first-person X wrong again. Cause: 0x672B04 is a cache that only
+`Mdl0001DF8E_fn_GetPrinceHasEnemies` (0x325500) fills (`AI_ul_RealResolveOneRef(0x28, 0xCC000431)` = the prince,
+then `AI_EvalKeyword_Ultra_C1(..)->0x44 + 0x5E4`), so it stays 0 until the first enemy: 16 of the 19 Oct
+evening saves (a fresh start, 18:46-18:55) have it 0 while the flag itself toggles correctly (18:47:15/20/23 = 0).
+Fix: the override goes through the main-actor table instead, 0x66D500 (gp-0x74F0, slot 0 = prince, written by
+0x1B2580) -> +0x18 -> +0x4 -> +0x44 -> +0x5E4 + 0x90; equals the cache in all 111 PC saves that have one.

@@ -1529,17 +1529,26 @@ namespace
 
     // Camera stick: PoP's third-person camera orbits the old way round, so the right stick's X is
     // inverted for a modern feel, but not in first-person view, which already turns the modern way.
-    // The view flag, found from paired saves (18 Oct): *(0x672B04) + 0x90 = 1 in the normal camera,
-    // 0 in first-person (all 51 saves of 17 Oct and every pair of 18 Oct agree). PS2X_INVERT_RIGHT_STICK,
-    // if set, still wins; POP_CAMERA_CLASSIC=1 keeps the game's own directions.
+    // The view flag, found from paired saves (18 Oct): word +0x90 of the prince's camera block = 1 in the
+    // normal camera, 0 in first-person. The block is the prince's data (+0x44 of his AI instance) + 0x5E4.
+    // It used to be read through 0x672B04, but that is a cache filled only by fn_GetPrinceHasEnemies
+    // (0x325500), so it stays 0 until the first enemy (19 Oct: 16 saves after a fresh start). So go
+    // through the main-actor table instead (gp-0x74F0 = 0x66D500, slot 0 = the prince), the path
+    // AI_EvalKeyword_Ultra_C1 takes: actor->0x18->0x4->0x44. Same address as the cache in all 111 saves
+    // that have it. PS2X_INVERT_RIGHT_STICK, if set, still wins; POP_CAMERA_CLASSIC=1 keeps the game's
+    // own directions.
     void updateCameraInvert(uint8_t *rdram)
     {
 #if POP_HAVE_INPUT_OPTIONS
         static const bool classic = [] { const char *v = std::getenv("POP_CAMERA_CLASSIC"); return v && *v == '1'; }();
         if (classic)
             return;
-        const uint32_t view = guestU32(rdram, 0x00672B04u);
-        const bool firstPerson = view && (view & 0x1FFFFFFFu) < 0x02000000u && guestU32(rdram, view + 0x90u) == 0u;
+        auto ptr = [](uint32_t p) { return p && (p & 0x1FFFFFFFu) < 0x02000000u; };
+        uint32_t p = guestU32(rdram, 0x0066D500u);
+        p = ptr(p) ? guestU32(rdram, p + 0x18u) : 0u;
+        p = ptr(p) ? guestU32(rdram, p + 0x4u) : 0u;
+        p = ptr(p) ? guestU32(rdram, p + 0x44u) : 0u;
+        const bool firstPerson = ptr(p) && guestU32(rdram, p + 0x5E4u + 0x90u) == 0u;
         ps2_host_input::setRightStickInvertDefault(firstPerson ? 0u : ps2_host_input::kInvertRightX);
 #else
         (void)rdram;
