@@ -47,6 +47,10 @@ if ($World) {
         if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
     }
     "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') offline checks (pop_state_frame --world, pop_world_test)"
+    # the compiler environment (rebuild.ps1 sets up its own)
+    $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
+    $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
     $NB = "$Root\game\native-build"
     $out = "$Root\game\analysis\native\world"
     New-Item -ItemType Directory -Force $out | Out-Null
