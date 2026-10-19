@@ -66,8 +66,12 @@ the program stops.
   for every lane: "ADDx.xyz vf21, vf9, vf0x" is vf21[c] = vf9[c] + vf0[x] for c = x, y, z. Suffix i or q
   (ADDi, MULq, MADDAq, ...): the I or Q register instead of the last operand.
 - vf0 is always (0, 0, 0, 1): writes to vf0 are discarded (such instructions only set flags). vi0 is 0.
-- ACC: MULA, ADDA, SUBA, MADDA, MSUBA write ACC (the masked lanes). MADD d = ACC + a * b, MSUB d = ACC - a * b,
-  MADDA ACC = ACC + a * b, MSUBA ACC = ACC - a * b: per lane, product first (rounded), then the add.
+- ACC: MULA, ADDA, SUBA, MADDA, MSUBA write ACC (the masked lanes) instead of a vf register. Per lane, with
+  b = the second operand, its broadcast lane, I or Q:
+  ADD d = a + b; SUB d = a - b; MUL d = a * b; MADD d = ACC + a * b; MSUB d = ACC - a * b;
+  ADDA ACC = a + b; SUBA ACC = a - b; MULA ACC = a * b; MADDA ACC = ACC + a * b; MSUBA ACC = ACC - a * b.
+  ADDA / SUBA / MULA do NOT read the old ACC. "ADDAi.xyzw ACC, vf14, I" is ACC = vf14 + I;
+  "MSUBi.xyzw vf13, vf13, I" is vf13 = ACC - vf13 * I. Product first (rounded), then the add.
 - MAX / MINI: per-lane maximum / minimum. ABS: absolute value. FTOIn: float * 2^n converted to int32
   (truncated toward zero, saturating), its bits stored in the lane. ITOFn: the lane's int32 bits converted
   to float, divided by 2^n (n = 0, 4, 12, 15).
