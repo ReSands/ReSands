@@ -27,13 +27,27 @@ IMAGE = os.path.join(ROOT, 'game', 'analysis', 'vu1trace', 'vu1_1d5b02aa79c05d41
 # ranges: the code the stage executes; exits: where it hands over (0xffffffff = the program's end).
 STAGES = {
     'p6_setup': dict(entry=0x000, exits=[0x268, 0x1648], ranges=[(0x000, 0x260)]),
-    'p6_a_grid1': dict(entry=0x268, exits=[0x5e0, 0x930], ranges=[(0x268, 0x5d8)]),
+    # variant A: grid 1 (outer loop 0x288-0x5d8 around the inner 0x338-0x580), the clip check, grid 2 (outer
+    # 0x930-0xce0 around 0x9e0-0xc88), the tail. Loops are split at their heads (a whole grid overran the
+    # model's 32k-token budget twice); a loop's exit is the pair after its branch's delay slot.
+    'p6_a_pre': dict(entry=0x268, exits=[0x288, 0x930], ranges=[(0x268, 0x280)]),
+    'p6_a_g1_row': dict(entry=0x288, exits=[0x338], ranges=[(0x288, 0x330)]),
+    'p6_a_g1_inner': dict(entry=0x338, exits=[0x590], ranges=[(0x338, 0x588)]),
+    'p6_a_g1_tail': dict(entry=0x590, exits=[0x288, 0x5e0], ranges=[(0x590, 0x5d8)]),
     'p6_a_check': dict(entry=0x5e0, exits=[0xcf0, 0x830, 0x14e8, 0x1528], ranges=[(0x5e0, 0x828), (0x1568, 0x1640)]),
-    'p6_a_grid2': dict(entry=0x930, exits=[0xcf0], ranges=[(0x930, 0xce8)]),
+    'p6_a_g2_head': dict(entry=0x930, exits=[0x9e0], ranges=[(0x930, 0x9d8)]),
+    'p6_a_g2_inner': dict(entry=0x9e0, exits=[0xc98], ranges=[(0x9e0, 0xc90)]),
+    'p6_a_g2_tail': dict(entry=0xc98, exits=[0x930, 0xcf0], ranges=[(0xc98, 0xce8)]),
     'p6_tail': dict(entry=0xcf0, exits=[0xffffffff], ranges=[(0xcf0, 0xd28)]),
-    'p6_b_grid1': dict(entry=0x1648, exits=[0x1960, 0x1b60], ranges=[(0x1648, 0x1958)]),
+    # variant B: the same shape
+    'p6_b_pre': dict(entry=0x1648, exits=[0x1698, 0x1b60], ranges=[(0x1648, 0x1690)]),
+    'p6_b_g1_row': dict(entry=0x1698, exits=[0x1770], ranges=[(0x1698, 0x1768)]),
+    'p6_b_g1_inner': dict(entry=0x1770, exits=[0x1910], ranges=[(0x1770, 0x1908)]),
+    'p6_b_g1_tail': dict(entry=0x1910, exits=[0x1698, 0x1960], ranges=[(0x1910, 0x1958)]),
     'p6_b_check': dict(entry=0x1960, exits=[0x1dd0, 0x14e8, 0x1528, 0x1b28], ranges=[(0x1960, 0x1b20), (0x1568, 0x1640), (0x2550, 0x2628)]),
-    'p6_b_grid2': dict(entry=0x1b60, exits=[0x1dd0], ranges=[(0x1b60, 0x1dc8)]),
+    'p6_b_g2_head': dict(entry=0x1b60, exits=[0x1c40], ranges=[(0x1b60, 0x1c38)]),
+    'p6_b_g2_inner': dict(entry=0x1c40, exits=[0x1d78], ranges=[(0x1c40, 0x1d70)]),
+    'p6_b_g2_tail': dict(entry=0x1d78, exits=[0x1b60, 0x1dd0], ranges=[(0x1d78, 0x1dc8)]),
     'p6_b_tail': dict(entry=0x1dd0, exits=[0xffffffff], ranges=[(0x1dd0, 0x1e08)]),
 }
 

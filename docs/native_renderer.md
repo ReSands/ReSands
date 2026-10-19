@@ -544,7 +544,10 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   `game/analysis/play1019/world/world.txt`). PC (`oct19.ps1 -World`, fight save 185602; RTX 5070 Ti):
   1,760 draws, 46k triangles; GS Z from `pop_world_test` byte-identical to `pop_native_view`'s; worker
   2.66 ms per frame (read 0.88, upload 0.94, draw + readback 0.84), **~3 ms from submit to the uploads**
-  after the first frame (20 ms: all geometry and textures sent). PNF7 cut the frame from 8.2 MB to 79 KB and
+  after the first frame (20 ms: all geometry and textures sent). Full-frame scores after tonight's renderer
+  changes (`score_saves.sh` -> `game/analysis/play1019/native_pnf7/`): mean 18.64 -> 17.98 over the 49 saves;
+  44 better, 5 worse by 0.01-0.07 (185052, 185102, 185301, 191317, 192114). The change comes from d23ebe9
+  (GS-exact depth, half-pixel sampling offset), not PNF7 (byte-identical on the fight save). PNF7 cut the frame from 8.2 MB to 79 KB and
   the wait from ~9 ms. The play build with the mode compiles and links.
 - **Known risks, to check in the first boot:** (1) the hook runs on the async VIF/VU thread
   (`asyncvif::submitGif` -> `GS::processGIFPacket`), so it blocks the VU thread for those ~3 ms per frame
