@@ -345,12 +345,19 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "[state] %zu texture keys, %zu packs, %zu keys not in the index (%s)\n", g_texKeys.size(), packs.size(), missing,
                  packsOf.empty() ? "no index" : index.c_str());
 
-    setenv("POP_NATIVE_LIVE", "1", 1);
+    const auto setEnv = [](const char *name, const std::string &value) {
+#ifdef _WIN32
+        _putenv_s(name, value.c_str());
+#else
+        setenv(name, value.c_str(), 1);
+#endif
+    };
+    setEnv("POP_NATIVE_LIVE", "1");
     if (world)
-        setenv("POP_NATIVE_WORLD", "1", 1);
+        setEnv("POP_NATIVE_WORLD", "1");
     else
-        setenv("POP_NATIVE_FRAME", (std::string(argv[2]) + ":0").c_str(), 1);
-    setenv("POP_PS2_BIGFILE", g_bigfile.c_str(), 1);
+        setEnv("POP_NATIVE_FRAME", std::string(argv[2]) + ":0");
+    setEnv("POP_PS2_BIGFILE", g_bigfile);
     alignas(PS2Runtime) static unsigned char storage[sizeof(PS2Runtime)];
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
     pop_native_live::install(runtime);
