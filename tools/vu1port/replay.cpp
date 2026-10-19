@@ -153,17 +153,43 @@ namespace
     // where the visible Q / MAC flags came from (pc of the producing instruction), per pc visited
     struct Hints
     {
-        std::map<uint32_t, std::set<uint32_t>> q, mac;
-        std::map<uint32_t, uint64_t> viBackup;
-        uint32_t qSource = 0xFFFFFFFF, macSource = 0xFFFFFFFF;
+        std::map<uint32_t, std::set<uint32_t>> q, mac, clip;
+        std::map<uint32_t, std::set<uint32_t>> viBackup; // branch pc -> vi registers whose old value a branch there would read
+        uint32_t qSource = 0xFFFFFFFF, macSource = 0xFFFFFFFF, clipSource = 0xFFFFFFFF;
         bool divPending = false;
         uint32_t divPc = 0;
-        std::map<uint64_t, uint32_t> flagIssue; // pending MAC-writing entries: issue cycle -> pc
+        std::map<uint64_t, uint32_t> flagIssue, clipIssue; // pending MAC / clip-writing entries: issue cycle -> pc
         void reset()
         {
-            qSource = macSource = 0xFFFFFFFF;
+            qSource = macSource = clipSource = 0xFFFFFFFF;
             divPending = false;
             flagIssue.clear();
+            clipIssue.clear();
+        }
+        // pending entries that left the pipeline since the last pair: the newest is the visible source
+        static void retire(const VU1Interpreter &vu, std::map<uint64_t, uint32_t> &issued, uint32_t &source)
+        {
+            uint64_t newest = 0;
+            bool any = false;
+            for (auto it = issued.begin(); it != issued.end();)
+            {
+                bool still = false;
+                for (const auto &f : vu.m_flagPipeline)
+                    if (f.valid && f.issueCycle == it->first)
+                        still = true;
+                if (!still)
+                {
+                    if (!any || it->first >= newest)
+                    {
+                        newest = it->first;
+                        source = it->second;
+                        any = true;
+                    }
+                    it = issued.erase(it);
+                }
+                else
+                    ++it;
+            }
         }
         // before the pair at pc (after the pipelines committed)
         void before(const VU1Interpreter &vu, uint32_t pc, bool record)
@@ -173,31 +199,15 @@ namespace
                 qSource = divPc;
                 divPending = false;
             }
-            uint64_t newest = 0;
-            for (auto it = flagIssue.begin(); it != flagIssue.end();)
-            {
-                bool still = false;
-                for (const auto &f : vu.m_flagPipeline)
-                    if (f.valid && f.issueCycle == it->first)
-                        still = true;
-                if (!still)
-                {
-                    if (it->first >= newest)
-                    {
-                        newest = it->first;
-                        macSource = it->second;
-                    }
-                    it = flagIssue.erase(it);
-                }
-                else
-                    ++it;
-            }
+            retire(vu, flagIssue, macSource);
+            retire(vu, clipIssue, clipSource);
             if (record)
             {
                 q[pc].insert(qSource);
                 mac[pc].insert(macSource);
+                clip[pc].insert(clipSource);
                 if (vu.m_viBranchBackupValid)
-                    ++viBackup[pc];
+                    viBackup[pc].insert(vu.m_viBranchBackupReg);
             }
         }
         // after the pair at pc: new pending DIV / flag entries are this pair's
@@ -211,8 +221,12 @@ namespace
             else if (vu.m_fdiv.valid && ((lower >> 25) == 0x40) && ((lower & 0x7FF) == 0x3BC || (lower & 0x7FF) == 0x3BD || (lower & 0x7FF) == 0x3BE))
                 divPc = pc; // DIV / SQRT / RSQRT replacing a pending one
             for (const auto &f : vu.m_flagPipeline)
+            {
                 if (f.valid && f.writesMac && !flagIssue.count(f.issueCycle))
                     flagIssue[f.issueCycle] = pc;
+                if (f.valid && f.writesClip && !clipIssue.count(f.issueCycle))
+                    clipIssue[f.issueCycle] = pc;
+            }
         }
     };
 
@@ -483,8 +497,15 @@ int main(int argc, char **argv)
             h << " mac";
             for (uint32_t x : hints.mac[pc])
                 h << ' ' << (x == 0xFFFFFFFF ? std::string("entry") : (std::stringstream() << std::hex << x).str());
+            h << " clip";
+            for (uint32_t x : hints.clip[pc])
+                h << ' ' << (x == 0xFFFFFFFF ? std::string("entry") : (std::stringstream() << std::hex << x).str());
             if (hints.viBackup.count(pc))
-                h << " vibackup " << std::dec << hints.viBackup[pc];
+            {
+                h << " vibackup";
+                for (uint32_t r : hints.viBackup[pc])
+                    h << " vi" << std::dec << r;
+            }
             h << '\n';
         }
     }

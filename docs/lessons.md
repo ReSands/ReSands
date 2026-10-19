@@ -122,3 +122,18 @@ quotes: the wrapper then runs `& x.ps1 '-World'`, a quoted string that PowerShel
 positional string parameter (oct19.ps1's `$Pattern`), so the script's default mode ran, twice. Start jobs
 from PowerShell (`powershell -EncodedCommand`, as tools/overnight-pc.command does). Scripts whose default
 mode boots the game check for an active display first, so a mistake like this cannot reach a boot.
+
+## Night of 19-20 Oct 2026
+- **Measure the per-frame hand-over before trusting an in-process design.** The native world first re-sent
+  every batch's geometry each frame (8.2 MB): reading and uploading it took 7 of the worker's 8.3 ms, and the
+  hook waits for the worker on the VU thread. Keeping meshes on the GPU by key (PNF7) cut it to 79 KB and
+  ~3 ms. Readback from device-local memory without HOST_CACHED cost 33 ms on its own.
+- **Our VU disassembler was wrong for the flag instructions** (fixed in `tools/vudis.py`): FCAND/FCOR/FCEQ
+  always write vi1 (it printed a garbage register from the immediate bits), FMAND/FMOR/FMEQ take two
+  registers (`FMAND vit, vis` = MAC & vis; it printed an immediate). A port written from the old listing
+  would have been wrong; check a disassembler against the interpreter's decoder before giving its output to a
+  model.
+- **Hand-port one stage before starting a model on a program** (as for the C ports): the known-good P6 setup
+  stage found the judge's issues (rounding mode, `-ffp-contract=off`, pending Q/MAC at stage borders) before
+  any model time was spent. Stage borders must be where only harmless writes (vf/vi/ACC) are in flight;
+  the replayer reports what is pending at each entry and exit.

@@ -1611,8 +1611,8 @@ namespace pop_native_live
         std::function<uint32_t(uint32_t)> g_rdramForDump;
         // live: the frame goes to the live native window instead of a file, and the one-off
         // diagnostics (side files, stderr reports) are skipped
-        // worldOut (POP_NATIVE_WORLD): only the draws marked native, as PNF6 for pop_native_world
-        // (textures by key, pixels once), returned instead of written or sent
+        // worldOut (POP_NATIVE_WORLD): only the draws marked native, as PNF7 for pop_native_world
+        // (textures by key with pixels once, batches by key with geometry once), returned instead of written or sent
         void writeFrame(bool live = false, std::vector<uint8_t> *worldOut = nullptr)
         {
             if (worldOut)

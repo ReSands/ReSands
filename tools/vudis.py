@@ -127,8 +127,19 @@ def lower(w, pc):
         return '%s vi%d, 0x%x' % (name, is_, target)
     if name in ('JR', 'JALR'):
         return '%s vi%d' % (name, is_) if name == 'JR' else 'JALR vi%d, vi%d' % (it, is_)
-    if name.startswith('F'):
-        return '%s vi%d, 0x%x' % (name, it, w & 0xFFFFFF)
+    # flag instructions (public VU encoding): the clip ones take a 24-bit immediate and leave their
+    # result in vi1; FCGET and the status / MAC ones name their registers (status: 12-bit immediate)
+    if name in ('FCEQ', 'FCAND', 'FCOR'):
+        return '%s vi1, 0x%06x' % (name, w & 0xFFFFFF)
+    if name == 'FCSET':
+        return 'FCSET 0x%06x' % (w & 0xFFFFFF)
+    if name == 'FCGET':
+        return 'FCGET vi%d' % it
+    if name in ('FSEQ', 'FSAND', 'FSOR', 'FSSET'):
+        imm12 = ((w >> 10) & 0x800) | (w & 0x7FF)
+        return 'FSSET 0x%03x' % imm12 if name == 'FSSET' else '%s vi%d, 0x%03x' % (name, it, imm12)
+    if name in ('FMEQ', 'FMAND', 'FMOR'):
+        return '%s vi%d, vi%d' % (name, it, is_)
     return '%s ?%08x' % (name, w)
 
 

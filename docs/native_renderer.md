@@ -518,3 +518,44 @@ Playtesting: renderer 1-2 low (existing saves); 3 medium-high (saves of later le
 checks. **Agreed: a data-gathering playthrough on the current build soon** (quick-saves at every new
 room/effect/menu/cutscene, in chunks; each batch is scored/inventoried offline), then the user checks
 milestones, then one verification playthrough at the end.
+
+## Native world in the game window (renderer step 1, built 19-20 Oct night; NOT yet booted)
+Design chosen over porting the presenter: **GS-memory injection**. The emulated GS keeps presenting; the native
+static world is drawn by our Vulkan renderer in-process and written into the GS frame and Z buffers at the
+point of the frame where its 3D starts, so everything the GS draws afterwards (characters, particles, decals,
+2D, post effects) lands on top and depth-tests against the native world.
+- Switch: `POP_NATIVE_WORLD=1` (off by default; the current build is unchanged without it). Needs runtime
+  patch 38 (`GSHostInject`, pop-sotc only) and the play build linked with `pop_native_render` + volk
+  (`rebuild.ps1` does both: `PS2X_RUNNER_EXTRA_LIBS`). Without patch 38 the mode reports itself off.
+- Game side (`pop_native_live.cpp`): opaque static draws (CJMeshElement, CJMeshElementRef, CJIdxMesh of the
+  first lists, plus lightmap passes over natively drawn elements) are recorded and their Display calls
+  skipped (driver switches kept where the chain is not all static). The frame's first Display3DElements puts a
+  marker in the DMA list (VIF FLUSHA + DIRECT, GIF A+D to GS register 0x7F with 'PNWD' + frame number); at
+  the DMA kick the frame's native draws go to the runtime side as **PNF7** (textures by key with pixels once,
+  each batch by a 64-bit key with geometry once: static = conversion serial + batch + vertex variant,
+  instanced = content hash).
+- Runtime side (`pop_native_world.cpp`): a worker thread draws each frame offscreen (640x448, colour + GS Z as
+  Z24/Z32 like the VU1 programs write it; the renderer keeps meshes on the GPU, 512 MB budget, dropped with an
+  epoch bump that also clears the sent set); the hook replaces the marker with two `uploadImageNative`
+  transfers (FRAME PSMCT32 and ZBUF PSMZ24/32, fbw 10). It waits up to 250 ms for the frame's picture; a
+  frame without one draws without its static world (logged).
+- **Offline results.** Mac `tools/native/world_saves.sh` + `world_check.py` over the 49 saves of 19 Oct: the
+  world-only Z is never in front of the full native frame's ("extra" 0.00% on all 49;
+  `game/analysis/play1019/world/world.txt`). PC (`oct19.ps1 -World`, fight save 185602; RTX 5070 Ti):
+  1,760 draws, 46k triangles; GS Z from `pop_world_test` byte-identical to `pop_native_view`'s; worker
+  2.66 ms per frame (read 0.88, upload 0.94, draw + readback 0.84), **~3 ms from submit to the uploads**
+  after the first frame (20 ms: all geometry and textures sent). PNF7 cut the frame from 8.2 MB to 79 KB and
+  the wait from ~9 ms. The play build with the mode compiles and links.
+- **Known risks, to check in the first boot:** (1) the hook runs on the async VIF/VU thread
+  (`asyncvif::submitGif` -> `GS::processGIFPacket`), so it blocks the VU thread for those ~3 ms per frame
+  (with the static world skipped the VU thread was 53% busy in the fight, so it should fit 60 fps; measure);
+  first frames after loading new areas pay the full upload (a hitch of ~20 ms+). (2) The upload overwrites
+  the whole frame and Z: anything the GS drew before the marker in that frame is lost (expected: nothing, the
+  marker is at the first Display3DElements; check the sky, the clear, the letterbox). (3) Pixels with no
+  native draw get colour 0 / Z 0. (4) Nothing was ever run with a real game window; Vulkan and the GS's
+  OpenGL share the GPU for the first time (separate devices, no interop).
+- **First boot (morning, TV on, user present):** on the PC, the fight save with and without the mode,
+  compare fps and pictures:
+  `tools\windows\boot.ps1 -Play -Out game\recomp-sotc -Seconds 60 -Env 'POP_60FPS=1;POP_NATIVE_WORLD=1;PS2X_STATE_LOAD_AT=120:states/play_20261019_185602.state' -Shots 600,1200,2400`
+  then the same without `POP_NATIVE_WORLD=1`. Log lines `[pop:world]` (every 600 frames: frames drawn,
+  missing, batches sent/known, wait times).
