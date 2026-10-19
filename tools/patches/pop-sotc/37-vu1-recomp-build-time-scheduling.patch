@@ -1,4 +1,4 @@
-From 0834ee1cb4f0211c20dea85078a6992b41bf1dfd Mon Sep 17 00:00:00 2001
+From 1c832815d5e50cc5dd035c4d03278e490399dbce Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -15,8 +15,8 @@ The verifier treats ready cycles at or before the unit's cycle as equal (they st
  ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
  ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |    1 +
- ps2xTest/tools/vu1_recomp.cpp           | 1339 ++++++++++++++++++++++-
- 4 files changed, 1352 insertions(+), 14 deletions(-)
+ ps2xTest/tools/vu1_recomp.cpp           | 1343 ++++++++++++++++++++++-
+ 4 files changed, 1356 insertions(+), 14 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
 index 9f2f4d4..cd4c44e 100644
@@ -79,7 +79,7 @@ index cee67a1..c897f92 100644
      GS *gs = nullptr;
      PS2Memory *memory = nullptr;
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..af0e826 100644
+index 8b44b4c..b0b0b16 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
 @@ -26,6 +26,9 @@ namespace
@@ -1378,13 +1378,14 @@ index 8b44b4c..af0e826 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2734,135 @@ namespace
+@@ -1547,17 +2734,139 @@ namespace
                  return false;
          }
  
 +        bool scheduled = false;
 +        if (g_schedEnabled && !g_vu0)
 +        {
++            // (a program with no entry points and no E-bit end gets no scheduled code)
 +            sched::Graph graph;
 +            graph.pairs = &emitter.pairs;
 +            graph.used = used;
@@ -1404,6 +1405,8 @@ index 8b44b4c..af0e826 100644
 +            if (const auto it = g_entries.find(hash); it != g_entries.end())
 +                entryPcs.insert(entryPcs.end(), it->second.begin(), it->second.end());
 +            graph.build(entryPcs);
++            if (graph.nodes.empty())
++                goto unscheduled;
 +            graph.liveness();
 +            g_sched = true;
 +            const sched::Emitted program = sched::emitProgram(graph, hash, stats);
@@ -1439,6 +1442,7 @@ index 8b44b4c..af0e826 100644
 +                return false;
 +            scheduled = true;
 +        }
++    unscheduled:
 +
          std::ostringstream out;
          out << "#include \"ps2_vu1_impl.inl\"\n\n";
@@ -1515,7 +1519,7 @@ index 8b44b4c..af0e826 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +2884,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +2888,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);
