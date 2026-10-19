@@ -23,10 +23,23 @@ In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) versi
 - Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
-## Current status (19 Oct 2026 afternoon; start here)
+## Current status (19 Oct 2026 evening; start here)
 
 The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summarised here).
 
+- **Playtest 19 Oct evening (user, 43 saves `play_20261019_18*/19*`):** fights better but still the worst dips;
+  dips also in the earthquake and when pushing/pulling the bookcase / puzzle block. Audio bugs for later: one
+  combat scene sounded like a track was quiet/missing; Prince-Farah in-engine cutscene dialogue out of sync.
+  First-person X wrong again -> **fixed** (override now reads the view flag via the main-actor table, see
+  `docs/saves_1017.md`; built on the PC 19 Oct evening, not yet confirmed by the user).
+- **Where the time goes (19 Oct evening, scheduled build, save-state boots = no sound):** all-saves sweep
+  (`game\analysis\stateshots`): new saves hold 60 standing still except fights `185602` 46-48, `185837` 47-50.
+  Profiles (`game\analysis\prof`): fights = VU thread ~88% busy (processVIF1Data/VU1 programs), game thread
+  waits 40-45% in sceGsSyncPath for it; game logic itself small (AI_MainCall 6.5%, GRO_Render 9%). Earthquake
+  save holds 60 (game thread 72% busy, VU 69%); scripted push (`POP_INPUT=r1@3:20,lleft@4:4,...`) holds 60
+  (not confirmed the block moved). So: no game-logic bottleneck found; fights are VU1-bound; the earthquake and
+  block dips do not reproduce silently (suspect: sound emulation, which save-state boots lack). Runtime
+  overhead on the game thread (EeScheduler, dispatchGuestBranch, timers) ~15% self in the earthquake save.
 - **Playtest 19 Oct morning (user):** sound, cursor, feel good; death scene dropped to 40 fps (save
   `play_20261019_082854`); the big fight 40-50 fps. Sound slows with the frame rate (user: investigate later).
 - **ELF VU programs (done, in the play build):** every VU image is one of PoP's 10 microprograms in the ELF plus a
