@@ -392,7 +392,7 @@ namespace
                 ++info.stacks[std::vector<uint64_t>(sample.pc, sample.pc + sample.depth)];
             }
             ++cur.rounds;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(4)); // 1 ms cost ~5% fps in a fight (19 Oct)
         }
     }
 
