@@ -176,6 +176,8 @@ def stage_code(ranges, hints):
             same = same_pair(upper, lower)
             if same:
                 notes.append(same)
+            if re.match(r'(B|BAL|JR|JALR|IBEQ|IBNE|IBLTZ|IBGTZ|IBLEZ|IBGEZ)\b', prev_lower or ''):
+                notes.append('delay slot of the branch above: executes before the jump, also when it is taken')
             if lower.startswith('LOI') and upper and re.search(r'\b[A-Z]+A?i\.', upper):
                 notes.append('same pair: the upper reads the I loaded before this LOI')
             out.append(line.rstrip() + ('   [' + '; '.join(notes) + ']' if notes else ''))
@@ -245,12 +247,18 @@ def spec(name):
     if any(e in (0x830, 0x14e8, 0x1528, 0x1b28) for e in st['exits']):
         exit_notes = ('0x830, 0x14e8, 0x1528 and 0x1b28 are calls into the polygon clipper (BAL): the recorded scenes never '
                       'reach them; if your code does, stop there (after the BAL and its delay slot).')
+    slots = [e for e in st['exits'] if any(lo <= e - 8 <= hi for lo, hi in st['ranges']) and
+             re.search(r'\b(B|BAL|IBEQ|IBNE|IBLTZ|IBGTZ|IBLEZ|IBGEZ) ', disasm(open(IMAGE, 'rb').read()[e - 8:e], e - 8)[0][41:])]
+    for e in slots:
+        exit_notes += (' Exit 0x%x is also the delay slot of the branch at 0x%x: if that branch is taken, execute 0x%x and '
+                       'then continue at the target; if it is not taken, stop before 0x%x (vu.pc = 0x%x; the next stage '
+                       'executes it).' % (e, e - 8, e, e, e))
     if 0xffffffff in st['exits']:
         exit_notes = 'The stage ends with the program end (the pair marked E and its delay slot): set vu.pc = 0xffffffff.'
     return TASK.format(
         cases=n, header=open(os.path.join(HERE, 'vu_task.h')).read(), primer=PRIMER, name=name, entry=st['entry'],
         exits=', '.join('0x%x' % e if e != 0xffffffff else 'the program end' for e in st['exits']), exit_notes=exit_notes,
-        code=stage_code(st['ranges'], hints),
+        code=stage_code([(lo, hi + 8 if hi + 8 in slots else hi) for lo, hi in st['ranges']], hints),
         example_code=stage_code(ex['ranges'], os.path.join(WORK, 'setup.hints')),
         example_cpp=open(os.path.join(HERE, 'known_good', 'p6_setup.cpp')).read())
 
