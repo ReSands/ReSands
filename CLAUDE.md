@@ -46,7 +46,7 @@ The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summa
   vblank, `processDueDeadlines`) 31-53%, waiting on VU1/GS 8-16%; game code small (GRO_Render 6-9%, AI ~5%);
   sound emulation (IOP `runEeCycles`) 4-5%; VU thread 27-50%. So the dips are short spikes the 12 s average
   hides, and the 1-s fps samples of 30.0 in the 18:45 log suggest vsync quantisation (a frame just over 16.7 ms
-  waits for the next vblank). No game-logic hot spot found. **Decision: back to the native renderer** (user
+  waits for the next vblank). No game-logic hot spot found. **Recommended: back to the native renderer** (user
   leaning that way; it removes the VU1/GS work that dominates fights). To pin spikes later: per-second slices in
   the rolling profile instead of one merged window.
 - **Playtest 19 Oct morning (user):** sound, cursor, feel good; death scene dropped to 40 fps (save
