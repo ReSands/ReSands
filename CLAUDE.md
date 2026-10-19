@@ -51,15 +51,22 @@ Older status blocks: `docs/history.md` (last one: "19 Oct 2026 evening"). Tonigh
   courtyard pool 091049 (240 P6 runs) and healing pool 091734 (360), with all other programs and the code
   images. Record format: `ps2_vu1_core.cpp` traceVu1Run ('V1TR', maxCycles, image hash, tick, TraceState as the
   MSVC build lays it out, then VU data deltas against the previous record); `traceRestore` exists in the runtime.
-- **Overnight plan (no game boots: the TV is off):** (1) a Mac trace replayer = the judge for VU1 ports: build
-  `ps2_vu1_core.cpp` x86_64 like `tools/vu1sched/check.sh`, read the records (check the MSVC TraceState layout
-  against clang's; sanity: P1 runs replayed give GIF packets whose positions the native converter knows), restore,
-  run the interpreter with a packet sink, write each run's GIF output; (2) stage the P6 port for Qwen (split along
-  its loops, `tools/vu1sched/loops.py`; a VU variant of `tools/llm_port/generic/` whose reference is the replay
-  output; test the runner end to end with a known-good answer first, e.g. the vu1_recomp code of one stage) and
-  start the queue (`tools/qwen-queue.command`-style; model on the PC via llama-serve, judge on the Mac, Mac must
-  stay awake); (3) design note for renderer step 1 (in-process Vulkan presentation; recommend porting the
-  presenter to Vulkan rather than GL interop; how the GS draws the non-native rest on top).
+- **Overnight plan, 19-20 Oct (user: fill the night; no game boots, the TV is off):**
+  1. **Main work: renderer step 1, native static world in the game window** (`docs/native_renderer.md` "Plan
+     of attack"). In-process Vulkan drawing in the pop-sotc runtime (port the presenter to Vulkan rather than GL
+     interop; reuse `tools/native/` renderer + the live capture in `pop_native_live.cpp`), the static draw
+     paths stop building DMA (as `POP_NATIVE_SKIP=static`, keeping the VU1 driver switches), the emulated GS
+     draws the rest on top; behind a switch so the current build stays the default until tested. Validate
+     offline all night: shared drawing code through `pop_state_frame` + `tools/native/score_saves.sh` (scores
+     must not get worse), compile on the PC (builds need no display; `rebuild.ps1 -Fast -Play`, or the full
+     pipeline if runtime headers change). **First boot test in the morning with the user (TV on).**
+  2. **Background: water port for Qwen.** Mac trace replayer = the judge (build `ps2_vu1_core.cpp` x86_64 like
+     `tools/vu1sched/check.sh`; check the MSVC TraceState layout against clang's; restore with `traceRestore`,
+     run the interpreter with a packet sink, write each run's GIF output), stage P6 along its loops
+     (`tools/vu1sched/loops.py`), a VU variant of `tools/llm_port/generic/` (test the runner end to end with a
+     known-good answer first, e.g. vu1_recomp's code for one stage), start the queue (model on the PC via
+     llama-serve, judge on the Mac under caffeinate). Set it up early so it runs while step 1 is worked on.
+  Leave for the user: PC on, TV off, Mac awake.
 - **Rules from the user (19 Oct):** the PC's TV is off unless the user is playing: ask before any job that boots
   the game (`nvidia-smi --query-gpu=display_active` must be Enabled, else boots run at ~4 fps; `oct19.ps1 -Native`
   refuses). Survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); general
