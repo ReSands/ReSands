@@ -24,9 +24,15 @@ FetchContent_MakeAvailable(volk)
 FetchContent_MakeAvailable(cgltf stb)
 target_link_libraries(volk PUBLIC Vulkan::Headers)
 
-add_library(pop_native STATIC src/native_renderer.cpp src/frame_loader.cpp src/meshdecode.cpp src/assets.cpp)
+# pop_native_render: the renderer and the PNF frame loader only (no asset decoding), the part the game
+# runtime links for the in-game native world (tools/overrides/pop_native_world.cpp, with volk;
+# tools/windows/rebuild.ps1 passes both libraries as PS2X_RUNNER_EXTRA_LIBS)
+add_library(pop_native_render STATIC src/native_renderer.cpp src/frame_loader.cpp)
+target_include_directories(pop_native_render PUBLIC src)
+target_link_libraries(pop_native_render PUBLIC volk Vulkan::Headers)
+add_library(pop_native STATIC src/meshdecode.cpp src/assets.cpp)
 target_include_directories(pop_native PUBLIC src)
-target_link_libraries(pop_native PUBLIC volk Vulkan::Headers)
+target_link_libraries(pop_native PUBLIC pop_native_render)
 
 # SDL3 for the window: an installed package if present (Homebrew), otherwise built from source
 find_package(SDL3 3.4 CONFIG QUIET)
@@ -74,5 +80,22 @@ if(POP_RUNTIME_SRC)
     FetchContent_MakeAvailable(sse2neon)
     target_include_directories(pop_state_frame PRIVATE ${sse2neon_SOURCE_DIR})
     target_compile_definitions(pop_state_frame PRIVATE USE_SSE2NEON)
+  endif()
+endif()
+
+# pop_world_test: the runtime side of POP_NATIVE_WORLD (tools/overrides/pop_native_world.cpp) with a stand-in
+# GS: a --world frame of pop_state_frame through the worker and the GS hook. Needs a runtime with the GS
+# host-inject hook (runtime patch 38): -DPOP_SOTC_SRC=<PS2Recomp-sotc checkout>; the runner directory of
+# POP_RUNTIME_SRC resolves the override's "../../../../../../tools/native" includes.
+set(POP_SOTC_SRC "" CACHE PATH "PS2Recomp-sotc source (with patch 38) for pop_world_test")
+if(POP_SOTC_SRC AND POP_RUNTIME_SRC)
+  add_executable(pop_world_test src/world_test.cpp)
+  set_target_properties(pop_world_test PROPERTIES CXX_STANDARD 20)
+  target_include_directories(pop_world_test PRIVATE src ${POP_SOTC_SRC}/ps2xRuntime/include ${POP_SOTC_SRC}/ps2xRuntime/src/lib/Kernel
+                             ${POP_SOTC_SRC}/ps2xIOP/include ${POP_RUNTIME_SRC}/ps2xRuntime/src/runner)
+  target_link_libraries(pop_world_test PRIVATE pop_native_render)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64|ARM64")
+    target_include_directories(pop_world_test PRIVATE ${sse2neon_SOURCE_DIR})
+    target_compile_definitions(pop_world_test PRIVATE USE_SSE2NEON)
   endif()
 endif()

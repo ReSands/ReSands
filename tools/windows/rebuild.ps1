@@ -212,6 +212,23 @@ Stage 'Sync game overrides'
 # Overrides must be in the executable's sources, not the runtime library (upstream #264).
 & $Python -I "$Root\tools\sync_generated.py" "$Root\tools\overrides" "$RT\ps2xRuntime\src\runner" '*.cpp'
 
+# The in-game native world (tools/overrides/pop_native_world.cpp; needs runtime patch 38, the GS
+# host-inject hook) links the native renderer library and volk from game\native-build.
+$nativeLibs = ''
+if (Test-Path "$RT\ps2xRuntime\include\runtime\gs\gs_host_inject.h") {
+    Stage 'Native renderer library'
+    $NB = "$Root\game\native-build"
+    if (-not (Test-Path "$NB\build.ninja")) {
+        if (Invoke-Logged "$R\native_configure.log" cmake @('-S', "$Root\tools\native", '-B', $NB, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release')) {
+            'NATIVE CONFIGURE FAILED'; Get-Content "$R\native_configure.log" -Tail 20; exit 1
+        }
+    }
+    if (Invoke-Logged "$R\native_build.log" cmake @('--build', $NB, '--target', 'pop_native_render', 'volk')) {
+        'NATIVE BUILD FAILED'; Select-String -Path "$R\native_build.log" -Pattern 'error' | Select-Object -First 10; exit 1
+    }
+    $nativeLibs = "$NB\pop_native_render.lib;$NB\_deps\volk-build\volk.lib"
+}
+
 $buildDir = "$RT\build-win"
 if ($Play) {
     $buildDir = if ($Release) { "$RT\build-win-play-rel" } else { "$RT\build-win-play" }
@@ -245,6 +262,14 @@ if ($Vu1) {
     Get-Content "$R\vu1_recomp.log" -Tail 3
     "images: $((Get-ChildItem "$Vu1\vu1_*.bin").Count), generated files: $((Get-ChildItem "$RT\ps2xRuntime\src\vu1_generated\*.cpp").Count)"
     if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF')) { 'VU1 RECONFIGURE FAILED'; exit 1 }
+}
+# PS2X_RUNNER_EXTRA_LIBS (patch 38) in the build's cache; linked privately, so no recompile
+if ($nativeLibs -and (Test-Path "$buildDir\CMakeCache.txt") -and
+    -not (Select-String -Path "$buildDir\CMakeCache.txt" -SimpleMatch -Pattern "PS2X_RUNNER_EXTRA_LIBS:STRING=$nativeLibs" -Quiet)) {
+    Stage 'Link the native renderer'
+    if (Invoke-Logged "$R\runtime_configure_native.log" cmake @('-S', $RT, '-B', $buildDir, "-DPS2X_RUNNER_EXTRA_LIBS=$nativeLibs")) {
+        'NATIVE LINK CONFIGURE FAILED'; Get-Content "$R\runtime_configure_native.log" -Tail 20; exit 1
+    }
 }
 Stage "Build runtime ($(Split-Path $buildDir -Leaf))"
 if (Invoke-Logged "$R\runtime_build.log" cmake @('--build', $buildDir) -TimeoutMinutes 90) { 'BUILD FAILED'; Select-String -Path "$R\runtime_build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
