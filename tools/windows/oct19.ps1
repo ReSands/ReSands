@@ -22,7 +22,7 @@
 # water program P6 (game\analysis\vu1trace\<save>.trace + the vu1_<hash>.bin images): inputs for the port.
 # Run through start-job.ps1 (the window needs the desktop session).
 param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments, [switch]$Sched,
-      [switch]$Native)
+      [switch]$Native, [switch]$TracesOnly)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 $Rt = 'C:\tools\PS2Recomp-sotc'
@@ -36,10 +36,11 @@ if ($Native) {
         if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
     }
     $prize = "$Root\game\analysis\native\prize"
+    if ($TracesOnly) { $groupsToRun = @() } else { $groupsToRun = @('none', 'static', 'skinned', 'lightmap', 'gfx', 'all') }
     New-Item -ItemType Directory -Force $prize | Out-Null
     $states = @('play_20261019_185602', 'play_20261019_185837', 'play_20261019_082854', 'play_20261017_093051',
                 'play_20261018_202311', 'play_20261017_093011', 'play_20261018_202222', 'play_20261018_214002')
-    foreach ($group in @('none', 'static', 'skinned', 'lightmap', 'gfx', 'all')) {
+    foreach ($group in $groupsToRun) {
         "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fps, skipping: $group"
         $out = "$prize\fps_$group.txt"
         Remove-Item $out -ErrorAction SilentlyContinue
@@ -56,7 +57,7 @@ if ($Native) {
         }
     }
     $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"
-    foreach ($group in @('none', 'all')) {
+    foreach ($group in $(if ($TracesOnly) { @() } else { @('none', 'all') })) {
         "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') profile of the fight, skipping: $group"
         $prof = "$Root\game\analysis\prof\prize_$group.txt"
         Remove-Item $prof -ErrorAction SilentlyContinue
@@ -68,12 +69,13 @@ if ($Native) {
             Get-Content "$Root\game\analysis\prof\prize_$group.report.txt" -TotalCount 30
         } else { "no profile written" }
     }
-    # VU1 traces: the trace's field counter counts from boot (not from the save: a window at the save's
-    # field + 400 recorded nothing, 19 Oct); fields 600-605 = ~6 frames, 8 s after the load
+    # VU1 traces: the trace counts GS fields, which a save load restores to the save's own field (popstate.py
+    # prints it as 'tick') and which advance only with presented frames; save field + 400 = ~7 s after the
+    # load at 60 fps (a window counted from boot has passed by then: empty traces, 19 Oct)
     $trace = "$Root\game\analysis\vu1trace"
     New-Item -ItemType Directory -Force $trace | Out-Null
-    foreach ($s in @(@{ State = 'play_20261017_091049' }, @{ State = 'play_20261017_091734' })) {
-        foreach ($first in @(600)) {
+    foreach ($s in @(@{ State = 'play_20261017_091049'; Tick = 15746 }, @{ State = 'play_20261017_091734'; Tick = 37719 })) {
+        foreach ($first in @(($s.Tick + 400))) {
             "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') VU1 trace of $($s.State) from field $first"
             $file = "$trace\$($s.State).trace"
             Remove-Item $file -ErrorAction SilentlyContinue
