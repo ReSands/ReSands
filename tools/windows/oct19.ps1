@@ -12,8 +12,10 @@
 # runtime patch 36 (VU1R_EXPERIMENT=noflags / nostall / both: NOT exact, never for play), measures the slowest
 # saves with each (game\analysis\stateshots\fps_exp_<variant>.txt, 'exact' = the normal build), then rebuilds
 # the exact play build.
+# -Sched: build-time scheduled VU1 programs (runtime patch 37, VU1R_SCHED=1): verify boots, then fps of the
+# slowest saves with the scheduled code on and off in the same build (PS2X_VU1_SCHED=0), fps_sched_<on|off>.txt.
 # Run through start-job.ps1 (the window needs the desktop session).
-param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments)
+param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments, [switch]$Sched)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 $Rt = 'C:\tools\PS2Recomp-sotc'
@@ -22,10 +24,15 @@ if (-not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'vu1_recomp:
     git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\35-vu1-recomp-padding-to-interpreter.patch"
     if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH 35 FAILED"; exit 1 }
 }
-if ($Experiments -and -not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'measurement-only switches')) {
+if (($Experiments -or $Sched) -and -not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'measurement-only switches')) {
     "== applying runtime patch 36"
     git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\36-vu1-recomp-measurement-switches.patch"
     if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH 36 FAILED"; exit 1 }
+}
+if ($Sched -and -not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'build-time scheduled VU1 programs')) {
+    "== applying runtime patch 37"
+    git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\37-vu1-recomp-build-time-scheduling.patch"
+    if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH 37 FAILED"; exit 1 }
 }
 git -C "$Root\game\recomp-sotc\runtime-src" checkout -q --detach (git -C $Rt rev-parse HEAD)
 
@@ -36,6 +43,46 @@ python -I "$Root\tools\vu1progs.py" "$Root\game\ps2\disc\SLUS_207.43" $progs --c
     Where-Object { $_ -notlike '*MPG-like word*' }
 if ($LASTEXITCODE -ne 0) { "VU PROGRAMS FAILED"; exit 1 }
 "$((Get-ChildItem "$progs\vu1_*.bin").Count) VU1 and $((Get-ChildItem "$progs\vu0_*.bin").Count) VU0 images"
+
+if ($Sched) {
+    $slow = @('play_20261017_093051', 'play_20261018_202311', 'play_20261017_093011', 'play_20261018_202222', 'play_20261018_214002',
+              'play_20261017_093100', 'play_20261018_213954', 'play_20261017_092959', 'play_20261019_082854')
+    if (-not $NoBuild) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') rebuild with the scheduled programs"
+        $env:VU1R_SCHED = '1'
+        & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc $Rt -Out game\recomp-sotc -Vu1 $progs
+        $code = $LASTEXITCODE
+        Remove-Item Env:VU1R_SCHED -ErrorAction SilentlyContinue
+        if ($code -ne 0) { "BUILD FAILED ($code)"; exit 1 }
+        Select-String -Path "$Root\game\recomp-sotc\vu1_recomp.log" -Pattern 'sched' | ForEach-Object Line
+    }
+    "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') verify: scheduled VU1 runs against the interpreter"
+    foreach ($st in @('play_20261019_082854', 'play_20261017_093051', 'gameplay1')) {
+        & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 25 -Name "vuverify" `
+            -Env "PS2X_STATE_LOAD_AT=120:states/$st.state;POP_60FPS=1;PS2X_VU1_VERIFY=1;PS2X_VU0_VERIFY=1" | Out-Null
+        $v = Select-String -Path "$Root\game\recomp-sotc\vuverify.log" -Pattern '\[vu[01]-verify\]' | ForEach-Object Line
+        "$st : $(@($v | Where-Object { $_ -like '*mismatch #*' }).Count) mismatch lines; last lines:"
+        $v | Select-Object -Last 2
+        $v | Where-Object { $_ -like '*mismatch #*' } | Select-Object -First 12
+    }
+    if ($NoMeasure) { "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done (no measuring)"; exit 0 }
+    foreach ($mode in @('on', 'off')) {
+        $out = "$Root\game\analysis\stateshots\fps_sched_$mode.txt"
+        Remove-Item $out -ErrorAction SilentlyContinue
+        $flag = $(if ($mode -eq 'off') { ';PS2X_VU1_SCHED=0' } else { '' })
+        foreach ($st in $slow) {
+            & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 30 -Name "fpssched" `
+                -Env "PS2X_STATE_LOAD_AT=120:states/$st.state;POP_60FPS=1$flag" | Out-Null
+            $fps = (Select-String -Path "$Root\game\recomp-sotc\fpssched.log" -Pattern '\[pop:fps\] ([\d.]+)' |
+                    ForEach-Object { $_.Matches[0].Groups[1].Value }) -join ' '
+            $line = "$mode $st fps $fps"
+            $line
+            Add-Content -Path $out -Value $line
+        }
+    }
+    "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done (scheduled build in place)"
+    exit 0
+}
 
 if ($Experiments) {
     $slow = @('play_20261017_093051', 'play_20261018_202311', 'play_20261017_093011', 'play_20261018_202222', 'play_20261018_214002',
