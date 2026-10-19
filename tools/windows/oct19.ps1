@@ -28,6 +28,8 @@ Set-Location $Root
 $Rt = 'C:\tools\PS2Recomp-sotc'
 
 if ($Native) {
+    # boots need an active display: with the TV off, OpenGL Present stalls every boot to ~4 fps (19 Oct)
+    if ((nvidia-smi --query-gpu=display_active --format=csv,noheader) -notmatch 'Enabled') { "NO ACTIVE DISPLAY (switch the TV on): FAILED"; exit 1 }
     if (-not $NoBuild) {
         "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fast play build (override: POP_NATIVE_SKIP)"
         & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc $Rt -Out game\recomp-sotc
@@ -66,17 +68,17 @@ if ($Native) {
             Get-Content "$Root\game\analysis\prof\prize_$group.report.txt" -TotalCount 30
         } else { "no profile written" }
     }
-    # VU1 traces: the save's own field counter continues after the load (field 120 of the boot), so the
-    # window starts ~6.5 s after it; if nothing was recorded, retry counted from boot (field 600)
+    # VU1 traces: the trace's field counter counts from boot (not from the save: a window at the save's
+    # field + 400 recorded nothing, 19 Oct); fields 600-605 = ~6 frames, 8 s after the load
     $trace = "$Root\game\analysis\vu1trace"
     New-Item -ItemType Directory -Force $trace | Out-Null
-    foreach ($s in @(@{ State = 'play_20261017_091049'; Tick = 15746 }, @{ State = 'play_20261017_091734'; Tick = 37719 })) {
-        foreach ($first in @(($s.Tick + 400), 600)) {
+    foreach ($s in @(@{ State = 'play_20261017_091049' }, @{ State = 'play_20261017_091734' })) {
+        foreach ($first in @(600)) {
             "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') VU1 trace of $($s.State) from field $first"
             $file = "$trace\$($s.State).trace"
             Remove-Item $file -ErrorAction SilentlyContinue
             & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 30 -Name "vu1trace" `
-                -Env "PS2X_STATE_LOAD_AT=120:states/$($s.State).state;POP_60FPS=1;PS2X_VU1_TRACE=$($file):$($first):2" | Out-Null
+                -Env "PS2X_STATE_LOAD_AT=120:states/$($s.State).state;POP_60FPS=1;PS2X_VU1_TRACE=$($file):$($first):6" | Out-Null
             Select-String -Path "$Root\game\recomp-sotc\vu1trace.log" -Pattern '\[vu1-trace\]' | ForEach-Object Line
             $size = $(if (Test-Path $file) { (Get-Item $file).Length } else { 0 })
             "$($s.State).trace: $size bytes"
