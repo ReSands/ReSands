@@ -114,3 +114,11 @@ keeps only what carries over to other projects.
 - **A hook that skips a game function skips all of its side effects** (19 Oct): `CJMeshElement::Display` and
   `CJMeshElementRef::Display` also switch the VU1 driver (MPG upload) before skinned draws; skipping them for a
   measurement left the wrong program loaded and every save fell to ~7 fps. Decompile before skipping.
+
+## start-job.ps1 arguments over plain SSH (19 Oct 2026)
+
+`ssh pc "... start-job.ps1 -Script x.ps1 -Arguments '-World'"` goes through cmd.exe, which keeps the single
+quotes: the wrapper then runs `& x.ps1 '-World'`, a quoted string that PowerShell binds to the first
+positional string parameter (oct19.ps1's `$Pattern`), so the script's default mode ran, twice. Start jobs
+from PowerShell (`powershell -EncodedCommand`, as tools/overnight-pc.command does). Scripts whose default
+mode boots the game check for an active display first, so a mistake like this cannot reach a boot.

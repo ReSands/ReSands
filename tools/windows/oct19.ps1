@@ -66,9 +66,10 @@ if ($World) {
     exit 0
 }
 
+# every other mode boots the game: with the TV off, OpenGL Present stalls every boot to ~4 fps (19 Oct)
+if ((nvidia-smi --query-gpu=display_active --format=csv,noheader) -notmatch 'Enabled') { "NO ACTIVE DISPLAY (switch the TV on): FAILED"; exit 1 }
+
 if ($Native) {
-    # boots need an active display: with the TV off, OpenGL Present stalls every boot to ~4 fps (19 Oct)
-    if ((nvidia-smi --query-gpu=display_active --format=csv,noheader) -notmatch 'Enabled') { "NO ACTIVE DISPLAY (switch the TV on): FAILED"; exit 1 }
     if (-not $NoBuild) {
         "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fast play build (override: POP_NATIVE_SKIP)"
         & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc $Rt -Out game\recomp-sotc
