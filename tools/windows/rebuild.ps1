@@ -263,11 +263,15 @@ if ($Vu1) {
     "images: $((Get-ChildItem "$Vu1\vu1_*.bin").Count), generated files: $((Get-ChildItem "$RT\ps2xRuntime\src\vu1_generated\*.cpp").Count)"
     if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF')) { 'VU1 RECONFIGURE FAILED'; exit 1 }
 }
-# PS2X_RUNNER_EXTRA_LIBS (patch 38) in the build's cache; linked privately, so no recompile
-if ($nativeLibs -and (Test-Path "$buildDir\CMakeCache.txt") -and
-    -not (Select-String -Path "$buildDir\CMakeCache.txt" -SimpleMatch -Pattern "PS2X_RUNNER_EXTRA_LIBS:STRING=$nativeLibs" -Quiet)) {
+# PS2X_RUNNER_EXTRA_LIBS (patch 38) in the build's cache; linked privately, so no recompile. Also
+# switches PS2X_BUILD_TEST back off if an interrupted -Vu1 step left it on (19 Oct: ps2xTest then fails
+# to build, no elfio).
+$cache = "$buildDir\CMakeCache.txt"
+$testLeftOn = (Test-Path $cache) -and (Select-String -Path $cache -SimpleMatch -Pattern 'PS2X_BUILD_TEST:BOOL=ON' -Quiet)
+if ((Test-Path $cache) -and ($testLeftOn -or ($nativeLibs -and
+        -not (Select-String -Path $cache -SimpleMatch -Pattern "PS2X_RUNNER_EXTRA_LIBS:STRING=$nativeLibs" -Quiet)))) {
     Stage 'Link the native renderer'
-    if (Invoke-Logged "$R\runtime_configure_native.log" cmake @('-S', $RT, '-B', $buildDir, "-DPS2X_RUNNER_EXTRA_LIBS=$nativeLibs")) {
+    if (Invoke-Logged "$R\runtime_configure_native.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF', "-DPS2X_RUNNER_EXTRA_LIBS=$nativeLibs")) {
         'NATIVE LINK CONFIGURE FAILED'; Get-Content "$R\runtime_configure_native.log" -Tail 20; exit 1
     }
 }
