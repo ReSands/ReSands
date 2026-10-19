@@ -1,0 +1,1270 @@
+From 925d93f3133fb1cf13380dd6e24d1ad0953d7351 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 19 Oct 2026 09:19:15 +0100
+Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
+
+Every MSCAL starts with an empty pipeline and an MSCNT follows a drained program end, so from such an
+entry the runtime's scheduler is fully determined by the code. vu1_recomp now runs it at build time over
+(pc, pipeline state) nodes, as catsandsoup's Road Trip Adventure VU1 recompiler does (GPL-3.0): stalls,
+flag commits and cycle counts become constants, MAC/status flags nothing reads are not computed, an
+XGKICK's data-dependent wait becomes a switch over the possible pipeline states. Unsupported pairs,
+unknown JR targets and the budget stop hand over to the per-pair code with the exact pipeline state.
+Entry points come from <capture dir>/entries.txt. PS2X_VU1_SCHED=0 turns it off at run time.
+The verifier treats ready cycles at or before the unit's cycle as equal (they stall nothing).
+---
+ ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
+ ps2xTest/tools/vu1_recomp.cpp           | 1105 ++++++++++++++++++++++-
+ 2 files changed, 1109 insertions(+), 14 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+index d557322..401f2fd 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
+@@ -1277,8 +1277,22 @@ bool VU1InterpreterAccess::runVerifiedWith(VU1Interpreter &vu, uint8_t *vuCode,
+         note("ended");
+     if (!realEnded && vu.m_cycle != shadow->m_cycle)
+         note("cycle " + std::to_string(vu.m_cycle - startCycle) + "/" + std::to_string(shadow->m_cycle - startCycle));
+-    if (!sameBits(vu.m_vfReady, shadow->m_vfReady) || !sameBits(vu.m_viReady, shadow->m_viReady) ||
+-        !sameBits(vu.m_accReady, shadow->m_accReady))
++    // a ready cycle at or before the unit's cycle stalls nothing, whatever its value (the build-time
++    // scheduled programs only write the ready cycles that are still in the future)
++    const auto readyKey = [](const VU1Interpreter &unit)
++    {
++        std::vector<uint64_t> key;
++        const auto add = [&](uint64_t ready) { key.push_back(ready > unit.m_cycle ? ready - unit.m_cycle : 0u); };
++        for (const auto &lanes : unit.m_vfReady)
++            for (const uint64_t ready : lanes)
++                add(ready);
++        for (const uint64_t ready : unit.m_viReady)
++            add(ready);
++        for (const uint64_t ready : unit.m_accReady)
++            add(ready);
++        return key;
++    };
++    if (readyKey(vu) != readyKey(*shadow))
+         note("ready");
+     if (vu.m_efuResourceReady != shadow->m_efuResourceReady)
+         note("efuReady");
+diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
+index 8b44b4c..27da878 100644
+--- a/ps2xTest/tools/vu1_recomp.cpp
++++ b/ps2xTest/tools/vu1_recomp.cpp
+@@ -26,6 +26,9 @@ namespace
+     // FMAC flag pipeline and the stall bookkeeping cost, to decide what build-time scheduling must remove first.
+     bool g_expNoFlags = false;
+     bool g_expNoStall = false;
++    // emission for the build-time scheduled program (see "Build-time scheduled programs" below)
++    bool g_sched = false;
++    std::map<uint64_t, std::vector<uint32_t>> g_entries;
+     constexpr uint32_t kDefaultBlockPairs = 128u;
+     constexpr uint32_t kMaxVfLatency = 4u;
+     constexpr uint32_t kMaxViLatency = 4u;
+@@ -161,6 +164,8 @@ namespace
+         if (reg == 0u)
+             return "kVf0()";
+         noteVf(reg, false);
++        if (g_sched)
++            return "vr" + num(reg);
+         if (gView.vfRawStored.count(reg))
+             return "_mm_loadu_ps(" + vfMem(reg) + ")";
+         return (gView.vfClean.count(reg) ? "vn" : "vr") + num(reg);
+@@ -207,6 +212,9 @@ namespace
+         const std::string r = "vr" + num(reg);
+         const std::string n = "vn" + num(reg);
+         const bool full = dest == hx(0xFu);
++        if (g_sched)
++            return full ? r + " = " + raw + "; " + n + " = " + norm + ";"
++                        : r + " = blendDest(" + r + ", " + raw + ", " + dest + "); " + n + " = blendDest(" + n + ", " + norm + ", " + dest + ");";
+         const bool clean = gView.vfClean.count(reg) != 0u;
+         const bool stored = gView.vfRawStored.count(reg) != 0u;
+         if (raw == norm && (full || clean))
+@@ -233,6 +241,8 @@ namespace
+         if (reg == 0u)
+             return "";
+         noteVf(reg, true);
++        if (g_sched)
++            return "vr" + num(reg) + " = " + raw + "; vn" + num(reg) + " = " + norm + ";";
+         if (raw == norm)
+         {
+             gView.vfClean.insert(reg);
+@@ -470,6 +480,11 @@ namespace
+         const uint32_t imm12 = (((lower >> 21) & 1u) << 11) | (lower & 0x7FFu);
+         const uint32_t imm24 = lower & 0xFFFFFFu;
+         const std::string status = "(vu.m_state.status & 0xFFFu)";
++        // scheduled code keeps the committed MAC and clip flags in locals and commits them at build-time points
++        const std::string clipC = g_sched ? "" : "commitClip(vu, ctx, cyc); ";
++        const std::string clipV = g_sched ? "clip" : "vu.m_state.clip";
++        const std::string macC = g_sched ? "" : "commitStatus(vu, ctx, cyc); ";
++        const std::string macV = g_sched ? "mac" : "vu.m_state.mac";
+ 
+         switch (opHi)
+         {
+@@ -495,16 +510,16 @@ namespace
+             return e;
+         }
+         case 0x10:
+-            e.code = "commitClip(vu, ctx, cyc); " + viW(1) + " = (vu.m_state.clip & 0xFFFFFFu) == " + hx(imm24) + " ? 1 : 0;";
++            e.code = clipC + viW(1) + " = (" + clipV + " & 0xFFFFFFu) == " + hx(imm24) + " ? 1 : 0;";
+             return e;
+         case 0x11:
+             e.code = "queueFcsetAt(vu, ctx, cyc, " + hx(imm24) + ");";
+             return e;
+         case 0x12:
+-            e.code = "commitClip(vu, ctx, cyc); " + viW(1) + " = (vu.m_state.clip & " + hx(imm24) + ") != 0u ? 1 : 0;";
++            e.code = clipC + viW(1) + " = (" + clipV + " & " + hx(imm24) + ") != 0u ? 1 : 0;";
+             return e;
+         case 0x13:
+-            e.code = "commitClip(vu, ctx, cyc); " + viW(1) + " = (vu.m_state.clip | " + hx(imm24) + ") == 0xFFFFFFu ? 1 : 0;";
++            e.code = clipC + viW(1) + " = (" + clipV + " | " + hx(imm24) + ") == 0xFFFFFFu ? 1 : 0;";
+             return e;
+         case 0x14:
+             if (it != 0u)
+@@ -529,21 +544,21 @@ namespace
+             return e;
+         case 0x18:
+             if (it != 0u)
+-                e.code = "commitStatus(vu, ctx, cyc); " + viW(it) + " = (vu.m_state.mac & 0xFFFFu) == static_cast<uint32_t>(static_cast<uint16_t>(" + vi(is) + ")) ? 1 : 0;";
++                e.code = macC + viW(it) + " = (" + macV + " & 0xFFFFu) == static_cast<uint32_t>(static_cast<uint16_t>(" + vi(is) + ")) ? 1 : 0;";
+             return e;
+         case 0x1A:
+         case 0x1B:
+             if (it != 0u)
+             {
+-                e.code = "commitStatus(vu, ctx, cyc); ";
+-                viSet(it, std::string("vu.m_state.mac ") + (opHi == 0x1Au ? "&" : "|") + " static_cast<uint32_t>(static_cast<uint16_t>(" + vi(is) + "))");
++                e.code = macC;
++                viSet(it, macV + (opHi == 0x1Au ? " &" : " |") + " static_cast<uint32_t>(static_cast<uint16_t>(" + vi(is) + "))");
+             }
+             return e;
+         case 0x1C:
+             if (it != 0u)
+             {
+-                e.code = "commitClip(vu, ctx, cyc); ";
+-                viSet(it, "vu.m_state.clip & 0x0FFFu");
++                e.code = clipC;
++                viSet(it, clipV + " & 0x0FFFu");
+             }
+             return e;
+         case 0x20:
+@@ -649,16 +664,54 @@ namespace
+             storeVf(fs, qa() + vi(it) + ", 0)");
+             return e;
+         case 0x38:
+-            e.code = "divOp(vu, ctx, cyc, " + laneFloat(fs, fsf) + ", " + laneFloat(ft, ftf) + ");";
++            if (g_sched)
++                e.code = "{ const float n = vu.normalizeOperand(" + laneFloat(fs, fsf) + "); const float d = vu.normalizeOperand(" + laneFloat(ft, ftf) +
++                         "); uint32_t di = 0u; float r = 0.0f; if (d == 0.0f) { di = n == 0.0f ? 0x10u : 0x20u; r = std::signbit(n) != std::signbit(d) ? "
++                         "-std::numeric_limits<float>::max() : std::numeric_limits<float>::max(); } else r = n / d; uint32_t ig = 0u; r = vu.normalizeResult(r, ig); "
++                         "qpend = vu.normalizeResult(r, ig); qdi = di; }";
++            else
++                e.code = "divOp(vu, ctx, cyc, " + laneFloat(fs, fsf) + ", " + laneFloat(ft, ftf) + ");";
+             return e;
+         case 0x39:
+-            e.code = "sqrtOp(vu, ctx, cyc, " + laneFloat(ft, ftf) + ");";
++            if (g_sched)
++                e.code = "{ const float v = vu.normalizeOperand(" + laneFloat(ft, ftf) + "); uint32_t ig = 0u; qpend = vu.normalizeResult(std::sqrt(std::fabs(v)), ig); "
++                         "qdi = v < 0.0f ? 0x10u : 0u; }";
++            else
++                e.code = "sqrtOp(vu, ctx, cyc, " + laneFloat(ft, ftf) + ");";
+             return e;
+         case 0x3A:
+-            e.code = "rsqrtOp(vu, ctx, cyc, " + laneFloat(fs, fsf) + ", " + laneFloat(ft, ftf) + ");";
++            if (g_sched)
++                e.code = "{ const float n = vu.normalizeOperand(" + laneFloat(fs, fsf) + "); const float rad = vu.normalizeOperand(" + laneFloat(ft, ftf) +
++                         "); const float d = std::sqrt(std::fabs(rad)); uint32_t di = rad < 0.0f ? 0x10u : 0u; float r = 0.0f; if (d != 0.0f) r = n / d; "
++                         "else { di = n == 0.0f ? 0x10u : 0x20u; r = std::signbit(n) ? -std::numeric_limits<float>::max() : std::numeric_limits<float>::max(); } "
++                         "uint32_t ig = 0u; r = vu.normalizeResult(r, ig); qpend = vu.normalizeResult(r, ig); qdi = di; }";
++            else
++                e.code = "rsqrtOp(vu, ctx, cyc, " + laneFloat(fs, fsf) + ", " + laneFloat(ft, ftf) + ");";
+             return e;
+         case 0x3B:
+             return e;
++        case 0x40:
++        case 0x41:
++            if (!g_sched)
++            {
++                generic();
++                return e;
++            }
++            if (special == 0x40u)
++                e.code = "{ const uint32_t rx = (vu.m_state.r >> 4) & 1u, ry = (vu.m_state.r >> 22) & 1u; "
++                         "vu.m_state.r = (((vu.m_state.r << 1) ^ rx ^ ry) & 0x007FFFFFu) | 0x3F800000u; } ";
++            if (dest != 0u)
++                e.code += "{ const __m128 rv = _mm_castsi128_ps(_mm_set1_epi32(static_cast<int32_t>(vu.m_state.r))); " + writeV(ft, "rv", "vnorm(rv)", dst) + " }";
++            return e;
++        case 0x42:
++        case 0x43:
++            if (!g_sched)
++            {
++                generic();
++                return e;
++            }
++            e.code = std::string("vu.m_state.r = 0x3F800000u | (") + (special == 0x43u ? "(vu.m_state.r ^ " : "(") + laneBits(fs, fsf) + ") & 0x007FFFFFu);";
++            return e;
+         case 0x3C:
+             if (it != 0u)
+                 viSet(it, laneBits(fs, fsf) + " & 0xFFFFu");
+@@ -1401,6 +1454,916 @@ namespace
+         return !p.reserved && !p.branch && !p.d.eBit && !p.d.dBit && !p.d.tBit;
+     }
+ 
++    // ---------------------------------------------------------------------------------------------
++    // Build-time scheduled programs (VU1R_SCHED=1)
++    //
++    // Every MSCAL starts with an empty pipeline (execute() calls resetScheduler), and an MSCNT follows
++    // a program end, which drains it. From such an entry the runtime's scheduler is fully
++    // determined by the code, so it is run here, at build time, over (pc, pipeline state) nodes (the
++    // approach of catsandsoup's Road Trip Adventure VU1 recompiler, GPL-3.0). Stalls, flag commits and
++    // cycle counts become constants; MAC/status flags that nothing reads are not computed (status
++    // sticky bits are still accumulated cheaply, so the state at the end stays exact). Pairs the
++    // scheduler does not handle, unknown JR targets and unknown entries hand over to the per-pair
++    // compiled code above with the exact pipeline state ("deopt"), so nothing gets less exact.
++    // ---------------------------------------------------------------------------------------------
++    bool g_schedEnabled = false;
++
++    namespace sched
++    {
++        constexpr uint32_t kSlots = 8u;
++        // VU1Interpreter::kFmacLatency and kAccForwardLatency (private there)
++        constexpr uint32_t kFmacLatency = 4u;
++        constexpr uint32_t kAccLatency = 1u;
++        constexpr uint32_t kMaxNodes = 40000u;
++        enum : uint8_t { kNone = 0, kFmac = 1, kClip = 2 };
++        enum : uint8_t { kBrNone = 0, kBrStatic = 1, kBrCond = 2, kBrDyn = 3 };
++
++        struct St
++        {
++            uint8_t vf[32][4];
++            uint8_t vi[16];
++            uint8_t acc[4];
++            uint8_t slotRem[kSlots];
++            uint8_t slotKind[kSlots];
++            uint8_t fdiv;
++            uint8_t backupReg;
++            uint8_t brKind;
++            uint8_t brDelay;
++            uint16_t brTarget;
++            uint8_t ebit;
++            uint8_t pad;
++        };
++
++        St emptySt()
++        {
++            St s;
++            std::memset(&s, 0, sizeof(s));
++            return s;
++        }
++
++        std::string key(const St &s, uint32_t pc, bool body)
++        {
++            std::string k(reinterpret_cast<const char *>(&s), sizeof(St));
++            k.append(reinterpret_cast<const char *>(&pc), sizeof(pc));
++            k.push_back(body ? 1 : 0);
++            return k;
++        }
++
++        uint32_t maxRem(const St &s)
++        {
++            uint32_t m = 0u;
++            for (const auto &reg : s.vf)
++                for (const uint8_t r : reg)
++                    m = std::max<uint32_t>(m, r);
++            for (const uint8_t r : s.vi)
++                m = std::max<uint32_t>(m, r);
++            for (const uint8_t r : s.acc)
++                m = std::max<uint32_t>(m, r);
++            for (const uint8_t r : s.slotRem)
++                m = std::max<uint32_t>(m, r);
++            return std::max<uint32_t>(m, s.fdiv);
++        }
++
++        struct Op
++        {
++            enum Kind : uint8_t { CommitFmac, CommitClip, CommitFdiv, DefFmac, UseMac, Exit } kind;
++            uint8_t slot = 0;
++        };
++
++        // advanceOneCycle in the interpreter's commit order (flag slots, then FDIV)
++        uint32_t advance(St &s, uint32_t cycles, std::vector<Op> &ops)
++        {
++            for (uint32_t n = 0; n < cycles; ++n)
++            {
++                for (auto &reg : s.vf)
++                    for (uint8_t &r : reg)
++                        r = r > 0u ? static_cast<uint8_t>(r - 1u) : 0u;
++                for (uint8_t &r : s.vi)
++                    r = r > 0u ? static_cast<uint8_t>(r - 1u) : 0u;
++                for (uint8_t &r : s.acc)
++                    r = r > 0u ? static_cast<uint8_t>(r - 1u) : 0u;
++                for (uint32_t slot = 0; slot < kSlots; ++slot)
++                {
++                    if (s.slotKind[slot] == kNone)
++                        continue;
++                    if (--s.slotRem[slot] == 0u)
++                    {
++                        ops.push_back({s.slotKind[slot] == kFmac ? Op::CommitFmac : Op::CommitClip, static_cast<uint8_t>(slot)});
++                        s.slotKind[slot] = kNone;
++                    }
++                }
++                if (s.fdiv > 0u && --s.fdiv == 0u)
++                    ops.push_back({Op::CommitFdiv, 0});
++            }
++            return cycles;
++        }
++
++        // the commits a program end performs (runFast's commitFlags(kAll)): all pending, in ready order
++        void flush(St &s, std::vector<Op> &ops)
++        {
++            St copy = s;
++            advance(copy, maxRem(s), ops);
++            s = copy;
++        }
++
++        struct Node
++        {
++            uint32_t pc = 0;
++            St st{};
++            bool body = false;     // after an XGKICK's dynamic stall
++            bool deopt = false;    // hand over to the per-pair code at node entry
++            std::string why;
++            uint32_t stall = 0;
++            std::vector<Op> stallOps;
++            std::vector<Op> bodyOps;   // DefFmac / UseMac
++            std::vector<Op> postOps;
++            int fmacSlot = -1;
++            int clipSlot = -1;
++            // XGKICK dynamic stall: cases s0..kmax, each with its commits and target node
++            bool dyn = false;
++            uint32_t s0 = 0;
++            uint32_t kmax = 0;
++            std::vector<std::pair<std::vector<Op>, uint32_t>> cases;
++            enum Term : uint8_t { Goto, Cond, Dyn, End } term = Goto;
++            uint32_t t0 = 0;
++            uint32_t t1 = 0;
++            std::vector<std::pair<uint32_t, uint32_t>> dynTargets;
++            St after{};            // state after the pair (Dyn default and End)
++            std::vector<Op> flushOps;
++            uint32_t endPc = 0;
++            bool backTarget = false;
++            // liveness results
++            std::vector<bool> needStall, needBody, needPost, needFlush;
++            std::vector<std::vector<bool>> needCases;
++        };
++
++        bool supportedLower(const Pair &p, std::string &why)
++        {
++            if (p.d.iBit)
++                return true;
++            const uint32_t lower = p.d.lower;
++            const uint32_t opHi = (lower >> 25) & 0x7Fu;
++            if (opHi == 0x11u || opHi == 0x15u)
++            {
++                why = "FCSET/FSSET";
++                return false;
++            }
++            if (opHi >= 0x14u && opHi <= 0x17u)
++            {
++                why = "status flag reader";
++                return false;
++            }
++            if (A::pipeline(p.d.lowerUsage) == A::kPipeEfu || p.d.lowerUsage.waitP)
++            {
++                why = "EFU";
++                return false;
++            }
++            const RegViewProbe probe;
++            if (lowerEmit(p.pc, lower, p.d.upper).generic)
++            {
++                why = "generic lower";
++                return false;
++            }
++            return true;
++        }
++
++        struct Graph
++        {
++            const std::vector<Pair> *pairs = nullptr;
++            uint32_t used = 0;
++            std::vector<Node> nodes;
++            std::map<std::string, uint32_t> index;
++            std::vector<uint32_t> work;
++            std::vector<uint32_t> linkLabels;
++            std::map<uint32_t, uint32_t> entries;   // pc -> node
++            bool overflow = false;
++
++            uint32_t get(uint32_t pc, const St &s, bool body = false)
++            {
++                const std::string k = key(s, pc, body);
++                const auto it = index.find(k);
++                if (it != index.end())
++                    return it->second;
++                const uint32_t id = static_cast<uint32_t>(nodes.size());
++                Node n;
++                n.pc = pc;
++                n.st = s;
++                n.body = body;
++                if (nodes.size() >= kMaxNodes)
++                {
++                    overflow = true;
++                    n.deopt = true;
++                    n.why = "node limit";
++                }
++                nodes.push_back(std::move(n));
++                index.emplace(k, id);
++                if (!nodes[id].deopt)
++                    work.push_back(id);
++                return id;
++            }
++
++            static uint32_t staticStall(const Pair &p, const St &s)
++            {
++                uint32_t ready = 0u;
++                for (const auto *usage : {&p.d.upperUsage, &p.d.lowerUsage})
++                {
++                    for (uint32_t i = 0; i < usage->vfReadCount; ++i)
++                    {
++                        const auto access = usage->vfRead[i];
++                        for (uint32_t c = 0; c < 4u; ++c)
++                            if (access.lanes & laneBit(c))
++                                ready = std::max<uint32_t>(ready, s.vf[access.reg][c]);
++                    }
++                    for (uint32_t reg = 1; reg < 16u; ++reg)
++                        if (usage->viRead & (1u << reg))
++                            ready = std::max<uint32_t>(ready, s.vi[reg]);
++                    for (uint32_t c = 0; c < 4u; ++c)
++                        if (usage->accRead & laneBit(c))
++                            ready = std::max<uint32_t>(ready, s.acc[c]);
++                }
++                const unsigned pipe = A::pipeline(p.d.lowerUsage);
++                if (!p.d.iBit && (pipe == A::kPipeFdiv || p.d.lowerUsage.waitQ))
++                    ready = std::max<uint32_t>(ready, s.fdiv);
++                return ready;
++            }
++
++            static int allocSlot(St &s, uint8_t kind)
++            {
++                for (uint32_t slot = 0; slot < kSlots; ++slot)
++                    if (s.slotKind[slot] == kNone)
++                    {
++                        s.slotKind[slot] = kind;
++                        s.slotRem[slot] = static_cast<uint8_t>(kFmacLatency);
++                        return static_cast<int>(slot);
++                    }
++                return -1;
++            }
++
++            void step(uint32_t id)
++            {
++                Node n = nodes[id];
++                const Pair &p = (*pairs)[n.pc / 8u];
++                const auto fail = [&](const std::string &why)
++                {
++                    nodes[id].deopt = true;
++                    nodes[id].why = why;
++                };
++                if (n.pc / 8u >= used || p.fallback || p.reserved)
++                    return fail("fallback pair");
++                if (!supportedLower(p, n.why))
++                    return fail(n.why);
++                {
++                    const RegViewProbe probe;
++                    if (upperEmit(p.d.upper).generic)
++                        return fail("generic upper");
++                }
++                if (p.branch && n.st.brKind != kBrNone)
++                    return fail("branch in a branch delay slot");
++                if (p.branch && n.st.ebit)
++                    return fail("branch in an E-bit delay slot");
++                St s = n.st;
++                if (!n.body)
++                {
++                    const uint32_t s0 = staticStall(p, s);
++                    if (!p.d.iBit && A::pipeline(p.d.lowerUsage) == A::kPipeXgkick)
++                    {
++                        // a previous XGKICK may still run: stall until it ends (data dependent)
++                        n.dyn = true;
++                        n.s0 = s0;
++                        n.kmax = std::max(s0, maxRem(s));
++                        for (uint32_t c = s0; c <= n.kmax; ++c)
++                        {
++                            St m = s;
++                            std::vector<Op> ops;
++                            advance(m, c, ops);
++                            const uint32_t target = get(n.pc, m, true);
++                            n.cases.emplace_back(std::move(ops), target);
++                        }
++                        nodes[id] = std::move(n);
++                        return;
++                    }
++                    n.stall = advance(s, s0, n.stallOps);
++                }
++                // upper flag entry
++                const UpperEmit up = [&]
++                {
++                    const RegViewProbe probe;
++                    return upperEmit(p.d.upper);
++                }();
++                const uint32_t uop = p.d.upper & 0x3Fu;
++                const uint32_t usp = (p.d.upper & 3u) | ((p.d.upper >> 4) & 0x7Cu);
++                const bool isClip = uop >= 0x3Cu && usp == 0x1Fu;
++                if (up.isFmac && up.dest != 0u)
++                {
++                    n.fmacSlot = allocSlot(s, kFmac);
++                    if (n.fmacSlot < 0)
++                        return fail("flag pipeline full");
++                    n.bodyOps.push_back({Op::DefFmac, static_cast<uint8_t>(n.fmacSlot)});
++                }
++                else if (isClip)
++                {
++                    n.clipSlot = allocSlot(s, kClip);
++                    if (n.clipSlot < 0)
++                        return fail("flag pipeline full");
++                }
++                if (!p.d.iBit)
++                {
++                    const uint32_t opHi = (p.d.lower >> 25) & 0x7Fu;
++                    if (opHi == 0x18u || opHi == 0x1Au || opHi == 0x1Bu)
++                        n.bodyOps.push_back({Op::UseMac, 0});
++                    const uint32_t special = (p.d.lower & 3u) | ((p.d.lower >> 4) & 0x7Cu);
++                    if (opHi == 0x40u && (p.d.lower & 0x3Fu) >= 0x3Cu && special >= 0x38u && special <= 0x3Au)
++                        s.fdiv = static_cast<uint8_t>(p.d.lowerUsage.latency);
++                }
++                // markPairWrites
++                const auto lw = p.d.lowerUsage.vfWrite;
++                if (lw.reg != 0u && p.d.suppressedLowerVf != lw.reg)
++                    for (uint32_t c = 0; c < 4u; ++c)
++                        if (lw.lanes & laneBit(c))
++                            s.vf[lw.reg][c] = static_cast<uint8_t>(p.d.lowerUsage.vfLatency != 0u ? p.d.lowerUsage.vfLatency : p.d.lowerUsage.latency);
++                const auto uw = p.d.upperUsage.vfWrite;
++                if (uw.reg != 0u)
++                    for (uint32_t c = 0; c < 4u; ++c)
++                        if (uw.lanes & laneBit(c))
++                            s.vf[uw.reg][c] = static_cast<uint8_t>(p.d.upperUsage.vfLatency != 0u ? p.d.upperUsage.vfLatency : p.d.upperUsage.latency);
++                const uint32_t viWrites = p.d.lowerUsage.viWrite & 0xFFFEu;
++                uint32_t writtenVi = 0u;
++                for (uint32_t reg = 1; reg < 16u; ++reg)
++                    if (viWrites & (1u << reg))
++                    {
++                        s.vi[reg] = static_cast<uint8_t>(p.d.lowerUsage.viLatency != 0u ? p.d.lowerUsage.viLatency : p.d.lowerUsage.latency);
++                        if (writtenVi == 0u)
++                            writtenVi = reg;
++                    }
++                for (uint32_t c = 0; c < 4u; ++c)
++                    if (p.d.upperUsage.accWrite & laneBit(c))
++                        s.acc[c] = static_cast<uint8_t>(kAccLatency);
++                s.backupReg = static_cast<uint8_t>(writtenVi != 0u && p.d.lowerUsage.delaysNextBranchRead ? writtenVi : 0u);
++                // branch state: the delay slot resolves a branch set by the previous pair
++                uint8_t takeKind = kBrNone;
++                uint16_t takeTarget = 0u;
++                if (s.brKind != kBrNone)
++                {
++                    takeKind = s.brKind;
++                    takeTarget = s.brTarget;
++                    s.brKind = kBrNone;
++                    s.brTarget = 0u;
++                }
++                if (p.branch)
++                {
++                    s.brKind = p.dynamic ? kBrDyn : (p.conditional ? kBrCond : kBrStatic);
++                    s.brTarget = static_cast<uint16_t>(p.dynamic ? 0u : p.target);
++                }
++                bool ended = false;
++                if (s.ebit)
++                {
++                    ended = true;
++                    s.ebit = 0u;
++                }
++                else if (p.d.eBit)
++                    s.ebit = 1u;
++                advance(s, 1u, n.postOps);
++                const uint32_t next = nextPc(n.pc);
++                if (ended)
++                {
++                    if (takeKind != kBrNone)
++                        return fail("branch resolves in an E-bit delay slot");
++                    n.term = Node::End;
++                    n.after = s;
++                    flush(s, n.flushOps);
++                    n.endPc = next;
++                    nodes[id] = std::move(n);
++                    return;
++                }
++                n.after = s;
++                if (takeKind == kBrNone)
++                {
++                    n.term = Node::Goto;
++                    n.t0 = get(next, s);
++                }
++                else if (takeKind == kBrStatic)
++                {
++                    n.term = Node::Goto;
++                    n.t0 = get(takeTarget, s);
++                }
++                else if (takeKind == kBrCond)
++                {
++                    n.term = Node::Cond;
++                    n.t0 = get(takeTarget, s);
++                    n.t1 = get(next, s);
++                }
++                else
++                {
++                    n.term = Node::Dyn;
++                    for (const uint32_t label : linkLabels)
++                        n.dynTargets.emplace_back(label, get(label, s));
++                }
++                nodes[id] = std::move(n);
++            }
++
++            std::vector<uint32_t> targets(const Node &n) const
++            {
++                std::vector<uint32_t> out;
++                if (n.deopt)
++                    return out;
++                if (n.dyn)
++                {
++                    for (const auto &c : n.cases)
++                        out.push_back(c.second);
++                    return out;
++                }
++                if (n.term == Node::Goto)
++                    out.push_back(n.t0);
++                else if (n.term == Node::Cond)
++                {
++                    out.push_back(n.t0);
++                    out.push_back(n.t1);
++                }
++                else if (n.term == Node::Dyn)
++                    for (const auto &t : n.dynTargets)
++                        out.push_back(t.second);
++                return out;
++            }
++
++            void build(const std::vector<uint32_t> &entryPcs)
++            {
++                for (const uint32_t pc : entryPcs)
++                    if (pc / 8u < used)
++                        entries[pc] = get(pc, emptySt());
++                while (!work.empty())
++                {
++                    const uint32_t id = work.back();
++                    work.pop_back();
++                    step(id);
++                }
++                for (const Node &n : nodes)
++                    for (const uint32_t t : targets(n))
++                        if (nodes[t].pc <= n.pc)
++                            nodes[t].backTarget = true;
++            }
++
++            // Backward liveness of the MAC/status flags. F = the committed MAC and status (both fully
++            // replaced by each FMAC commit), P<s> = the flags an FMAC in slot s will commit. Program
++            // ends and hand-overs read F and every pending P<s>.
++            using Live = uint32_t;   // bit 0: F, bit 1 + s: P<s>
++            static constexpr Live kF = 1u;
++            static Live pBit(uint32_t slot) { return 2u << slot; }
++
++            static Live pendingFmac(const St &s)
++            {
++                Live l = 0u;
++                for (uint32_t slot = 0; slot < kSlots; ++slot)
++                    if (s.slotKind[slot] == kFmac)
++                        l |= pBit(slot);
++                return l;
++            }
++
++            static Live back(const std::vector<Op> &ops, Live live, std::vector<bool> *need)
++            {
++                if (need)
++                    need->assign(ops.size(), false);
++                for (size_t i = ops.size(); i-- > 0u;)
++                {
++                    const Op &op = ops[i];
++                    switch (op.kind)
++                    {
++                    case Op::CommitFmac:
++                        if (live & kF)
++                        {
++                            if (need)
++                                (*need)[i] = true;
++                            live = (live & ~kF) | pBit(op.slot);
++                        }
++                        break;
++                    case Op::DefFmac:
++                        if (live & pBit(op.slot))
++                        {
++                            if (need)
++                                (*need)[i] = true;
++                            live &= ~pBit(op.slot);
++                        }
++                        break;
++                    case Op::UseMac:
++                    case Op::Exit:
++                        live |= kF;
++                        if (need)
++                            (*need)[i] = true;
++                        break;
++                    default:
++                        if (need)
++                            (*need)[i] = true;
++                        break;
++                    }
++                }
++                return live;
++            }
++
++            std::vector<Live> liveIn;
++
++            Live nodeIn(uint32_t id, Live out, bool record)
++            {
++                Node &n = nodes[id];
++                if (n.deopt)
++                    return kF | pendingFmac(n.st);
++                if (n.dyn)
++                {
++                    Live acc = 0u;
++                    if (record)
++                        n.needCases.resize(n.cases.size());
++                    for (size_t c = 0; c < n.cases.size(); ++c)
++                        acc |= back(n.cases[c].first, liveIn[n.cases[c].second], record ? &n.needCases[c] : nullptr);
++                    return acc;
++                }
++                Live live = out;
++                if (n.term == Node::End)
++                {
++                    std::vector<Op> ops = n.flushOps;
++                    ops.push_back({Op::Exit, 0});
++                    std::vector<bool> need;
++                    live = back(ops, kF, record ? &need : nullptr);
++                    if (record)
++                        n.needFlush.assign(need.begin(), need.end() - 1);
++                }
++                else if (n.term == Node::Dyn)
++                    live |= kF | pendingFmac(n.after);   // the default target hands over
++                live = back(n.postOps, live, record ? &n.needPost : nullptr);
++                live = back(n.bodyOps, live, record ? &n.needBody : nullptr);
++                live = back(n.stallOps, live, record ? &n.needStall : nullptr);
++                return live;
++            }
++
++            Live nodeOut(uint32_t id)
++            {
++                Live out = 0u;
++                for (const uint32_t t : targets(nodes[id]))
++                    out |= liveIn[t];
++                return out;
++            }
++
++            void liveness()
++            {
++                liveIn.assign(nodes.size(), 0u);
++                std::vector<std::vector<uint32_t>> preds(nodes.size());
++                for (uint32_t id = 0; id < nodes.size(); ++id)
++                    for (const uint32_t t : targets(nodes[id]))
++                        preds[t].push_back(id);
++                std::vector<uint32_t> list(nodes.size());
++                std::vector<bool> queued(nodes.size(), true);
++                for (uint32_t id = 0; id < nodes.size(); ++id)
++                    list[id] = id;
++                while (!list.empty())
++                {
++                    const uint32_t id = list.back();
++                    list.pop_back();
++                    queued[id] = false;
++                    const Live in = nodeIn(id, nodeOut(id), false);
++                    if (in != liveIn[id])
++                    {
++                        liveIn[id] = in;
++                        for (const uint32_t p : preds[id])
++                            if (!queued[p])
++                            {
++                                queued[p] = true;
++                                list.push_back(p);
++                            }
++                    }
++                }
++                for (uint32_t id = 0; id < nodes.size(); ++id)
++                    nodeIn(id, nodeOut(id), true);
++            }
++        };
++
++        std::string commitCode(const Op &op, bool needed)
++        {
++            switch (op.kind)
++            {
++            case Op::CommitFmac:
++                return needed ? "        mac = fm" + num(op.slot) + "; scur = fs" + num(op.slot) + " & 0xFu;\n" : "";
++            case Op::CommitClip:
++                return "        clip = fc" + num(op.slot) + ";\n";
++            case Op::CommitFdiv:
++                return "        vu.m_state.q = qpend; sdi = qdi; sticky |= qdi << 6;\n";
++            default:
++                return "";
++            }
++        }
++
++        std::string commits(const std::vector<Op> &ops, const std::vector<bool> &need)
++        {
++            std::string out;
++            for (size_t i = 0; i < ops.size(); ++i)
++                out += commitCode(ops[i], i < need.size() && need[i]);
++            return out;
++        }
++
++        // pipeline state the per-pair code expects when the scheduled code hands over at this point
++        std::string materialize(const St &s, const std::string &base = "cyc", bool readyOnly = false)
++        {
++            std::string out;
++            const std::string cyc = base;
++            for (uint32_t reg = 1; reg < 32u; ++reg)
++                for (uint32_t c = 0; c < 4u; ++c)
++                    if (s.vf[reg][c])
++                        out += "        vu.m_vfReady[" + num(reg) + "][" + num(c) + "] = " + cyc + " + " + num(s.vf[reg][c]) + "u;\n";
++            for (uint32_t reg = 1; reg < 16u; ++reg)
++                if (s.vi[reg])
++                    out += "        vu.m_viReady[" + num(reg) + "] = " + cyc + " + " + num(s.vi[reg]) + "u;\n";
++            for (uint32_t c = 0; c < 4u; ++c)
++                if (s.acc[c])
++                    out += "        vu.m_accReady[" + num(c) + "] = " + cyc + " + " + num(s.acc[c]) + "u;\n";
++            if (readyOnly)
++                return out;
++            std::vector<std::pair<uint32_t, uint32_t>> order;
++            for (uint32_t slot = 0; slot < kSlots; ++slot)
++                if (s.slotKind[slot] != kNone)
++                    order.emplace_back(s.slotRem[slot], slot);
++            std::sort(order.begin(), order.end());
++            for (const auto &[rem, slot] : order)
++            {
++                const std::string at = cyc + " + " + num(rem) + "u - " + num(kFmacLatency) + "u";
++                if (s.slotKind[slot] == kFmac)
++                    out += "        { Vu1FlagRecord &r = statusPush(vu, ctx, " + at + "); r.mac = fm" + num(slot) + "; r.status = fs" + num(slot) +
++                           "; r.writes = Vu1FlagRecord::kMac | Vu1FlagRecord::kStatus; }\n";
++                else
++                    out += "        { Vu1FlagRecord &r = clipPush(vu, ctx, " + at + "); r.clip = fc" + num(slot) + "; r.writes = Vu1FlagRecord::kClip; }\n";
++            }
++            if (s.fdiv)
++                out += "        vu.m_fdiv.valid = true; vu.m_fdiv.readyCycle = " + cyc + " + " + num(s.fdiv) +
++                       "u; vu.m_fdiv.value = qpend; vu.m_fdiv.statusDi = qdi; vu.noteReadyCycle(vu.m_fdiv.readyCycle);\n";
++            if (s.backupReg)
++                out += "        vu.m_viBranchBackupValue = bk; vu.m_viBranchBackupReg = " + num(s.backupReg) + "u; vu.m_viBranchBackupValid = true;\n";
++            if (s.brKind == kBrStatic || s.brKind == kBrDyn)
++                out += "        vu.m_state.branchPending = true; vu.m_state.branchTarget = " + (s.brKind == kBrDyn ? std::string("jt") : hx(s.brTarget)) +
++                       "; vu.m_state.branchDelay = 0u;\n";
++            else if (s.brKind == kBrCond)
++                out += "        if (tk) { vu.m_state.branchPending = true; vu.m_state.branchTarget = " + hx(s.brTarget) + "; vu.m_state.branchDelay = 0u; }\n";
++            if (s.ebit)
++                out += "        vu.m_state.ebit = true;\n";
++            return out;
++        }
++    }
++
++    namespace sched
++    {
++        // One pair under the scheduled model: no stall or ready bookkeeping (constants), flags in slot
++        // variables. Mirrors Emitter::body for the order of the upper and lower halves.
++        std::string pairBody(const Node &n, const Pair &p)
++        {
++            const auto &d = p.d;
++            std::string out = "        {\n";
++            const uint32_t viWrites = d.lowerUsage.viWrite & 0xFFFEu;
++            const uint32_t writtenVi = viWrites != 0u ? static_cast<uint32_t>(std::countr_zero(viWrites)) : 0u;
++            const bool recordBackup = writtenVi != 0u && d.lowerUsage.delaysNextBranchRead;
++            if (recordBackup)
++                out += "            const int32_t oldVi = " + vi(writtenVi) + ";\n";
++            // branches read the locals (or the value before the previous pair's write, kept in bk)
++            const uint32_t backupReg = n.st.backupReg;
++            const BranchVi branchVi = [backupReg](uint32_t r)
++            {
++                if (r == 0u)
++                    return std::string("0");
++                if (r == backupReg)
++                    return std::string("bk");
++                return vi(r);
++            };
++            const BranchVi *branchViPtr = &branchVi;
++            const UpperEmit up = upperEmit(d.upper);
++            bool fmacNeeded = false;
++            for (size_t i = 0; i < n.bodyOps.size(); ++i)
++                if (n.bodyOps[i].kind == Op::DefFmac && i < n.needBody.size() && n.needBody[i])
++                    fmacNeeded = true;
++            const std::string slot = num(n.fmacSlot);
++            std::string fmacValue;
++            std::string fmacDecl = "__m128 un;";
++            std::string fmacAfter;
++            if (up.isFmac)
++            {
++                if (n.fmacSlot >= 0 && fmacNeeded)
++                {
++                    fmacValue = "fmacF" + up.fmacCall + ", fl)";
++                    fmacDecl = "__m128 un; FmacFlags fl;";
++                    fmacAfter = " fm" + slot + " = fl.mac; fs" + slot + " = fl.status; fAccScalar |= fl.status | fl.extra;";
++                }
++                else
++                    fmacValue = "fmacV" + up.fmacCall + ", fAccZ, fAccS, fAccScalar)";
++            }
++            std::string upperStatement = up.statement;
++            if (n.clipSlot >= 0)
++            {
++                // clipOp without the flag queue: the working clip shifts now, the slot commits later
++                const std::string fs = rawV(fFs(d.upper));
++                const std::string ft = rawV(fFt(d.upper));
++                upperStatement = "{ const uint32_t cb = clipBits(" + fs + ", " + ft + "); wclip = ((wclip << 6) | cb) & 0xFFFFFFu; fc" + num(n.clipSlot) +
++                                 " = wclip; }";
++            }
++            const auto upperStore = [&]()
++            {
++                if (up.nop)
++                    return std::string();
++                if (!upperStatement.empty())
++                    return "            " + upperStatement + "\n";
++                if (up.isFmac)
++                    return "            { " + fmacDecl + " const __m128 uv = " + fmacValue + ";" + fmacAfter + " " + writeV(up.reg, "uv", "uv", hx(up.dest)) + " }\n";
++                return "            { const __m128 uv = " + up.value + "; " +
++                       writeV(up.reg, "uv", up.normalize ? std::string("vnorm(uv)") : std::string("uv"), hx(up.dest)) + " }\n";
++            };
++            const bool upperFirst = !d.iBit && d.upperVfShadowReg == 0u;
++            const std::string earlyUpper = upperFirst ? upperStore() : std::string();
++            const LowerEmit low = d.iBit ? LowerEmit{} : lowerEmit(p.pc, d.lower, d.upper, branchViPtr);
++            const std::string lowerCode = low.code.empty() ? "" : "            " + low.code + "\n";
++            if (d.iBit)
++            {
++                uint32_t bits = d.lower;
++                const uint32_t exponent = (bits >> 23) & 0xFFu;
++                if (exponent == 0u)
++                    bits &= 0x80000000u;
++                else if (exponent == 0xFFu)
++                    bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
++                out += upperStore();
++                out += "            vu.m_state.i = std::bit_cast<float>(" + hx(bits) + ");\n";
++            }
++            else if (d.upperVfShadowReg != 0u)
++            {
++                const uint32_t reg = d.upperVfShadowReg;
++                out += "            const __m128 shadowOld = " + rawV(reg) + ";\n";
++                out += "            const __m128 shadowOldN = " + normV(reg) + ";\n";
++                if (up.isFmac)
++                    out += "            " + fmacDecl + " const __m128 uv = " + fmacValue + ";" + fmacAfter + "\n";
++                else
++                    out += "            const __m128 uv = " + up.value + "; const __m128 un = " +
++                           (up.normalize ? std::string("vnorm(uv)") : std::string("uv")) + ";\n";
++                out += lowerCode;
++                out += "            " + writeFullV(reg, "blendDest(shadowOld, uv, " + hx(up.dest) + ")", "blendDest(shadowOldN, un, " + hx(up.dest) + ")") + "\n";
++            }
++            else
++            {
++                out += earlyUpper;
++                out += lowerCode;
++            }
++            if (recordBackup)
++                out += "            bk = oldVi;\n";
++            out += "        }\n";
++            return out;
++        }
++
++        std::string nodeLabel(uint32_t id)
++        {
++            return "n" + num(id);
++        }
++
++        std::string emitNode(const Graph &g, uint32_t id)
++        {
++            const Node &n = g.nodes[id];
++            std::string out = nodeLabel(id) + ": // " + label(n.pc) + (n.body ? " after XGKICK stall" : "") + "\n";
++            if (n.deopt)
++            {
++                out += "        // hand over: " + n.why + "\n";
++                out += materialize(n.st);
++                out += "        epc = " + hx(n.pc) + "; goto x_deopt;\n";
++                return out;
++            }
++            // the budget stops at exactly the pair the per-pair code would stop at: hand over to it just before
++            if (!n.body)
++            {
++                const uint32_t stall = n.dyn ? 0u : n.stall;
++                out += "        if (cyc" + (stall ? " + " + num(stall) + "u" : std::string()) + " >= budget)\n        {\n" + materialize(n.st) + "            epc = " +
++                       hx(n.pc) + "; goto x_deopt;\n        }\n";
++            }
++            if (n.dyn)
++            {
++                out += "        {\n            const uint64_t c0 = cyc;\n";
++                out += "            if (!xgkickStall(vu, ctx, cyc, c0 + " + num(n.s0) + "u, budget))\n            {\n" + materialize(n.st, "c0") +
++                       "                epc = " + hx(n.pc) + "; goto x_runaway;\n            }\n";
++                out += "            const uint64_t waited = cyc - c0;\n";
++                out += "            switch (waited < " + num(n.kmax) + "u ? waited : " + num(n.kmax) + "u)\n            {\n";
++                for (size_t c = 0; c < n.cases.size(); ++c)
++                {
++                    out += "            case " + num(n.s0 + c) + "u:\n";
++                    out += commits(n.cases[c].first, n.needCases[c]);
++                    out += "                goto " + nodeLabel(n.cases[c].second) + ";\n";
++                }
++                out += "            default: break;\n            }\n";
++                // waited < s0 cannot happen (xgkickStall waits at least for the registers)
++                // not reached: xgkickStall waits at least until the registers are ready (c0 + s0)
++                out += "            epc = " + hx(n.pc) + "; goto x_runaway;\n        }\n";
++                return out;
++            }
++            out += commits(n.stallOps, n.needStall);
++            if (n.stall)
++                out += "        cyc += " + num(n.stall) + "u;\n";
++            out += pairBody(n, (*g.pairs)[n.pc / 8u]);
++            out += commits(n.postOps, n.needPost);
++            out += "        ++cyc;\n";
++            switch (n.term)
++            {
++            case Node::Goto:
++                out += "        goto " + nodeLabel(n.t0) + ";\n";
++                break;
++            case Node::Cond:
++                out += "        if (tk) goto " + nodeLabel(n.t0) + ";\n        goto " + nodeLabel(n.t1) + ";\n";
++                break;
++            case Node::Dyn:
++                out += "        switch (jt)\n        {\n";
++                for (const auto &[pc, target] : n.dynTargets)
++                    out += "        case " + hx(pc) + ": goto " + nodeLabel(target) + ";\n";
++                out += "        default: break;\n        }\n";
++                out += materialize(n.after);
++                out += "        epc = jt; goto x_deopt;\n";
++                break;
++            case Node::End:
++                out += materialize(n.after, "cyc", true);
++                out += commits(n.flushOps, n.needFlush);
++                if (n.after.backupReg)
++                    out += "        endBackup = " + num(n.after.backupReg) + "u;\n";
++                out += "        epc = " + hx(n.endPc) + "; goto x_end;\n";
++                break;
++            }
++            return out;
++        }
++
++        // the whole scheduled program as one function: fastBlock<hash, kSchedBlock>
++        constexpr uint32_t kSchedBlock = 0x80000000u;
++
++        std::string emitFunction(const Graph &g, uint64_t hash, std::map<std::string, uint32_t> &stats)
++        {
++            gView = RegView{};
++            gView.local = true;
++            gView.record = true;
++            std::string body;
++            for (uint32_t id = 0; id < g.nodes.size(); ++id)
++                body += emitNode(g, id);
++            const RegView view = gView;
++            gView = RegView{};
++
++            std::string out = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock) +
++                              ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
++            out += "    uint64_t cyc = ctx.cycle;\n    const uint64_t budget = ctx.budget;\n    const uint8_t *const mem = ctx.mem;\n    (void)mem;\n";
++            out += "    uint32_t epc = 0u;\n    bool tk = false;\n    uint32_t jt = 0u;\n    int32_t bk = 0;\n    uint32_t endBackup = 0u;\n";
++            out += "    (void)tk; (void)jt; (void)bk;\n";
++            out += "    switch (vu.m_state.pc)\n    {\n";
++            for (const auto &[pc, id] : g.entries)
++                out += "    case " + hx(pc) + ": break;\n";
++            out += "    default: return StepResult::Fallback;\n    }\n";
++            out += "    uint32_t mac = vu.m_state.mac, scur = vu.m_state.status & 0xFu, sdi = vu.m_state.status & 0x30u, sticky = vu.m_state.status & 0xFC0u;\n";
++            out += "    uint32_t clip = vu.m_state.clip, wclip = vu.m_workingClip;\n";
++            out += "    __m128 fAccZ = _mm_setzero_ps(), fAccS = _mm_setzero_ps();\n    uint32_t fAccScalar = 0u;\n";
++            out += "    float qpend = 0.0f;\n    uint32_t qdi = 0u;\n    (void)qpend; (void)qdi;\n";
++            for (uint32_t slot = 0; slot < kSlots; ++slot)
++                out += "    uint32_t fm" + num(slot) + " = 0u, fs" + num(slot) + " = 0u, fc" + num(slot) + " = 0u; (void)fm" + num(slot) + "; (void)fs" + num(slot) +
++                       "; (void)fc" + num(slot) + ";\n";
++            const auto memRaw = [](uint32_t reg) { return reg == 32u ? std::string("vu.m_state.acc") : vf(reg); };
++            for (const uint32_t reg : view.vfUsed)
++                out += "    __m128 vr" + num(reg) + " = _mm_loadu_ps(" + memRaw(reg) + "), vn" + num(reg) + " = _mm_load_ps(ctx.norm[" + num(reg) + "]);\n";
++            for (const uint32_t reg : view.viUsed)
++                out += "    int32_t vi" + num(reg) + " = vu.m_state.vi[" + num(reg) + "];\n";
++            out += "    switch (vu.m_state.pc)\n    {\n";
++            for (const auto &[pc, id] : g.entries)
++                out += "    case " + hx(pc) + ": goto " + nodeLabel(id) + ";\n";
++            out += "    default: return StepResult::Fallback;\n    }\n";
++            out += body;
++            std::string store;
++            for (const uint32_t reg : view.vfWritten)
++                store += "    _mm_storeu_ps(" + memRaw(reg) + ", vr" + num(reg) + "); _mm_store_ps(ctx.norm[" + num(reg) + "], vn" + num(reg) + ");\n";
++            for (const uint32_t reg : view.viWritten)
++                store += "    vu.m_state.vi[" + num(reg) + "] = static_cast<int16_t>(vi" + num(reg) + ");\n";
++            store += "    vu.m_state.mac = mac;\n";
++            store += "    vu.m_state.status = ((sticky | ((stickyOf(fAccZ, fAccS) | fAccScalar) << 6)) & 0xFC0u) | sdi | scur;\n";
++            store += "    vu.m_state.clip = clip; vu.m_workingClip = wclip;\n";
++            store += "    vu.m_state.pc = epc;\n    ctx.cycle = cyc;\n";
++            out += "x_end:\n" + store;
++            out += "    if (endBackup != 0u) { vu.m_viBranchBackupValue = bk; vu.m_viBranchBackupReg = static_cast<uint8_t>(endBackup); vu.m_viBranchBackupValid = true; }\n";
++            out += "    return StepResult::Ended;\n";
++            out += "x_deopt:\n" + store + "    return StepResult::Continue;\n";
++            out += "x_runaway:\n" + store + "    return StepResult::Budget;\n";
++            out += "}\n\n";
++
++            uint32_t deopts = 0u;
++            for (const Node &n : g.nodes)
++                if (n.deopt)
++                {
++                    ++deopts;
++                    ++stats["sched hand-over: " + n.why];
++                }
++            stats["sched nodes"] += static_cast<uint32_t>(g.nodes.size());
++            stats["sched entries"] += static_cast<uint32_t>(g.entries.size());
++            uint32_t defs = 0u, kept = 0u;
++            for (const Node &n : g.nodes)
++                for (size_t i = 0; i < n.bodyOps.size(); ++i)
++                    if (n.bodyOps[i].kind == Op::DefFmac)
++                    {
++                        ++defs;
++                        if (i < n.needBody.size() && n.needBody[i])
++                            ++kept;
++                    }
++            stats["sched FMAC flag producers"] += defs;
++            stats["sched FMAC flag producers kept"] += kept;
++            if (g.overflow)
++                ++stats["sched node limit hit"];
++            return out;
++        }
++    }
++
++
+     bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
+                     std::map<std::string, uint32_t> &stats)
+     {
+@@ -1547,17 +2510,125 @@ namespace
+                 return false;
+         }
+ 
++        bool scheduled = false;
++        if (g_schedEnabled && !g_vu0)
++        {
++            sched::Graph graph;
++            graph.pairs = &emitter.pairs;
++            graph.used = used;
++            std::vector<uint32_t> entryPcs;
++            for (uint32_t index = 0; index < used; ++index)
++            {
++                const Pair &p = emitter.pairs[index];
++                const uint32_t opHi = (p.d.lower >> 25) & 0x7Fu;
++                if (!p.d.iBit && (opHi == 0x21u || opHi == 0x25u))
++                    graph.linkLabels.push_back((p.pc + 16u) & (g_codeSize - 1u));
++                // an MSCNT continues after a program end
++                if (p.d.eBit)
++                    entryPcs.push_back((p.pc + 16u) & (g_codeSize - 1u));
++            }
++            std::sort(graph.linkLabels.begin(), graph.linkLabels.end());
++            graph.linkLabels.erase(std::unique(graph.linkLabels.begin(), graph.linkLabels.end()), graph.linkLabels.end());
++            if (const auto it = g_entries.find(hash); it != g_entries.end())
++                entryPcs.insert(entryPcs.end(), it->second.begin(), it->second.end());
++            graph.build(entryPcs);
++            graph.liveness();
++            g_sched = true;
++            const std::string fn = sched::emitFunction(graph, hash, stats);
++            g_sched = false;
++            char schedName[64];
++            std::snprintf(schedName, sizeof(schedName), "vu1_%016" PRIx64 "_sched.cpp", hash);
++            std::ofstream schedFile(outDir / schedName, std::ios::binary);
++            schedFile << "#include \"ps2_vu1_impl.inl\"\n\n"
++                         "// CLIP's flag bits, as clipOp computes them (without queueing them)\n"
++                         "static inline uint32_t clipBits(__m128 fsRaw, __m128 ftRaw)\n{\n"
++                         "    const uint32_t wBits = static_cast<uint32_t>(_mm_extract_ps(ftRaw, 3));\n"
++                         "    const int32_t limit = (wBits & 0x7F800000u) != 0u ? static_cast<int32_t>(wBits & 0x7FFFFFFFu) : 0x007FFFFF;\n"
++                         "    const __m128i bits = _mm_castps_si128(fsRaw);\n"
++                         "    const __m128i bounds = _mm_set1_epi32(limit);\n"
++                         "    const uint32_t positive = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(bits, bounds)))) & 7u;\n"
++                         "    const uint32_t negative = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(\n"
++                         "        _mm_xor_si128(bits, _mm_set1_epi32(static_cast<int32_t>(0x80000000u))), bounds)))) & 7u;\n"
++                         "    const uint32_t plus = (positive & 1u) | ((positive & 2u) << 1u) | ((positive & 4u) << 2u);\n"
++                         "    const uint32_t minus = ((negative & 1u) << 1u) | ((negative & 2u) << 2u) | ((negative & 4u) << 3u);\n"
++                         "    return plus | minus;\n}\n\n"
++                      << fn;
++            if (!schedFile)
++                return false;
++            scheduled = true;
++        }
++
+         std::ostringstream out;
+         out << "#include \"ps2_vu1_impl.inl\"\n\n";
++        if (scheduled)
++            out << "// PS2X_VU1_SCHED=0 runs the per-pair compiled code only (for comparisons)\n"
++                   "static bool schedulingEnabled()\n{\n"
++                   "    static const bool enabled = [] { const char *value = std::getenv(\"PS2X_VU1_SCHED\"); return !value || *value != '0'; }();\n"
++                   "    return enabled;\n}\n\n";
+         for (uint32_t block = 0; block < blocks.size(); ++block)
+             out << "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" << hex64(hash) << ", " << block
+                 << "u>(VU1Interpreter &vu, Vu1FastCtx &ctx);\n";
++        if (scheduled)
++            out << "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" << hex64(hash) << ", " << hx(sched::kSchedBlock)
++                << ">(VU1Interpreter &vu, Vu1FastCtx &ctx);\n";
+         out << "\n";
+         out << "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::runImage<" << hex64(hash)
+             << ">(VU1Interpreter &vu, const Vu1RunArgs &args)\n{\n    static constexpr FastBlock table[] = {\n";
+         for (uint32_t index = 0; index < count; ++index)
+             out << "        &fastBlock<" << hex64(hash) << ", " << blockOf[index] << "u>,\n";
+-        out << "    };\n    return runFast(vu, args, table, " << count << "u);\n}\n";
++        out << "    };\n";
++        if (scheduled)
++        {
++            // the scheduled program needs an empty pipeline (any MSCAL, an MSCNT after an end)
++            out << "    bool clear = vu.m_flagValid == 0u && !vu.m_fdiv.valid && !vu.m_efu[0].valid && !vu.m_efu[1].valid && vu.m_storeValid == 0u &&\n"
++                   "                 (vu.m_vfWriteValid | vu.m_viWriteValid | vu.m_accWriteValid) == 0u && !vu.m_state.branchPending && !vu.m_state.ebit &&\n"
++                   "                 !vu.m_state.haltAfterDelaySlot && !vu.m_stopRequested && !vu.m_xgkick.active && !vu.m_viBranchBackupValid &&\n"
++                   "                 vu.m_efuResourceReady <= vu.m_cycle && args.dataSize == kFastMemSize && args.codeSize == kFastCodeSize && args.vuData &&\n"
++                   "                 vu.m_unit == VU1Interpreter::Unit::VU1;\n"
++                   "    if (clear)\n"
++                   "    {\n"
++                   "        for (const auto &lanes : vu.m_vfReady)\n"
++                   "            for (const uint64_t ready : lanes)\n"
++                   "                clear = clear && ready <= vu.m_cycle;\n"
++                   "        for (const uint64_t ready : vu.m_viReady)\n"
++                   "            clear = clear && ready <= vu.m_cycle;\n"
++                   "        for (const uint64_t ready : vu.m_accReady)\n"
++                   "            clear = clear && ready <= vu.m_cycle;\n"
++                   "    }\n"
++                   "    if (clear && schedulingEnabled())\n"
++                   "    {\n"
++                   "        Vu1FastCtx ctx;\n"
++                   "        ctx.norm = vu1NormShadow.norm;\n"
++                   "        if (!vu1NormShadow.valid || vu1NormShadow.owner != &vu)\n"
++                   "        {\n"
++                   "            syncAllNorm(vu, ctx);\n"
++                   "            vu1NormShadow.owner = &vu;\n"
++                   "            vu1NormShadow.valid = true;\n"
++                   "        }\n"
++                   "        ctx.memSize = kFastMemSize;\n"
++                   "        ctx.cycle = vu.m_cycle;\n"
++                   "        ctx.budget = args.budgetEnd;\n"
++                   "        ctx.xgkickDone = vu.m_cycle;\n"
++                   "        ctx.mem = args.vuData;\n"
++                   "        ctx.gs = args.gs;\n"
++                   "        ctx.memory = args.memory;\n"
++                   "        const StepResult result = fastBlock<" << hex64(hash) << ", " << hx(sched::kSchedBlock) << ">(vu, ctx);\n"
++                   "        if (result != StepResult::Fallback)\n"
++                   "        {\n"
++                   "            xgkickSync(vu, ctx, ctx.cycle);\n"
++                   "            if (result == StepResult::Ended)\n"
++                   "                xgkickAdvance(vu, std::numeric_limits<uint64_t>::max() / 2u);\n"
++                   "            else if (result == StepResult::Budget)\n"
++                   "                commitFlags(vu, ctx, ctx.cycle);\n"
++                   "            storeFlags(vu, ctx);\n"
++                   "            vu.m_cycle = ctx.cycle;\n"
++                   "            vu.m_state.cycles = ctx.cycle;\n"
++                   "            if (result != StepResult::Continue)\n"
++                   "                return result;\n"
++                   "        }\n"
++                   "    }\n";
++        }
++        out << "    return runFast(vu, args, table, " << count << "u);\n}\n";
+ 
+         char name[64];
+         std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
+@@ -1579,6 +2650,16 @@ int main(int argc, char **argv)
+     const std::filesystem::path outDir = argv[2];
+     const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
+     std::filesystem::create_directories(outDir);
++    if (const char *schedValue = std::getenv("VU1R_SCHED"))
++        g_schedEnabled = *schedValue == '1';
++    {
++        // entry points to schedule from: "<image hash> <pc>" (hex) per line, as tools/vu1progs.py writes them
++        std::ifstream entries(captureDir / "entries.txt");
++        std::string hashText;
++        std::string pcText;
++        while (entries >> hashText >> pcText)
++            g_entries[std::stoull(hashText, nullptr, 16)].push_back(static_cast<uint32_t>(std::stoul(pcText, nullptr, 16)));
++    }
+     if (const char *experiment = std::getenv("VU1R_EXPERIMENT"))
+     {
+         g_expNoFlags = std::strstr(experiment, "noflags") != nullptr;
+-- 
+2.54.0 (Apple Git-157)
+

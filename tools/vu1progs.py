@@ -15,7 +15,9 @@ Hash = FNV-1a 64 of the padded image, as PS2X_VU1_CAPTURE names them. Uploads at
 into a loaded program) are listed, not written: an image containing one falls back to the interpreter.
 
 Usage: python3 -I tools/vu1progs.py ELF OUTDIR [--check CAPTUREDIR]
-  --check: report, for each captured vu1_*.bin, which program it starts with (all must match one).
+  --check: report, for each captured vu1_*.bin, which program it starts with (all must match one), and
+           turn the capture's entries.txt (image hash, entry pc) into OUTDIR/entries.txt keyed by program
+           hash: the entry points vu1_recomp schedules from (VU1R_SCHED=1).
 """
 import os
 import struct
@@ -80,6 +82,7 @@ def main():
     progs = find_programs(elf)
     os.makedirs(out, exist_ok=True)
     whole = []
+    padded = {}
     for vaddr, addr, code in progs:
         if addr != 0:
             # mostly data words that happen to look like MPG; the two in the program table (0x4E4A6C,
@@ -96,9 +99,12 @@ def main():
                 f.write(image)
             names.append(name)
         whole.append((vaddr, code))
+        if len(code) <= VU1_SIZE:
+            padded[vaddr] = fnv1a64(code + bytes(VU1_SIZE - len(code)))
         print(f'0x{vaddr:06X}: program of 0x{len(code):X} bytes -> {" ".join(names)}')
     if check:
         bad = 0
+        program_of = {}
         for name in sorted(os.listdir(check)):
             if not (name.startswith('vu1_') and name.endswith('.bin')):
                 continue
@@ -106,11 +112,28 @@ def main():
             hits = [(len(c), v) for v, c in whole if image[:len(c)] == c]
             if hits:
                 length, vaddr = max(hits)
+                program_of[name[4:20]] = (vaddr, length)
                 print(f'{name}: program 0x{vaddr:06X} (0x{length:X} bytes) + earlier tail')
             else:
                 bad += 1
                 print(f'{name}: NO PROGRAM MATCHES')
         print(f'{bad} captured images without a program')
+        entries = set()
+        src = os.path.join(check, 'entries.txt')
+        if os.path.exists(src):
+            for line in open(src):
+                parts = line.split()
+                if len(parts) != 2 or parts[0] not in program_of:
+                    continue
+                vaddr, length = program_of[parts[0]]
+                pc = int(parts[1], 16)
+                # an entry into the stale tail is not this program's code
+                if pc < length:
+                    entries.add((padded[vaddr], pc))
+        with open(os.path.join(out, 'entries.txt'), 'w') as f:
+            for h, pc in sorted(entries):
+                f.write(f'{h:016x} {pc:04x}\n')
+        print(f'{len(entries)} program entry points')
         return 1 if bad else 0
     return 0
 
