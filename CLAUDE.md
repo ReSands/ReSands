@@ -33,8 +33,10 @@ The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summa
   stale tail; `tools/vu1progs.py` writes them from the user's own ELF (also solves the 1.0 "image recipe").
   Patch 35 (pairs past a program's end -> interpreter). Death save 40 -> 60; all-saves sweep `fps_progs.txt`:
   59/77 hold 60 (unchanged otherwise).
-- **Build-time VU1 scheduling (runtime patch 37, in progress): read `docs/vu1_scheduling.md` "Progress" and
-  "Next: EFU in the scheduler" first; that is the next task, step by step.** Built and verified exact on the
+- **Build-time VU1 scheduling (runtime patch 37, in progress): read `docs/vu1_scheduling.md` "Progress" first.**
+  19 Oct afternoon: EFU (EATAN, not ESIN) scheduled + parts now keep real loops whole (JR edges ignored when
+  splitting): exact, fights 53-58 fps (morning 46-52, off 39-46), 3 of the 9 slow saves at 60, 3 more at 57-60.
+  Next: profile the fight on this build. Built and verified exact on the
   PC (no new mismatches), fights +3-8 fps (e.g. 43 -> 51), not yet 60. The PC's play build is the scheduled one
   with gate statistics (`PS2X_VU1_SCHED=0` turns scheduling off, `PS2X_VU1_SCHED_STATS=1` prints why runs are
   not scheduled). User's instruction: optimise in order of biggest win.

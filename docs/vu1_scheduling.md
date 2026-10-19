@@ -132,6 +132,26 @@ except 3 of 218-325 nodes in `0154271b`/`9c0325ce`, not hot in the fights). Chec
 (loops and their part-crossing edges). PC run of the fix: `game\jobs\schedall.ps1`
 (sched.ps1 + `oct19.ps1 -Sched -NoBuild`).
 
+**Result of the fix (PC 14:44, 30 s boots, fps after the first sample; `fps_sched_on/off.txt`, the morning's
+in `fps_sched_*_prev.txt`):** verify unchanged (0 / 575 / 65, all `vf13`); `eea60abc` and `31829861` 100%
+scheduled in the three fight saves.
+
+| save | off | on (morning) | on (EFU + whole loops) |
+|------|-----|--------------|------------------------|
+| `093051` fight | 42-46 | 51-52 | 53-58 |
+| `202311` | 39-41 | 46-47 | 53-58 |
+| `093011` | 34-53 | 41-54 | 48-59 |
+| `202222` | 44-48 | 50-52 | 57-60 |
+| `214002` | 55 | 57-59 | 60 |
+| `093100` | 45-50 | 53-54 | 58-60 |
+| `213954` | 55 | 57-59 | 60 |
+| `092959` | 39-55 | 44-55 | 51-60 |
+| `082854` death | 60 | 60 | 60 |
+
+Next, in order of expected win: profile the fight (`093051`/`093011`) on this build to see what limits it now
+(VU1 parts, `processVIF1Data`, the game thread); the 3 loops still split (218-325 nodes, `0154271b`,
+`9c0325ce`; larger parts or a smarter cut if they turn out hot); the all-saves sweep for regressions.
+
 Original plan:
 
 Interpreter semantics (`ps2_vu1_impl.inl` queueP ~590, decode `ps2_vu1_core.cpp` ~860-935, commitEfu ~2840):
