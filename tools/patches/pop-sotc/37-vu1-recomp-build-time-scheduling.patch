@@ -1,4 +1,4 @@
-From 1c832815d5e50cc5dd035c4d03278e490399dbce Mon Sep 17 00:00:00 2001
+From ffd58a31871c2edcfb79ed02d78e365a59ad16cd Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -15,8 +15,8 @@ The verifier treats ready cycles at or before the unit's cycle as equal (they st
  ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
  ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |    1 +
- ps2xTest/tools/vu1_recomp.cpp           | 1343 ++++++++++++++++++++++-
- 4 files changed, 1356 insertions(+), 14 deletions(-)
+ ps2xTest/tools/vu1_recomp.cpp           | 1387 ++++++++++++++++++++++-
+ 4 files changed, 1400 insertions(+), 14 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
 index 9f2f4d4..cd4c44e 100644
@@ -79,7 +79,7 @@ index cee67a1..c897f92 100644
      GS *gs = nullptr;
      PS2Memory *memory = nullptr;
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..b0b0b16 100644
+index 8b44b4c..9033b7d 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
 @@ -26,6 +26,9 @@ namespace
@@ -1378,7 +1378,7 @@ index 8b44b4c..b0b0b16 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2734,139 @@ namespace
+@@ -1547,17 +2734,183 @@ namespace
                  return false;
          }
  
@@ -1413,7 +1413,7 @@ index 8b44b4c..b0b0b16 100644
 +            g_sched = false;
 +            const std::string head = "#include \"ps2_vu1_impl.inl\"\n\n"
 +                                     "// CLIP's flag bits, as clipOp computes them (without queueing them)\n"
-+                                     "[[maybe_unused]] static inline uint32_t clipBits(__m128 fsRaw, __m128 ftRaw)\n{\n"
++                                     "[[maybe_unused]] static VU1_FORCE_INLINE uint32_t clipBits(__m128 fsRaw, __m128 ftRaw)\n{\n"
 +                                     "    const uint32_t wBits = static_cast<uint32_t>(_mm_extract_ps(ftRaw, 3));\n"
 +                                     "    const int32_t limit = (wBits & 0x7F800000u) != 0u ? static_cast<int32_t>(wBits & 0x7FFFFFFFu) : 0x007FFFFF;\n"
 +                                     "    const __m128i bits = _mm_castps_si128(fsRaw);\n"
@@ -1450,7 +1450,31 @@ index 8b44b4c..b0b0b16 100644
 +            out << "// PS2X_VU1_SCHED=0 runs the per-pair compiled code only (for comparisons)\n"
 +                   "static bool schedulingEnabled()\n{\n"
 +                   "    static const bool enabled = [] { const char *value = std::getenv(\"PS2X_VU1_SCHED\"); return !value || *value != '0'; }();\n"
-+                   "    return enabled;\n}\n\n";
++                   "    return enabled;\n}\n\n"
++                   "// PS2X_VU1_SCHED_STATS=1: why runs of this program do (not) take the scheduled code, every 65536 runs\n"
++                   "namespace\n{\n"
++                   "    struct SchedStats\n    {\n"
++                   "        uint64_t calls = 0, pipeline = 0, state = 0, xgkick = 0, ready = 0, unknownPc = 0, ended = 0, budget = 0, handover = 0;\n"
++                   "        uint32_t pcs[8] = {}, pcHits[8] = {};\n    };\n"
++                   "    SchedStats schedStats;\n"
++                   "    bool schedStatsOn()\n    {\n"
++                   "        static const bool on = [] { const char *value = std::getenv(\"PS2X_VU1_SCHED_STATS\"); return value && *value == '1'; }();\n"
++                   "        return on;\n    }\n"
++                   "    void schedUnknownPc(uint32_t pc)\n    {\n"
++                   "        ++schedStats.unknownPc;\n"
++                   "        for (uint32_t i = 0; i < 8u; ++i)\n"
++                   "            if (schedStats.pcHits[i] == 0u || schedStats.pcs[i] == pc)\n            {\n"
++                   "                schedStats.pcs[i] = pc;\n                ++schedStats.pcHits[i];\n                return;\n            }\n    }\n"
++                   "    void schedReport(uint64_t hash)\n    {\n"
++                   "        const SchedStats &s = schedStats;\n"
++                   "        std::fprintf(stderr, \"[vu1-sched] %016llx runs %llu: not empty: pipeline %llu state %llu xgkick %llu ready %llu; no entry %llu; ended %llu budget %llu hand-over %llu; pcs\",\n"
++                   "                     static_cast<unsigned long long>(hash), static_cast<unsigned long long>(s.calls), static_cast<unsigned long long>(s.pipeline),\n"
++                   "                     static_cast<unsigned long long>(s.state), static_cast<unsigned long long>(s.xgkick), static_cast<unsigned long long>(s.ready),\n"
++                   "                     static_cast<unsigned long long>(s.unknownPc), static_cast<unsigned long long>(s.ended), static_cast<unsigned long long>(s.budget),\n"
++                   "                     static_cast<unsigned long long>(s.handover));\n"
++                   "        for (uint32_t i = 0; i < 8u && s.pcHits[i]; ++i)\n"
++                   "            std::fprintf(stderr, \" %04x:%u\", s.pcs[i], s.pcHits[i]);\n"
++                   "        std::fprintf(stderr, \"\\n\");\n    }\n}\n\n";
          for (uint32_t block = 0; block < blocks.size(); ++block)
              out << "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" << hex64(hash) << ", " << block
                  << "u>(VU1Interpreter &vu, Vu1FastCtx &ctx);\n";
@@ -1467,20 +1491,31 @@ index 8b44b4c..b0b0b16 100644
 +        if (scheduled)
 +        {
 +            // the scheduled program needs an empty pipeline (any MSCAL, an MSCNT after an end)
-+            out << "    bool clear = vu.m_flagValid == 0u && !vu.m_fdiv.valid && !vu.m_efu[0].valid && !vu.m_efu[1].valid && vu.m_storeValid == 0u &&\n"
-+                   "                 (vu.m_vfWriteValid | vu.m_viWriteValid | vu.m_accWriteValid) == 0u && !vu.m_state.branchPending && !vu.m_state.ebit &&\n"
-+                   "                 !vu.m_state.haltAfterDelaySlot && !vu.m_stopRequested && !vu.m_xgkick.active && !vu.m_viBranchBackupValid &&\n"
-+                   "                 vu.m_efuResourceReady <= vu.m_cycle && args.dataSize == kFastMemSize && args.codeSize == kFastCodeSize && args.vuData &&\n"
-+                   "                 vu.m_unit == VU1Interpreter::Unit::VU1;\n"
-+                   "    if (clear)\n"
++            out << "    const bool pipeline = vu.m_flagValid == 0u && !vu.m_fdiv.valid && !vu.m_efu[0].valid && !vu.m_efu[1].valid && vu.m_storeValid == 0u &&\n"
++                   "                          (vu.m_vfWriteValid | vu.m_viWriteValid | vu.m_accWriteValid) == 0u && vu.m_efuResourceReady <= vu.m_cycle;\n"
++                   "    const bool state = !vu.m_state.branchPending && !vu.m_state.ebit && !vu.m_state.haltAfterDelaySlot && !vu.m_stopRequested &&\n"
++                   "                       !vu.m_viBranchBackupValid && args.dataSize == kFastMemSize && args.codeSize == kFastCodeSize && args.vuData &&\n"
++                   "                       vu.m_unit == VU1Interpreter::Unit::VU1;\n"
++                   "    const bool xgkick = !vu.m_xgkick.active;\n"
++                   "    bool ready = true;\n"
++                   "    for (const auto &lanes : vu.m_vfReady)\n"
++                   "        for (const uint64_t cycle : lanes)\n"
++                   "            ready = ready && cycle <= vu.m_cycle;\n"
++                   "    for (const uint64_t cycle : vu.m_viReady)\n"
++                   "        ready = ready && cycle <= vu.m_cycle;\n"
++                   "    for (const uint64_t cycle : vu.m_accReady)\n"
++                   "        ready = ready && cycle <= vu.m_cycle;\n"
++                   "    const bool clear = pipeline && state && xgkick && ready;\n"
++                   "    const bool stats = schedStatsOn();\n"
++                   "    if (stats)\n"
 +                   "    {\n"
-+                   "        for (const auto &lanes : vu.m_vfReady)\n"
-+                   "            for (const uint64_t ready : lanes)\n"
-+                   "                clear = clear && ready <= vu.m_cycle;\n"
-+                   "        for (const uint64_t ready : vu.m_viReady)\n"
-+                   "            clear = clear && ready <= vu.m_cycle;\n"
-+                   "        for (const uint64_t ready : vu.m_accReady)\n"
-+                   "            clear = clear && ready <= vu.m_cycle;\n"
++                   "        ++schedStats.calls;\n"
++                   "        schedStats.pipeline += !pipeline;\n"
++                   "        schedStats.state += !state;\n"
++                   "        schedStats.xgkick += !xgkick;\n"
++                   "        schedStats.ready += !ready;\n"
++                   "        if ((schedStats.calls & 0xFFFFu) == 0u)\n"
++                   "            schedReport(" << hex64(hash) << ");\n"
 +                   "    }\n"
 +                   "    if (clear && schedulingEnabled())\n"
 +                   "    {\n"
@@ -1499,7 +1534,16 @@ index 8b44b4c..b0b0b16 100644
 +                   "        ctx.mem = args.vuData;\n"
 +                   "        ctx.gs = args.gs;\n"
 +                   "        ctx.memory = args.memory;\n"
++                   "        const uint32_t startPc = vu.m_state.pc;\n"
 +                   "        const StepResult result = fastBlock<" << hex64(hash) << ", " << hx(sched::kSchedBlock) << ">(vu, ctx);\n"
++                   "        if (stats)\n"
++                   "        {\n"
++                   "            if (result == StepResult::Fallback)\n"
++                   "                schedUnknownPc(startPc);\n"
++                   "            schedStats.ended += result == StepResult::Ended;\n"
++                   "            schedStats.budget += result == StepResult::Budget;\n"
++                   "            schedStats.handover += result == StepResult::Continue;\n"
++                   "        }\n"
 +                   "        if (result != StepResult::Fallback)\n"
 +                   "        {\n"
 +                   "            xgkickSync(vu, ctx, ctx.cycle);\n"
@@ -1519,7 +1563,7 @@ index 8b44b4c..b0b0b16 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +2888,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +2932,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);
