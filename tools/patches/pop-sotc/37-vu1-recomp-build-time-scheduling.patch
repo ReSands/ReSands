@@ -1,4 +1,4 @@
-From 925d93f3133fb1cf13380dd6e24d1ad0953d7351 Mon Sep 17 00:00:00 2001
+From 2f66384778150ea5b9b7a03931cc3d8ade3d1893 Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -12,10 +12,30 @@ unknown JR targets and the budget stop hand over to the per-pair code with the e
 Entry points come from <capture dir>/entries.txt. PS2X_VU1_SCHED=0 turns it off at run time.
 The verifier treats ready cycles at or before the unit's cycle as equal (they stall nothing).
 ---
+ ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
- ps2xTest/tools/vu1_recomp.cpp           | 1105 ++++++++++++++++++++++-
- 2 files changed, 1109 insertions(+), 14 deletions(-)
+ ps2xTest/tools/vu1_recomp.cpp           | 1107 ++++++++++++++++++++++-
+ 3 files changed, 1119 insertions(+), 14 deletions(-)
 
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 9f2f4d4..367004e 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -605,6 +605,14 @@ if(PS2X_VU1_GENERATED_SOURCES)
+     if(MSVC)
+         set_source_files_properties(${PS2X_VU1_GENERATED_SOURCES} PROPERTIES
+             COMPILE_OPTIONS "/bigobj;/fp:precise;/arch:AVX2;/W0")
++        # A build-time scheduled program is one function of up to ~3,000 nodes. Above MSVC's huge-function
++        # threshold it stops optimizing, including stack slot reuse: frames of 0.4-2.6 MB overflowed the VU1
++        # thread's stack (19 Oct 2026). With the switch the frame is ~1.6 KB (compile ~6x longer).
++        file(GLOB PS2X_VU1_SCHED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/vu1_generated/*_sched.cpp")
++        if(PS2X_VU1_SCHED_SOURCES)
++            set_source_files_properties(${PS2X_VU1_SCHED_SOURCES} PROPERTIES
++                COMPILE_OPTIONS "/bigobj;/fp:precise;/arch:AVX2;/W0;/d2OptimizeHugeFunctions")
++        endif()
+     endif()
+     target_compile_definitions(ps2EntryRunner PRIVATE PS2X_HAS_VU1_PROGRAMS=1)
+ endif()
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 index d557322..401f2fd 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
@@ -46,7 +66,7 @@ index d557322..401f2fd 100644
      if (vu.m_efuResourceReady != shadow->m_efuResourceReady)
          note("efuReady");
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..27da878 100644
+index 8b44b4c..cd7e226 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
 @@ -26,6 +26,9 @@ namespace
@@ -204,7 +224,7 @@ index 8b44b4c..27da878 100644
          case 0x3C:
              if (it != 0u)
                  viSet(it, laneBits(fs, fsf) + " & 0xFFFFu");
-@@ -1401,6 +1454,916 @@ namespace
+@@ -1401,6 +1454,918 @@ namespace
          return !p.reserved && !p.branch && !p.d.eBit && !p.d.dBit && !p.d.tBit;
      }
  
@@ -965,7 +985,8 @@ index 8b44b4c..27da878 100644
 +            return "n" + num(id);
 +        }
 +
-+        std::string emitNode(const Graph &g, uint32_t id)
++        // cold: hand-over blocks, placed after all nodes so the hot path stays compact
++        std::string emitNode(const Graph &g, uint32_t id, std::string &cold)
 +        {
 +            const Node &n = g.nodes[id];
 +            std::string out = nodeLabel(id) + ": // " + label(n.pc) + (n.body ? " after XGKICK stall" : "") + "\n";
@@ -980,14 +1001,14 @@ index 8b44b4c..27da878 100644
 +            if (!n.body)
 +            {
 +                const uint32_t stall = n.dyn ? 0u : n.stall;
-+                out += "        if (cyc" + (stall ? " + " + num(stall) + "u" : std::string()) + " >= budget)\n        {\n" + materialize(n.st) + "            epc = " +
-+                       hx(n.pc) + "; goto x_deopt;\n        }\n";
++                out += "        if (cyc" + (stall ? " + " + num(stall) + "u" : std::string()) + " >= budget) goto b" + num(id) + ";\n";
++                cold += "b" + num(id) + ":\n" + materialize(n.st) + "        epc = " + hx(n.pc) + "; goto x_deopt;\n";
 +            }
 +            if (n.dyn)
 +            {
 +                out += "        {\n            const uint64_t c0 = cyc;\n";
-+                out += "            if (!xgkickStall(vu, ctx, cyc, c0 + " + num(n.s0) + "u, budget))\n            {\n" + materialize(n.st, "c0") +
-+                       "                epc = " + hx(n.pc) + "; goto x_runaway;\n            }\n";
++                out += "            if (!xgkickStall(vu, ctx, cyc, c0 + " + num(n.s0) + "u, budget)) { kc0 = c0; goto k" + num(id) + "; }\n";
++                cold += "k" + num(id) + ":\n" + materialize(n.st, "kc0") + "        epc = " + hx(n.pc) + "; goto x_runaway;\n";
 +                out += "            const uint64_t waited = cyc - c0;\n";
 +                out += "            switch (waited < " + num(n.kmax) + "u ? waited : " + num(n.kmax) + "u)\n            {\n";
 +                for (size_t c = 0; c < n.cases.size(); ++c)
@@ -1020,9 +1041,8 @@ index 8b44b4c..27da878 100644
 +                out += "        switch (jt)\n        {\n";
 +                for (const auto &[pc, target] : n.dynTargets)
 +                    out += "        case " + hx(pc) + ": goto " + nodeLabel(target) + ";\n";
-+                out += "        default: break;\n        }\n";
-+                out += materialize(n.after);
-+                out += "        epc = jt; goto x_deopt;\n";
++                out += "        default: goto j" + num(id) + ";\n        }\n";
++                cold += "j" + num(id) + ":\n" + materialize(n.after) + "        epc = jt; goto x_deopt;\n";
 +                break;
 +            case Node::End:
 +                out += materialize(n.after, "cyc", true);
@@ -1044,15 +1064,17 @@ index 8b44b4c..27da878 100644
 +            gView.local = true;
 +            gView.record = true;
 +            std::string body;
++            std::string cold;
 +            for (uint32_t id = 0; id < g.nodes.size(); ++id)
-+                body += emitNode(g, id);
++                body += emitNode(g, id, cold);
++            body += cold;
 +            const RegView view = gView;
 +            gView = RegView{};
 +
 +            std::string out = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock) +
 +                              ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
 +            out += "    uint64_t cyc = ctx.cycle;\n    const uint64_t budget = ctx.budget;\n    const uint8_t *const mem = ctx.mem;\n    (void)mem;\n";
-+            out += "    uint32_t epc = 0u;\n    bool tk = false;\n    uint32_t jt = 0u;\n    int32_t bk = 0;\n    uint32_t endBackup = 0u;\n";
++            out += "    uint32_t epc = 0u;\n    uint64_t kc0 = 0u;\n    (void)kc0;\n    bool tk = false;\n    uint32_t jt = 0u;\n    int32_t bk = 0;\n    uint32_t endBackup = 0u;\n";
 +            out += "    (void)tk; (void)jt; (void)bk;\n";
 +            out += "    switch (vu.m_state.pc)\n    {\n";
 +            for (const auto &[pc, id] : g.entries)
@@ -1121,7 +1143,7 @@ index 8b44b4c..27da878 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2510,125 @@ namespace
+@@ -1547,17 +2512,125 @@ namespace
                  return false;
          }
  
@@ -1248,7 +1270,7 @@ index 8b44b4c..27da878 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +2650,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +2652,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);
