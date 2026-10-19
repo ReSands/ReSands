@@ -91,3 +91,10 @@ keeps only what carries over to other projects.
   tasks); not at open-ended discovery.
 - **Write down the why**, with addresses and evidence. The next session (or person) needs the reason, not just
   the result.
+- **Find where code comes from before keying anything on a captured image.** PoP's VU "images" were really 10
+  ELF programs plus stale tails from earlier uploads; keying compiled code on the whole image missed every new
+  combination (the 19 Oct death scene at 40 fps). Keying on the source program covers them all, and also
+  removes the need to record or ship images.
+- **A model's "already happened" values are not state.** Verifiers that compare bookkeeping (ready cycles in
+  the past, flag slots) byte for byte reject code that is equivalent but keeps less bookkeeping; normalize
+  what cannot influence the future (a ready cycle at or before now) and keep comparing everything else.

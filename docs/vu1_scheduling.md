@@ -67,17 +67,41 @@ Done when the 18 saves under 60 hold 60, or a profile shows plainly what limits 
   today's ~30 min. It could also come out smaller, since the flag and cycle bookkeeping goes away. Measured in
   step 2 and step 7.
 
-## Related gap before publishing 1.0: where a new user's VU images come from
+## Progress (19 Oct 2026)
 
-Compiled programs are matched by a hash of the whole code image: 16 KB for VU1, 4 KB for VU0. Our 35 VU1 images
-were recorded from our own playthrough saves. A user building from a fresh ISO has none of them, so every scene
-falls back to the interpreter: correct but slow, like the fights before 18 Oct.
+- **Step 0 (survey), done.** Road Trip's `tools/vu1recomp/vu1recomp.py` (cloned to `~/tools/surveys/roadtrip`)
+  walks `(pc, abstract pipeline state)` nodes: remaining latency per VF lane / VI / ACC, a fixed set of flag
+  slots, FDIV, the branch in flight and the E bit; an XGKICK's data-dependent wait becomes a switch over the
+  few states it can lead to; JR targets are the link labels (pc+16 after BAL/JALR); flag liveness is a backward
+  pass. Our runtime meets its entry assumption: MSCAL -> `execute()` -> `resetScheduler()` (empty pipeline),
+  MSCNT -> `resume()` after an E-bit end. The generated code still checks it (pipelines empty, nothing pending)
+  and uses the per-pair code otherwise.
+- **PoP's flag use** (all 10 programs): no status reader at all (FS*), FMAND in a few places, clip readers
+  (FCAND/FCOR/FCGET) heavily, FCSET only in 0x4DAC8C, EFU (ESIN/MFP) in two programs, RINIT/RGET/RNEXT in one.
+- **Built: runtime patch 37** (`vu1_recomp`, `VU1R_SCHED=1` at build time; `PS2X_VU1_SCHED=0` turns it off at
+  run time for A/B in one build).
+  - One function per program over all nodes from its entry points (`<capture dir>/entries.txt`, written by
+    `tools/vu1progs.py --check`, plus every E-bit continuation). Registers live in locals for the whole run.
+  - Stalls, cycle counts and flag commits are constants. MAC/status flags are only computed where a later
+    FMAND or the program end can see them: **315 of 4,808 FMAC flag producers are kept**. Status sticky bits
+    are still accumulated cheaply (the end state stays exact). FDIV results are computed inline and committed
+    at their cycle.
+  - Hand-overs to the per-pair code with the exact pipeline state ("deopt"): pairs it does not handle (EFU,
+    generic lower ops, padding), unknown JR targets, and the budget stop (checked at every node so it stops at
+    the same pair as the per-pair code). Over the 11 programs: 15,030 nodes, 6 hand-over nodes.
+  - Verifier change in the same patch: ready cycles at or before the unit's cycle compare as equal (they stall
+    nothing; the scheduled code writes only the ones still in the future).
+  - Generated code: 0.2-2.3 MB per program (largest: 42 s at -O2 in clang on the Mac).
+- Results of the first PC build (verify, fps on/off): below when measured.
 
-We cannot ship the images, because they are game code. The plan is to ship a recipe instead:
+## Where a new user's VU images come from (solved 19 Oct 2026)
 
-- the list of image hashes;
-- for each image, where its pieces come from on the disc (ELF or bigfile offsets and the upload layout);
-- a build step that puts the images together from the user's own ISO and checks each hash before compiling.
-
-This needs finding where PoP keeps its microprograms and how it uploads them (unchecked). It is not part of the
-scheduling work, but it is a blocker for 1.0's "users build it themselves" model.
+PoP keeps every VU microprogram in the ELF as a VIF MPG packet that loads at VU address 0
+(0x4CD50C-0x4E4DEC in SLUS_207.43). The 16 KB image the runtime sees is the current program plus whatever an
+earlier, longer program left behind, which is why whole-image hashes kept producing "new" images (the death
+scene of 19 Oct ran on the interpreter at 39-43 fps that way). `tools/vu1progs.py` writes each program
+zero-padded from the user's own ELF; the runtime matches compiled programs by zero-padded prefix (upstream
+patch 33, our 35 sends pairs past a program's end to the interpreter), so 11 compiled programs cover every
+combination. Nothing to ship but the tool. Two small uploads at other addresses (0x4E4A6C: 0x20 bytes at VU
+0x400; 0x4E50EC: 0xA0 bytes at 0x200) were never seen in a capture; an image with one would fall back to the
+interpreter.
