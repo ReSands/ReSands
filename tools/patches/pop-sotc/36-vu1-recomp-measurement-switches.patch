@@ -1,0 +1,112 @@
+From c0130cba1e639527815c14f22472d61328691456 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 19 Oct 2026 08:48:47 +0100
+Subject: [PATCH] vu1_recomp: measurement-only switches
+ VU1R_EXPERIMENT=noflags,nostall
+
+Drop the FMAC flag pipeline pushes or the stall bookkeeping from the generated
+code. The output is not exact; it only shows what each part costs.
+---
+ ps2xTest/tools/vu1_recomp.cpp | 32 +++++++++++++++++++++++++++-----
+ 1 file changed, 27 insertions(+), 5 deletions(-)
+
+diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
+index 0bb1a90..8b44b4c 100644
+--- a/ps2xTest/tools/vu1_recomp.cpp
++++ b/ps2xTest/tools/vu1_recomp.cpp
+@@ -3,6 +3,8 @@
+ #include <algorithm>
+ #include <cinttypes>
+ #include <cstdio>
++#include <cstdlib>
++#include <cstring>
+ #include <filesystem>
+ #include <fstream>
+ #include <functional>
+@@ -20,6 +22,10 @@ namespace
+     // per image: 16 KB for VU1 images (vu1_*.bin), 4 KB for VU0 microprograms (vu0_*.bin)
+     uint32_t g_codeSize = 16u * 1024u;
+     bool g_vu0 = false;
++    // Measurement-only switches (VU1R_EXPERIMENT=noflags,nostall): the output is NOT exact. They show what the
++    // FMAC flag pipeline and the stall bookkeeping cost, to decide what build-time scheduling must remove first.
++    bool g_expNoFlags = false;
++    bool g_expNoStall = false;
+     constexpr uint32_t kDefaultBlockPairs = 128u;
+     constexpr uint32_t kMaxVfLatency = 4u;
+     constexpr uint32_t kMaxViLatency = 4u;
+@@ -1004,7 +1010,9 @@ namespace
+             const BranchVi *branchViPtr = nullptr;
+             if (known)
+             {
+-                out += knownStall(p, *known);
++                const std::string knownStallCode = knownStall(p, *known);
++                if (!g_expNoStall)
++                    out += knownStallCode;
+                 out += "        s" + known->id + "_" + num(known->pos) + " = cyc;\n";
+                 if (recordBackup)
+                 {
+@@ -1035,7 +1043,8 @@ namespace
+             else
+             {
+                 out += "        if (cyc >= budget) " + stub + "\n";
+-                out += stall(p, stub);
++                if (!g_expNoStall || A::pipeline(d.lowerUsage) == A::kPipeXgkick)
++                    out += stall(p, stub);
+             }
+             out += "        {\n";
+             if (recordBackup && !known)
+@@ -1044,7 +1053,12 @@ namespace
+             std::string fmacValue = up.value;
+             std::string fmacDecl = "__m128 un;";
+             std::string fmacAfter;
+-            if (known && up.isFmac)
++            if (g_expNoFlags && up.isFmac)
++            {
++                fmacValue = "fmacF" + up.fmacCall + ", fl)";
++                fmacDecl = "__m128 un; FmacFlags fl;";
++            }
++            else if (known && up.isFmac)
+             {
+                 known->fmacPos.push_back(known->pos);
+                 if (known->pos == known->lastCollapsed)
+@@ -1280,7 +1294,7 @@ namespace
+             gView.vfRawStored.clear();
+             Known k;
+             k.id = plan.id;
+-            if (!plan.readsStatus && aggregateFlags)
++            if (!plan.readsStatus && aggregateFlags && !g_expNoFlags)
+             {
+                 for (const uint32_t position : plan.fmacPos)
+                     if (position + kFmacLatency <= plan.pos)
+@@ -1298,12 +1312,14 @@ namespace
+             out += "        if (cyc + " + num(k.bound + kMaxVfLatency - 1u) + "u > budget)" + fallback;
+             for (const auto &[position, exprs] : k.checks)
+             {
++                if (g_expNoStall)
++                    break;
+                 std::string max = exprs[0];
+                 for (size_t i = 1; i < exprs.size(); ++i)
+                     max = "rmax(" + max + ", " + exprs[i] + ")";
+                 out += "        if (" + max + " > cyc + " + num(position) + "u)" + fallback;
+             }
+-            if (k.fdivChecked)
++            if (k.fdivChecked && !g_expNoStall)
+                 out += "        if (vu.m_fdiv.valid && vu.m_fdiv.readyCycle > cyc + " + num(k.fdivK) + "u)" + fallback;
+             out += "    {\n        uint64_t ";
+             for (uint32_t i = 0; i < k.pos; ++i)
+@@ -1563,6 +1579,12 @@ int main(int argc, char **argv)
+     const std::filesystem::path outDir = argv[2];
+     const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
+     std::filesystem::create_directories(outDir);
++    if (const char *experiment = std::getenv("VU1R_EXPERIMENT"))
++    {
++        g_expNoFlags = std::strstr(experiment, "noflags") != nullptr;
++        g_expNoStall = std::strstr(experiment, "nostall") != nullptr;
++        std::cout << "EXPERIMENT (output not exact): noflags=" << g_expNoFlags << " nostall=" << g_expNoStall << "\n";
++    }
+     for (const auto &entry : std::filesystem::directory_iterator(outDir))
+     {
+         const std::string name = entry.path().filename().string();
+-- 
+2.54.0 (Apple Git-157)
+
