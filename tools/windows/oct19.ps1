@@ -20,12 +20,51 @@
 # (game\analysis\native\prize\fps_<group>.txt), profiles of the worst fight with nothing and everything
 # skipped (game\analysis\prof\prize_<group>.*), then VU1 traces (PS2X_VU1_TRACE) of two water saves for the
 # water program P6 (game\analysis\vu1trace\<save>.trace + the vu1_<hash>.bin images): inputs for the port.
+# -World (night of 19-20 Oct, renderer step 1: POP_NATIVE_WORLD): build and offline checks only, no boots
+# (the TV is off). Runtime patch 38 (GS host-inject hook, runner extra libraries) into the sotc checkout
+# and the runtime worktree, a fast play build that links the native renderer (rebuild.ps1 builds
+# game\native-build's pop_native_render + volk), then on the fight save: pop_state_frame --world (the
+# native draws), pop_world_test (the runtime side with a stand-in GS: Vulkan on this GPU, timings) and
+# the viewer's --gsz for the comparison (game\analysis\native\world\).
 # Run through start-job.ps1 (the window needs the desktop session).
 param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments, [switch]$Sched,
-      [switch]$Native, [switch]$TracesOnly)
+      [switch]$Native, [switch]$TracesOnly, [switch]$World)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 $Rt = 'C:\tools\PS2Recomp-sotc'
+
+if ($World) {
+    if (-not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'host-inject hook')) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') runtime patch 38"
+        git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\38-gs-host-inject-hook-runner-extra-libs.patch"
+        if ($LASTEXITCODE -ne 0) { git -C $Rt am --abort; "PATCH 38 FAILED"; exit 1 }
+    }
+    git -C "$Root\game\recomp-sotc\runtime-src" checkout -q --detach (git -C $Rt rev-parse HEAD)
+    "runtime worktree at $(git -C "$Root\game\recomp-sotc\runtime-src" log --oneline -1)"
+    if (-not $NoBuild) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fast play build (POP_NATIVE_WORLD, native renderer linked)"
+        & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc $Rt -Out game\recomp-sotc
+        if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
+    }
+    "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') offline checks (pop_state_frame --world, pop_world_test)"
+    $NB = "$Root\game\native-build"
+    $out = "$Root\game\analysis\native\world"
+    New-Item -ItemType Directory -Force $out | Out-Null
+    cmake -S "$Root\tools\native" -B $NB "-DPOP_SOTC_SRC=$Rt" "-DPOP_RUNTIME_SRC=$Root\game\recomp-sotc\runtime-src" > "$out\configure.log" 2>&1
+    cmake --build $NB --target pop_state_frame pop_world_test pop_native_view > "$out\build.log" 2>&1
+    if ($LASTEXITCODE -ne 0) { "NATIVE TOOLS BUILD FAILED"; Select-String -Path "$out\build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
+    Set-Location "$Root\game\ps2\disc"
+    $st = 'states\play_20261019_185602.state'
+    & "$NB\pop_state_frame.exe" $st "$out\fight.world.pnf" --world --bigfile DATA\PRINCE.BF --packindex "$Root\game\analysis\packindex.txt" > "$out\state_frame.log" 2>&1
+    Select-String -Path "$out\state_frame.log" -Pattern 'world frame|packs loaded'
+    '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1' | Set-Content "$out\identity.clip"
+    & "$NB\pop_native_view.exe" "$out\fight.world.pnf" "$out\identity.clip" "$out\fight.world.png" --frame --gsz "$out\fight.world.gsz" 2>&1 | Select-Object -Last 1
+    & "$NB\pop_world_test.exe" "$out\fight.world.pnf" "$out\fight.test" 60 2>&1 | Tee-Object "$out\world_test.log" | Select-Object -Last 4
+    $same = (Get-FileHash "$out\fight.test.gsz").Hash -eq (Get-FileHash "$out\fight.world.gsz").Hash
+    "pop_world_test GS Z identical to the viewer's: $same"
+    Set-Location $Root
+    exit 0
+}
 
 if ($Native) {
     # boots need an active display: with the TV off, OpenGL Present stalls every boot to ~4 fps (19 Oct)
