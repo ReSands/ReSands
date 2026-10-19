@@ -1,4 +1,4 @@
-From ffd58a31871c2edcfb79ed02d78e365a59ad16cd Mon Sep 17 00:00:00 2001
+From 68389ae4d32a6ca8ae80bbb302bf91d7ba08b50f Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -9,14 +9,15 @@ entry the runtime's scheduler is fully determined by the code. vu1_recomp now ru
 flag commits and cycle counts become constants, MAC/status flags nothing reads are not computed, an
 XGKICK's data-dependent wait becomes a switch over the possible pipeline states. Unsupported pairs,
 unknown JR targets and the budget stop hand over to the per-pair code with the exact pipeline state.
-Entry points come from <capture dir>/entries.txt. PS2X_VU1_SCHED=0 turns it off at run time.
+EFU ops ESIN/EATAN/EEXP and WAITP are scheduled too (P in a local); entries are keyed by pc and the cycles the EFU
+is still busy after the previous end. Entry points come from <capture dir>/entries.txt. PS2X_VU1_SCHED=0 turns it off at run time.
 The verifier treats ready cycles at or before the unit's cycle as equal (they stall nothing).
 ---
  ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
  ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |    1 +
- ps2xTest/tools/vu1_recomp.cpp           | 1387 ++++++++++++++++++++++-
- 4 files changed, 1400 insertions(+), 14 deletions(-)
+ ps2xTest/tools/vu1_recomp.cpp           | 1470 ++++++++++++++++++++++-
+ 4 files changed, 1482 insertions(+), 15 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
 index 9f2f4d4..cd4c44e 100644
@@ -79,20 +80,21 @@ index cee67a1..c897f92 100644
      GS *gs = nullptr;
      PS2Memory *memory = nullptr;
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..9033b7d 100644
+index 8b44b4c..81a4034 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
-@@ -26,6 +26,9 @@ namespace
+@@ -26,6 +26,10 @@ namespace
      // FMAC flag pipeline and the stall bookkeeping cost, to decide what build-time scheduling must remove first.
      bool g_expNoFlags = false;
      bool g_expNoStall = false;
 +    // emission for the build-time scheduled program (see "Build-time scheduled programs" below)
 +    bool g_sched = false;
++    int g_schedEfuSlot = -1;   // the EFU result slot of the pair being emitted (scheduled code)
 +    std::map<uint64_t, std::vector<uint32_t>> g_entries;
      constexpr uint32_t kDefaultBlockPairs = 128u;
      constexpr uint32_t kMaxVfLatency = 4u;
      constexpr uint32_t kMaxViLatency = 4u;
-@@ -161,6 +164,8 @@ namespace
+@@ -161,6 +165,8 @@ namespace
          if (reg == 0u)
              return "kVf0()";
          noteVf(reg, false);
@@ -101,7 +103,7 @@ index 8b44b4c..9033b7d 100644
          if (gView.vfRawStored.count(reg))
              return "_mm_loadu_ps(" + vfMem(reg) + ")";
          return (gView.vfClean.count(reg) ? "vn" : "vr") + num(reg);
-@@ -207,6 +212,9 @@ namespace
+@@ -207,6 +213,9 @@ namespace
          const std::string r = "vr" + num(reg);
          const std::string n = "vn" + num(reg);
          const bool full = dest == hx(0xFu);
@@ -111,7 +113,7 @@ index 8b44b4c..9033b7d 100644
          const bool clean = gView.vfClean.count(reg) != 0u;
          const bool stored = gView.vfRawStored.count(reg) != 0u;
          if (raw == norm && (full || clean))
-@@ -233,6 +241,8 @@ namespace
+@@ -233,6 +242,8 @@ namespace
          if (reg == 0u)
              return "";
          noteVf(reg, true);
@@ -120,7 +122,7 @@ index 8b44b4c..9033b7d 100644
          if (raw == norm)
          {
              gView.vfClean.insert(reg);
-@@ -470,6 +480,11 @@ namespace
+@@ -470,6 +481,11 @@ namespace
          const uint32_t imm12 = (((lower >> 21) & 1u) << 11) | (lower & 0x7FFu);
          const uint32_t imm24 = lower & 0xFFFFFFu;
          const std::string status = "(vu.m_state.status & 0xFFFu)";
@@ -132,7 +134,7 @@ index 8b44b4c..9033b7d 100644
  
          switch (opHi)
          {
-@@ -495,16 +510,16 @@ namespace
+@@ -495,16 +511,16 @@ namespace
              return e;
          }
          case 0x10:
@@ -152,7 +154,7 @@ index 8b44b4c..9033b7d 100644
              return e;
          case 0x14:
              if (it != 0u)
-@@ -529,21 +544,21 @@ namespace
+@@ -529,21 +545,21 @@ namespace
              return e;
          case 0x18:
              if (it != 0u)
@@ -179,7 +181,7 @@ index 8b44b4c..9033b7d 100644
              }
              return e;
          case 0x20:
-@@ -649,16 +664,54 @@ namespace
+@@ -649,16 +665,54 @@ namespace
              storeVf(fs, qa() + vi(it) + ", 0)");
              return e;
          case 0x38:
@@ -237,7 +239,40 @@ index 8b44b4c..9033b7d 100644
          case 0x3C:
              if (it != 0u)
                  viSet(it, laneBits(fs, fsf) + " & 0xFFFFu");
-@@ -1401,6 +1454,1140 @@ namespace
+@@ -682,7 +736,8 @@ namespace
+         case 0x64:
+             if (dest != 0u)
+             {
+-                e.code = "commitEfu(vu, cyc); { const __m128 pv = _mm_set1_ps(vu.m_state.p); " + writeV(ft, "pv", "vnorm(pv)", dst) + " }";
++                e.code = (g_sched ? std::string("{ const __m128 pv = _mm_set1_ps(pcur); ") : std::string("commitEfu(vu, cyc); { const __m128 pv = _mm_set1_ps(vu.m_state.p); ")) +
++                         writeV(ft, "pv", "vnorm(pv)", dst) + " }";
+                 e.writesVf0 = ft == 0u;
+             }
+             return e;
+@@ -695,6 +750,22 @@ namespace
+         case 0x6C:
+             e.code = "xgkickStart(vu, ctx, cyc, " + vi(is) + ");";
+             return e;
++        case 0x79:
++        case 0x7C:
++        case 0x7D:
++        {
++            // ESIN/EATAN/EEXP (scheduled code): queueP without the queue; the slot commits to pcur at its build-time cycle
++            if (!g_sched || g_schedEfuSlot < 0)
++            {
++                generic();
++                return e;
++            }
++            const char *fn = special == 0x79u ? "vuEsin" : (special == 0x7Cu ? "vuEatan" : "vuEexp");
++            const uint32_t latency = special == 0x79u ? 29u : (special == 0x7Cu ? 54u : 44u);
++            e.code = "{ uint32_t ig = 0u; pv" + num(static_cast<uint32_t>(g_schedEfuSlot)) + " = vu.normalizeResult(" + fn + "(vu.normalizeOperand(" +
++                     laneFloat(fs, fsf) + ")), ig); vu.m_efuResourceReady = cyc + " + num(latency - 1u) + "u; }";
++            return e;
++        }
+         case 0x7B:
+             return e;
+         default:
+@@ -1401,6 +1472,1199 @@ namespace
          return !p.reserved && !p.branch && !p.d.eBit && !p.d.dBit && !p.d.tBit;
      }
  
@@ -278,7 +313,9 @@ index 8b44b4c..9033b7d 100644
 +            uint8_t brDelay;
 +            uint16_t brTarget;
 +            uint8_t ebit;
-+            uint8_t pad;
++            uint8_t efuRes;        // cycles until the EFU takes a new op (m_efuResourceReady)
++            uint8_t efuRem[2];     // EFU result slots (m_efu): cycles until P is written, 0 = free
++            uint8_t pad[2];
 +        };
 +
 +        St emptySt()
@@ -308,16 +345,19 @@ index 8b44b4c..9033b7d 100644
 +                m = std::max<uint32_t>(m, r);
 +            for (const uint8_t r : s.slotRem)
 +                m = std::max<uint32_t>(m, r);
++            m = std::max<uint32_t>(m, s.efuRes);
++            for (const uint8_t r : s.efuRem)
++                m = std::max<uint32_t>(m, r);
 +            return std::max<uint32_t>(m, s.fdiv);
 +        }
 +
 +        struct Op
 +        {
-+            enum Kind : uint8_t { CommitFmac, CommitClip, CommitFdiv, DefFmac, UseMac, Exit } kind;
++            enum Kind : uint8_t { CommitFmac, CommitClip, CommitFdiv, CommitEfu, DefFmac, UseMac, Exit } kind;
 +            uint8_t slot = 0;
 +        };
 +
-+        // advanceOneCycle in the interpreter's commit order (flag slots, then FDIV)
++        // advanceOneCycle in the interpreter's commit order (flag slots, FDIV, then the EFU slots by index)
 +        uint32_t advance(St &s, uint32_t cycles, std::vector<Op> &ops)
 +        {
 +            for (uint32_t n = 0; n < cycles; ++n)
@@ -341,6 +381,10 @@ index 8b44b4c..9033b7d 100644
 +                }
 +                if (s.fdiv > 0u && --s.fdiv == 0u)
 +                    ops.push_back({Op::CommitFdiv, 0});
++                s.efuRes = s.efuRes > 0u ? static_cast<uint8_t>(s.efuRes - 1u) : 0u;
++                for (uint32_t slot = 0; slot < 2u; ++slot)
++                    if (s.efuRem[slot] > 0u && --s.efuRem[slot] == 0u)
++                        ops.push_back({Op::CommitEfu, static_cast<uint8_t>(slot)});
 +            }
 +            return cycles;
 +        }
@@ -366,6 +410,7 @@ index 8b44b4c..9033b7d 100644
 +            std::vector<Op> postOps;
 +            int fmacSlot = -1;
 +            int clipSlot = -1;
++            int efuSlot = -1;
 +            // XGKICK dynamic stall: cases s0..kmax, each with its commits and target node
 +            bool dyn = false;
 +            uint32_t s0 = 0;
@@ -402,6 +447,10 @@ index 8b44b4c..9033b7d 100644
 +            }
 +            if (A::pipeline(p.d.lowerUsage) == A::kPipeEfu || p.d.lowerUsage.waitP)
 +            {
++                // the single-lane functions ESIN/EATAN/EEXP and WAITP are scheduled (PoP uses EATAN and MFP); the others hand over
++                const uint32_t special = (lower & 3u) | ((lower >> 4) & 0x7Cu);
++                if (opHi == 0x40u && (special == 0x79u || special == 0x7Bu || special == 0x7Cu || special == 0x7Du))
++                    return true;
 +                why = "EFU";
 +                return false;
 +            }
@@ -422,7 +471,7 @@ index 8b44b4c..9033b7d 100644
 +            std::map<std::string, uint32_t> index;
 +            std::vector<uint32_t> work;
 +            std::vector<uint32_t> linkLabels;
-+            std::map<uint32_t, uint32_t> entries;   // pc -> node
++            std::map<std::pair<uint32_t, uint32_t>, uint32_t> entries;   // (pc, EFU busy cycles at entry) -> node
 +            bool overflow = false;
 +
 +            uint32_t get(uint32_t pc, const St &s, bool body = false)
@@ -471,6 +520,11 @@ index 8b44b4c..9033b7d 100644
 +                const unsigned pipe = A::pipeline(p.d.lowerUsage);
 +                if (!p.d.iBit && (pipe == A::kPipeFdiv || p.d.lowerUsage.waitQ))
 +                    ready = std::max<uint32_t>(ready, s.fdiv);
++                if (!p.d.iBit && pipe == A::kPipeEfu)
++                    ready = std::max<uint32_t>(ready, s.efuRes);
++                if (!p.d.iBit && p.d.lowerUsage.waitP)
++                    for (const uint8_t r : s.efuRem)
++                        ready = std::max<uint32_t>(ready, r);
 +                return ready;
 +            }
 +
@@ -561,6 +615,15 @@ index 8b44b4c..9033b7d 100644
 +                    const uint32_t special = (p.d.lower & 3u) | ((p.d.lower >> 4) & 0x7Cu);
 +                    if (opHi == 0x40u && (p.d.lower & 0x3Fu) >= 0x3Cu && special >= 0x38u && special <= 0x3Au)
 +                        s.fdiv = static_cast<uint8_t>(p.d.lowerUsage.latency);
++                    if (opHi == 0x40u && (p.d.lower & 0x3Fu) >= 0x3Cu && (special == 0x79u || special == 0x7Cu || special == 0x7Du))
++                    {
++                        // queueP: the first free slot; the EFU takes the next op one cycle before the result
++                        n.efuSlot = s.efuRem[0] == 0u ? 0 : (s.efuRem[1] == 0u ? 1 : -1);
++                        if (n.efuSlot < 0)
++                            return fail("EFU slots full");
++                        s.efuRem[n.efuSlot] = static_cast<uint8_t>(p.d.lowerUsage.latency);
++                        s.efuRes = static_cast<uint8_t>(p.d.lowerUsage.latency - 1u);
++                    }
 +                }
 +                // markPairWrites
 +                const auto lw = p.d.lowerUsage.vfWrite;
@@ -672,16 +735,34 @@ index 8b44b4c..9033b7d 100644
 +                return out;
 +            }
 +
++            // Entries start with an empty pipeline, except that the EFU may still be busy after a program end
++            // (m_efuResourceReady is not reset by an MSCNT): each end with the EFU busy adds the entry (its
++            // continuation, busy cycles left), until no new ones appear.
 +            void build(const std::vector<uint32_t> &entryPcs)
 +            {
++                std::vector<std::pair<uint32_t, uint32_t>> pending;
 +                for (const uint32_t pc : entryPcs)
-+                    if (pc / 8u < used)
-+                        entries[pc] = get(pc, emptySt());
-+                while (!work.empty())
++                    pending.emplace_back(pc, 0u);
++                while (!pending.empty())
 +                {
-+                    const uint32_t id = work.back();
-+                    work.pop_back();
-+                    step(id);
++                    for (const auto &[pc, busy] : pending)
++                        if (pc / 8u < used && !entries.count({pc, busy}))
++                        {
++                            St s = emptySt();
++                            s.efuRes = static_cast<uint8_t>(busy);
++                            entries[{pc, busy}] = get(pc, s);
++                        }
++                    pending.clear();
++                    while (!work.empty())
++                    {
++                        const uint32_t id = work.back();
++                        work.pop_back();
++                        step(id);
++                    }
++                    for (const Node &n : nodes)
++                        if (!n.deopt && !n.dyn && n.term == Node::End && n.after.efuRes != 0u && n.endPc / 8u < used &&
++                            !entries.count({n.endPc, n.after.efuRes}))
++                            pending.emplace_back(n.endPc, n.after.efuRes);
 +                }
 +                for (const Node &n : nodes)
 +                    for (const uint32_t t : targets(n))
@@ -830,6 +911,8 @@ index 8b44b4c..9033b7d 100644
 +                return "        clip = fc" + num(op.slot) + ";\n";
 +            case Op::CommitFdiv:
 +                return "        vu.m_state.q = qpend; sdi = qdi; sticky |= qdi << 6;\n";
++            case Op::CommitEfu:
++                return "        pcur = pv" + num(op.slot) + ";\n";
 +            default:
 +                return "";
 +            }
@@ -877,6 +960,10 @@ index 8b44b4c..9033b7d 100644
 +            if (s.fdiv)
 +                out += "        vu.m_fdiv.valid = true; vu.m_fdiv.readyCycle = " + cyc + " + " + num(s.fdiv) +
 +                       "u; vu.m_fdiv.value = qpend; vu.m_fdiv.statusDi = qdi; vu.noteReadyCycle(vu.m_fdiv.readyCycle);\n";
++            for (uint32_t slot = 0; slot < 2u; ++slot)
++                if (s.efuRem[slot])
++                    out += "        vu.m_efu[" + num(slot) + "].valid = true; vu.m_efu[" + num(slot) + "].readyCycle = " + cyc + " + " + num(s.efuRem[slot]) +
++                           "u; vu.m_efu[" + num(slot) + "].value = pv" + num(slot) + "; vu.noteReadyCycle(vu.m_efu[" + num(slot) + "].readyCycle);\n";
 +            if (s.backupReg)
 +                out += "        vu.m_viBranchBackupValue = bk; vu.m_viBranchBackupReg = " + num(s.backupReg) + "u; vu.m_viBranchBackupValid = true;\n";
 +            if (s.brKind == kBrStatic || s.brKind == kBrDyn)
@@ -956,7 +1043,9 @@ index 8b44b4c..9033b7d 100644
 +            };
 +            const bool upperFirst = !d.iBit && d.upperVfShadowReg == 0u;
 +            const std::string earlyUpper = upperFirst ? upperStore() : std::string();
++            g_schedEfuSlot = n.efuSlot;
 +            const LowerEmit low = d.iBit ? LowerEmit{} : lowerEmit(p.pc, d.lower, d.upper, branchViPtr);
++            g_schedEfuSlot = -1;
 +            const std::string lowerCode = low.code.empty() ? "" : "            " + low.code + "\n";
 +            if (d.iBit)
 +            {
@@ -1222,10 +1311,10 @@ index 8b44b4c..9033b7d 100644
 +            return "struct VuSched_" + hex64(hash).substr(2, 16) +
 +                   "\n{\n    __m128 vr[33];\n    __m128 vn[33];\n    __m128 fAccZ, fAccS;\n    uint64_t cyc, kc0;\n    int32_t vi[16];\n"
 +                   "    uint32_t fm[8], fs[8], fc[8];\n    uint32_t node, exit, epc, jt, endBackup, mac, scur, sdi, sticky, clip, wclip, fAccScalar, qdi;\n"
-+                   "    int32_t bk;\n    float qpend;\n    bool tk;\n};\n\n";
++                   "    int32_t bk;\n    float qpend, pcur, pv0, pv1;\n    bool tk;\n};\n\n";
 +        }
 +
-+        const char *kScalars[] = {"kc0", "epc", "jt", "endBackup", "mac", "scur", "sdi", "sticky", "clip", "wclip", "fAccScalar", "qdi", "bk", "qpend", "tk", "fAccZ", "fAccS"};
++        const char *kScalars[] = {"kc0", "epc", "jt", "endBackup", "mac", "scur", "sdi", "sticky", "clip", "wclip", "fAccScalar", "qdi", "bk", "qpend", "pcur", "pv0", "pv1", "tk", "fAccZ", "fAccS"};
 +
 +        struct Emitted
 +        {
@@ -1243,7 +1332,7 @@ index 8b44b4c..9033b7d 100644
 +            const std::string st = "VuSched_" + hex64(hash).substr(2, 16);
 +            // nodes entered from outside their part (driver entries or other parts)
 +            std::vector<bool> entered(g.nodes.size(), false);
-+            for (const auto &[pc, id] : g.entries)
++            for (const auto &[entry, id] : g.entries)
 +                entered[id] = true;
 +            for (uint32_t id = 0; id < g.nodes.size(); ++id)
 +                for (const uint32_t t : g.targets(g.nodes[id]))
@@ -1310,11 +1399,16 @@ index 8b44b4c..9033b7d 100644
 +
 +            std::string d = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock) +
 +                            ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
-+            d += "    " + st + " st;\n    switch (vu.m_state.pc)\n    {\n";
-+            for (const auto &[pc, id] : g.entries)
-+                d += "    case " + hx(pc) + ": st.node = " + num(id) + "u; break;\n";
++            // entry by (pc, cycles the EFU is still busy)
++            d += "    " + st + " st;\n";
++            d += "    const uint64_t efuBusy = vu.m_efuResourceReady > ctx.cycle ? vu.m_efuResourceReady - ctx.cycle : 0u;\n";
++            d += "    if (efuBusy > 0xFFu)\n        return StepResult::Fallback;\n";
++            d += "    switch ((vu.m_state.pc << 8) | static_cast<uint32_t>(efuBusy))\n    {\n";
++            for (const auto &[entry, id] : g.entries)
++                d += "    case " + hx((entry.first << 8) | entry.second) + ": st.node = " + num(id) + "u; break;\n";
 +            d += "    default: return StepResult::Fallback;\n    }\n";
 +            d += "    st.cyc = ctx.cycle; st.kc0 = 0u; st.epc = 0u; st.jt = 0u; st.endBackup = 0u; st.bk = 0; st.tk = false; st.qpend = 0.0f; st.qdi = 0u;\n";
++            d += "    st.pcur = vu.m_state.p; st.pv0 = st.pv1 = 0.0f;\n";
 +            d += "    st.mac = vu.m_state.mac; st.scur = vu.m_state.status & 0xFu; st.sdi = vu.m_state.status & 0x30u; st.sticky = vu.m_state.status & 0xFC0u;\n";
 +            d += "    st.clip = vu.m_state.clip; st.wclip = vu.m_workingClip; st.fAccZ = _mm_setzero_ps(); st.fAccS = _mm_setzero_ps(); st.fAccScalar = 0u;\n";
 +            d += "    for (uint32_t slot = 0; slot < 8u; ++slot) st.fm[slot] = st.fs[slot] = st.fc[slot] = 0u;\n";
@@ -1337,7 +1431,7 @@ index 8b44b4c..9033b7d 100644
 +                d += "    vu.m_state.vi[" + num(reg) + "] = static_cast<int16_t>(st.vi[" + num(reg) + "]);\n";
 +            d += "    vu.m_state.mac = st.mac;\n";
 +            d += "    vu.m_state.status = ((st.sticky | ((stickyOf(st.fAccZ, st.fAccS) | st.fAccScalar) << 6)) & 0xFC0u) | st.sdi | st.scur;\n";
-+            d += "    vu.m_state.clip = st.clip; vu.m_workingClip = st.wclip;\n";
++            d += "    vu.m_state.clip = st.clip; vu.m_workingClip = st.wclip; vu.m_state.p = st.pcur;\n";
 +            d += "    vu.m_state.pc = st.epc;\n    ctx.cycle = st.cyc;\n";
 +            d += "    if (st.exit == 1u)\n    {\n        if (st.endBackup != 0u) { vu.m_viBranchBackupValue = st.bk; vu.m_viBranchBackupReg = static_cast<uint8_t>(st.endBackup); "
 +                 "vu.m_viBranchBackupValid = true; }\n        return StepResult::Ended;\n    }\n";
@@ -1378,7 +1472,7 @@ index 8b44b4c..9033b7d 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2734,183 @@ namespace
+@@ -1547,17 +2811,187 @@ namespace
                  return false;
          }
  
@@ -1490,9 +1584,10 @@ index 8b44b4c..9033b7d 100644
 +        out << "    };\n";
 +        if (scheduled)
 +        {
-+            // the scheduled program needs an empty pipeline (any MSCAL, an MSCNT after an end)
++            // the scheduled program needs an empty pipeline (any MSCAL, an MSCNT after an end); the EFU may still be
++            // busy after an end, the driver picks the entry by it
 +            out << "    const bool pipeline = vu.m_flagValid == 0u && !vu.m_fdiv.valid && !vu.m_efu[0].valid && !vu.m_efu[1].valid && vu.m_storeValid == 0u &&\n"
-+                   "                          (vu.m_vfWriteValid | vu.m_viWriteValid | vu.m_accWriteValid) == 0u && vu.m_efuResourceReady <= vu.m_cycle;\n"
++                   "                          (vu.m_vfWriteValid | vu.m_viWriteValid | vu.m_accWriteValid) == 0u;\n"
 +                   "    const bool state = !vu.m_state.branchPending && !vu.m_state.ebit && !vu.m_state.haltAfterDelaySlot && !vu.m_stopRequested &&\n"
 +                   "                       !vu.m_viBranchBackupValid && args.dataSize == kFastMemSize && args.codeSize == kFastCodeSize && args.vuData &&\n"
 +                   "                       vu.m_unit == VU1Interpreter::Unit::VU1;\n"
@@ -1550,7 +1645,10 @@ index 8b44b4c..9033b7d 100644
 +                   "            if (result == StepResult::Ended)\n"
 +                   "                xgkickAdvance(vu, std::numeric_limits<uint64_t>::max() / 2u);\n"
 +                   "            else if (result == StepResult::Budget)\n"
++                   "            {\n"
 +                   "                commitFlags(vu, ctx, ctx.cycle);\n"
++                   "                commitEfu(vu, ctx.cycle);\n"
++                   "            }\n"
 +                   "            storeFlags(vu, ctx);\n"
 +                   "            vu.m_cycle = ctx.cycle;\n"
 +                   "            vu.m_state.cycles = ctx.cycle;\n"
@@ -1563,7 +1661,7 @@ index 8b44b4c..9033b7d 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +2932,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +3013,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);

@@ -104,13 +104,25 @@ Done when the 18 saves under 60 hold 60, or a profile shows plainly what limits 
   55-56 -> 57-59, `092959` 39-55 -> 44-55, death save 60 both.
 - **Gate statistics** (`PS2X_VU1_SCHED_STATS=1`, every 65536 runs per program): in the fights all programs run
   100% scheduled except **`eea60abc4b18ca8e`: 62% of its runs are not scheduled** (fight: 1.83 M runs, 691 k
-  ended scheduled, 572 k hand over, 572 k start with the pipeline not empty). Cause: `ESIN P, vf22` at 0x0D00
-  (EFU, not supported -> hand-over), and the next run (MSCNT continuation) finds `m_efuResourceReady > m_cycle`
+  ended scheduled, 572 k hand over, 572 k start with the pipeline not empty). Cause: `EATAN P, vf22z` at 0x0D00
+  (EFU, latency 54, not supported -> hand-over; first written down as ESIN, corrected 19 Oct evening), and the next run (MSCNT continuation) finds `m_efuResourceReady > m_cycle`
   (EFU still busy; the runtime's cycle does not advance between runs). `MFP.z vf22, P` at 0x0270/0x04C8 reads it
   in the next run. Same code in `9e37579481796a65`. Profile of the fight (scheduled build): VU thread 88% busy,
   runFast (per-pair) 16% inclusive, processVIF1Data 7.8% self, clipBits 2.7% (not inlined; fixed since).
 
-### Next: EFU in the scheduler (biggest remaining win; user: optimise biggest wins first)
+### EFU in the scheduler (19 Oct evening: built, Mac check clean; PC verify + stats pending)
+
+Done as planned below, with two corrections: the op at 0x0D00 in `eea60abc`/`9e375794` is **EATAN**
+(special 0x7C, latency 54), the only EFU op in all 11 programs (plus MFP at 0x0270/0x04C8), so the scheduler
+takes the single-lane functions ESIN/EATAN/EEXP (and WAITP); and residual entries are added per End node for
+its own continuation (`n.endPc`, `n.after.efuRes`; an MSCAL resets the EFU, so only the MSCNT continuation
+matters). Mac check: 0 EFU hand-overs (left: 4 generic lower, 1 fallback pair), 75 -> 86 entries (EFU busy
+1, 2 or 7 cycles), 15,030 -> 16,008 nodes, 84 -> 89 parts, FMAC flag producers kept 342 of 4,935. Driver
+picks the entry by `(pc << 8) | efuBusy` (efuBusy > 255 or unknown -> per-pair code). Budget exit from the
+scheduled code now also runs `commitEfu(ctx.cycle)` like runFast. Next: PC run `game\jobs\sched.ps1`, check
+verify (no new mismatches) and the gate stats of `eea60abc` (expect ~100% scheduled), then fps on/off.
+
+Original plan:
 
 Interpreter semantics (`ps2_vu1_impl.inl` queueP ~590, decode `ps2_vu1_core.cpp` ~860-935, commitEfu ~2840):
 two result slots `m_efu[2]` {valid, readyCycle, value}; an EFU op takes the first free slot, ready = cycle +
