@@ -447,3 +447,32 @@ own camera). The game's own picture of the same moment: `tools/popstate.py <stat
   Plain scenes 3-7; worst: full-screen effects (rewind flash, white-out, explosion), 2D (pause menu),
   and 4 saves whose draw lists were empty at the save. Missing: HUD/menus/text, water, shadows, halos,
   weaker fire/smoke/flash than the game, a dark-vs-bright doorway at the first gate (#3).
+
+
+## Restart, 19 Oct evening: baseline, VU1 inventory, the frame-rate prize
+Back to the native renderer after the VU1 speed work (the fights are VU1-bound: the VU thread is ~88% busy).
+- **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
+  livecmp, ~1 s per save on the Mac): all 49 saves of 19 Oct render (`game/analysis/play1019/native/`,
+  `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD
+  missing). Worst: white-out/flash frames (191358: the game's frame is all white), the light pillars and the
+  sand-cloud flash (native too weak), cutscene letterbox bars (2D), the mirror's light beam (191059: no
+  type 0x18 draw in that frame, so another path). Nothing broke since 17 Oct.
+- **VU1 program inventory** (`tools/vu1inventory.py ELF [--native DIR] STATES`: each run of a save's last
+  chain attributed to an ELF program by tracking MPG uploads; `game/analysis/play1019/vu1inventory.txt`,
+  `play1017/vu1inventory.txt`). Numbered by ELF order (P0..P10):
+  | Program | ELF | Runs per frame | Draw path |
+  |---|---|---|---|
+  | P1 | 0x4CDE8C | 500-3,800 | static world + lightmaps (driver 0x4CDE80) |
+  | P4 | 0x4D548C | 7-520 | characters, first pass |
+  | P7 | 0x4DD30C | 25-650 | characters, second pass (ALPHA 0x46) |
+  | P8 | 0x4E0F0C | 8-300 | some characters (MSCAL 0x7F0) |
+  | P5 | 0x4D948C | 6-86 | follows the GFX particle count |
+  | P9 | 0x4E338C | 0-48 | 2 per CJadeSpriteElement draw |
+  | **P6** | **0x4DAC8C** | 40-60 | **water** (all 22 water saves of 17 Oct run it; 3 more saves do too) |
+  P0, P2, P3, P10 never ran in 100 saves. Earlier notes' "VU1 program 7" for water = P6 here (counted from 1).
+  The native renderer already covers what P1, P4, P7, P8 draw, i.e. nearly all VU1 runs.
+- **Prize measurement** (`POP_NATIVE_SKIP=static,skinned,lightmap,gfx|all`, measurement only: the covered
+  paths return without building DMA, so the picture is wrong): `tools/windows/oct19.ps1 -Native` measures fps
+  per group on the fight and slow saves, profiles the fight with nothing/everything skipped, and records VU1
+  traces (`PS2X_VU1_TRACE`, already in the runtime: registers + VU data per run) of two water saves as inputs
+  for a P6 port. Results: see below once the job is in.
