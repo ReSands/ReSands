@@ -92,7 +92,57 @@ Done when the 18 saves under 60 hold 60, or a profile shows plainly what limits 
   - Verifier change in the same patch: ready cycles at or before the unit's cycle compare as equal (they stall
     nothing; the scheduled code writes only the ones still in the future).
   - Generated code: 0.2-2.3 MB per program (largest: 42 s at -O2 in clang on the Mac).
-- Results of the first PC build (verify, fps on/off): below when measured.
+- **Split into parts** (MSVC: one function per program had 0.4-2.6 MB stack frames, overflowed the VU1 thread's
+  stack = crash in boot; with `/d2OptimizeHugeFunctions` the frame is 1.6 KB but the largest files took > 1 h).
+  Now: parts of <= 200 nodes, one file each (`vu1_<h>_sched_<k>.cpp`), loops kept whole where they fit
+  (recursive SCC decomposition), a driver `fastBlock<h, 0x80000000>` passes a state struct (`ctx.user`, new field
+  in `Vu1FastCtx`) between them. 84 parts; vu1_recomp ~9 min + runtime ~15 min on the PC. The CMake flag stays
+  for `*_sched*.cpp`. (Tried and dropped: tracking return addresses through BAL/JALR: 15k -> 50-200k nodes.)
+- **Results (19 Oct, PC, 30 s boots, `oct19.ps1 -Sched`, `fps_sched_on/off.txt`):** verify identical to the exact
+  build (death save 0 mismatches, fight 575, gameplay1 65: only the known vf13 one). fps off -> on: `093051`
+  43-45 -> 51-52, `202311` 42-43 -> 46-47, `093011` 34-52 -> 41-53, `093100` 42-51 -> 53-54, `213954`/`214002`
+  55-56 -> 57-59, `092959` 39-55 -> 44-55, death save 60 both.
+- **Gate statistics** (`PS2X_VU1_SCHED_STATS=1`, every 65536 runs per program): in the fights all programs run
+  100% scheduled except **`eea60abc4b18ca8e`: 62% of its runs are not scheduled** (fight: 1.83 M runs, 691 k
+  ended scheduled, 572 k hand over, 572 k start with the pipeline not empty). Cause: `ESIN P, vf22` at 0x0D00
+  (EFU, not supported -> hand-over), and the next run (MSCNT continuation) finds `m_efuResourceReady > m_cycle`
+  (EFU still busy; the runtime's cycle does not advance between runs). `MFP.z vf22, P` at 0x0270/0x04C8 reads it
+  in the next run. Same code in `9e37579481796a65`. Profile of the fight (scheduled build): VU thread 88% busy,
+  runFast (per-pair) 16% inclusive, processVIF1Data 7.8% self, clipBits 2.7% (not inlined; fixed since).
+
+### Next: EFU in the scheduler (biggest remaining win; user: optimise biggest wins first)
+
+Interpreter semantics (`ps2_vu1_impl.inl` queueP ~590, decode `ps2_vu1_core.cpp` ~860-935, commitEfu ~2840):
+two result slots `m_efu[2]` {valid, readyCycle, value}; an EFU op takes the first free slot, ready = cycle +
+latency (ESIN 29), value = normalizeResult(vuEsin(normalizeOperand(vf[fs][fsf]))) (vuEsin is in impl.inl,
+~1614); `m_efuResourceReady = cycle + latency - 1`; an EFU op stalls until `m_efuResourceReady`; WAITP (0x7B)
+stalls until both slots are ready; commits by ready cycle (ties: lower index first) set `m_state.p`. MFP
+(lowerEmit case 0x64) reads P after `commitEfu`. resetScheduler (MSCAL) clears m_efu and the resource; runFast
+commits all EFU at Ended (commitEfu kAll). The verifier compares `m_efuResourceReady` exactly, `p` always.
+
+Plan:
+1. `St`: `efu[2]` remaining latency, `efuRes`. `advance`: decrement, `Op::CommitEfu{slot}` at 0 (emit
+   `pcur = pv<slot>;`, always needed). `maxRem` includes the slots. staticStall: EFU pipe -> `efuRes`, waitP ->
+   max slot rem.
+2. `supportedLower`: allow ESIN (special 0x79) and WAITP (0x7B); other EFU ops still hand over. Slot full ->
+   hand over.
+3. lowerEmit in g_sched mode: ESIN -> `{ uint32_t ig = 0u; pv<slot> = vu.normalizeResult(vuEsin(vu.normalizeOperand(<lane>)), ig); vu.m_efuResourceReady = cyc + 28u; }`
+   (slot via a global set by pairBody); WAITP -> nothing; MFP -> `_mm_set1_ps(pcur)` instead of commitEfu/vu.m_state.p.
+4. Locals/state struct: `pcur` (from/to `vu.m_state.p` in the driver), `pv0`, `pv1` (add to `kScalars` and
+   `stateStruct`). materialize: pending slots -> `vu.m_efu[i] = {true, cyc + rem, pv<i>}` + noteReadyCycle.
+5. End nodes: flush commits EFU; nothing else (m_efuResourceReady was already written at issue).
+6. **Entries with the EFU busy:** the gate drops `m_efuResourceReady <= m_cycle` from the "pipeline" test; the
+   driver computes `r = efuResourceReady - cycle` (0 if past) and picks the entry node by (pc, r). Graph entries
+   become a map (pc, r) -> node; after building, collect the residual `efuRes` of all End nodes (state before
+   the flush, `n.after.efuRes`) and add entries (each E-bit continuation pc, r) for them; repeat until no new
+   residuals. An unknown (pc, r) returns Fallback (per-pair code, as today).
+7. Check on the Mac (`tools/vu1sched/check.sh`), amend patch 37 in `~/tools/PS2Recomp-sotc` (branch up1017,
+   `git commit --amend`, `git format-patch -1 --stdout > tools/patches/pop-sotc/37-...patch`), commit, bundle,
+   run `game\jobs\sched.ps1` on the PC (drops the old 37, re-applies, builds with VU1R_SCHED=1, verifies, then
+   gate stats on 3 fight saves). Then the fps on/off measurement (`oct19.ps1 -Sched -NoBuild`).
+
+After that, in order of expected win: per-pair code still used (check stats again), `processVIF1Data` (7.8%),
+part-transition cost (count transitions), then the death-save program `04994ae7` (not seen in fight stats).
 
 ## Where a new user's VU images come from (solved 19 Oct 2026)
 

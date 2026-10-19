@@ -23,23 +23,31 @@ In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) versi
 - Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
-## Current status (19 Oct 2026 morning; start here)
+## Current status (19 Oct 2026 afternoon; start here)
 
-Older status blocks: `docs/history.md` (the 18 Oct night block moved there 19 Oct). Playthrough saves, profiles and
-the first-person flag: `docs/saves_1017.md`. Native renderer: `docs/native_renderer.md`.
+The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summarised here).
 
-- **Game on the PC:** plays at 60 fps (`POP_60FPS=1`) on the emulated renderer with sound and native PS2 movies. Play build = pop-sotc runtime + **patches up to 34** (30: no mouse pointer in fullscreen, the debug panel brings it back; 31: **compiled VU0 microprograms**; 32-34: the upstream SotC runtime's 17 Oct commits: VU1 zero-padded prefix matching, VU/VIF/scheduler hot paths, headless mode) + **35 compiled VU1 images + the one VU0 image** (PoP uploads one VU0 image at boot, the same in all 84 saves) + the profiler (now names modules outside the exe) + linker map. **First-person camera fix built and confirmed by the user** (19 Oct, during the night's check boot). Desktop shortcuts unchanged (play.ps1 -> boot.ps1).
-- **60 fps now models VU1 at twice the console's speed** (`PS2X_VU1_TIMING=0.5`, set by boot.ps1 when `POP_60FPS=1`; 30 fps keeps 1.0, explicit setting wins). The runtime makes the game wait for modelled VU1 time; at 1.0 the fights fell to 4-45 fps with the VU1 thread mostly idle (A/B 19 Oct: 0.5 and 0 both 37-56).
-- **Speed after the night (clean measurement, `game\analysis\stateshots\fps_final.txt`, 20 s boot per save):** **59 of 77 saves hold 60** (38 before), mean of per-save minimums 57.4 (52.4). Sand-monster fights: #48 `092959` 4 -> 44-56, #50 `093051` 20 -> 42-46, `202311` 20 -> 42, `093011` 33 -> 46; the 21:39 save-point start (`213904`) holds 60. Still under 60: `092430` (32), `092426` (41), the fights, some 21:39-21:46 saves (50-55).
-- **What limits the rest:** in every slow save the **VU1 thread is 88-90% busy, almost all in compiled VU1 code** (`fastBlock`, flag-pipeline helpers `foldStatus`/`makeStatusRoom` ~7%, `processVIF1Data` ~8%), while the game thread waits for it in `sceGsSyncPath` (59%). Our compiled VU1 code still models cycles, stalls and the 4-deep flag pipeline at run time. **Next big lever: build-time scheduling in `vu1_recomp`** as Road Trip did (`docs/reference.md`, CPU-side survey: VU1 82 -> 1.3 ms/frame), judged by `PS2X_VU1_VERIFY`/`PS2X_VU0_VERIFY` (bit-exact against the interpreter; the VU0 verify of 19 Oct: 0 mismatches in 3 saves).
-- **Tried and dropped (19 Oct):** `/d2OptimizeHugeFunctions` for the generated VU code (patch 35, reverted: no gain). `092430` (32 fps) is a short dip with neither thread saturated (a transient, not steady load).
-- **Known VU1 mismatch:** `PS2X_VU1_VERIFY=1` flags `vf13` at the end of image `9d41512cd9917433` (0.7% of runs in the fight); drawn output is the same. Details and the plan to fix it: `docs/vu1_scheduling.md` step 1.
-- **Validation of the new build (19 Oct):** nightly checks pass (`docs/nightly/2026-10-19.md`); scripted cold boot holds 60 and 30 fps with matching screenshots and sound timelines. Not checked by ear yet. Details in `docs/history.md`.
-- **Next session, in order:** (1) the user's short playtest of the new build (pointer hidden in fullscreen? fights? sound?), started 19 Oct morning; (2) **build-time scheduling for compiled VU1 code: plan in `docs/vu1_scheduling.md`** (survey Road Trip first, fix the `vf13` mismatch, then the scheduler and flag liveness, judged by the verifiers); (3) back to the native renderer (1.0's main job).
-- **Before publishing 1.0:** a new user's build has none of our recorded VU images (they are game code), so it would run every VU program on the slow interpreter. Plan: ship hashes plus a recipe that rebuilds the images from the user's own ISO (`docs/vu1_scheduling.md`, last section).
-- **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner of an oversized canvas (capture quirk, also with display scaling).
-- **Native renderer (1.0's main job):** frames from any save offline (`pop_state_frame`, ~0.5 s) with lightmaps, characters from memory, glow/haze, particles; all 51 saves of 17 Oct render, mean difference 16.85. Missing: HUD/menus/text, water (VU1 program 7 tessellates it), shadows, halos. Live window and comparison mode exist (Mac). Details `docs/native_renderer.md`.
-- **Rules from the user:** survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); add general learnings to `docs/lessons.md`; one dated job script per night (`tools/windows/<mon><day>.ps1`; 18 Oct night: `oct18.ps1`, runs `-Vu0`, `-Final`).
+- **Playtest 19 Oct morning (user):** sound, cursor, feel good; death scene dropped to 40 fps (save
+  `play_20261019_082854`); the big fight 40-50 fps. Sound slows with the frame rate (user: investigate later).
+- **ELF VU programs (done, in the play build):** every VU image is one of PoP's 10 microprograms in the ELF plus a
+  stale tail; `tools/vu1progs.py` writes them from the user's own ELF (also solves the 1.0 "image recipe").
+  Patch 35 (pairs past a program's end -> interpreter). Death save 40 -> 60; all-saves sweep `fps_progs.txt`:
+  59/77 hold 60 (unchanged otherwise).
+- **Build-time VU1 scheduling (runtime patch 37, in progress): read `docs/vu1_scheduling.md` "Progress" and
+  "Next: EFU in the scheduler" first; that is the next task, step by step.** Built and verified exact on the
+  PC (no new mismatches), fights +3-8 fps (e.g. 43 -> 51), not yet 60. The PC's play build is the scheduled one
+  with gate statistics (`PS2X_VU1_SCHED=0` turns scheduling off, `PS2X_VU1_SCHED_STATS=1` prints why runs are
+  not scheduled). User's instruction: optimise in order of biggest win.
+- **Mac check of the scheduler:** `tools/vu1sched/check.sh` (x86_64 vu1_recomp + syntax check of generated code).
+- **PC job mechanics learned today:** start-job `-Arguments` loses switches: use a wrapper script in `game\jobs\`
+  (current: `game\jobs\sched.ps1`). `findstr` cannot read `job.log` (UTF-16?): wait with PowerShell
+  `Select-String` or `tools/windows/watch-job.sh` under Monitor. Runtime-src patch 37 on the PC is re-applied by
+  `sched.ps1` (it drops the old commit first).
+- **Rules from the user:** survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`);
+  add general learnings to `docs/lessons.md`; one dated job script per night (`tools/windows/<mon><day>.ps1`;
+  today: `oct19.ps1`, modes `-Sched`, `-Experiments`).
+- **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner.
+- **Native renderer (1.0's main job):** unchanged since 18 Oct; details `docs/native_renderer.md`.
 
 ## Working reference (distilled 17 Oct 2026; the details and their history are in `docs/history.md` and `docs/reference.md`)
 
