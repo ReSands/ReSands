@@ -119,8 +119,18 @@ its own continuation (`n.endPc`, `n.after.efuRes`; an MSCAL resets the EFU, so o
 matters). Mac check: 0 EFU hand-overs (left: 4 generic lower, 1 fallback pair), 75 -> 86 entries (EFU busy
 1, 2 or 7 cycles), 15,030 -> 16,008 nodes, 84 -> 89 parts, FMAC flag producers kept 342 of 4,935. Driver
 picks the entry by `(pc << 8) | efuBusy` (efuBusy > 255 or unknown -> per-pair code). Budget exit from the
-scheduled code now also runs `commitEfu(ctx.cycle)` like runFast. Next: PC run `game\jobs\sched.ps1`, check
-verify (no new mismatches) and the gate stats of `eea60abc` (expect ~100% scheduled), then fps on/off.
+scheduled code now also runs `commitEfu(ctx.cycle)` like runFast.
+
+PC result (19 Oct ~14:00): exact (verify: death save 0, fight 575, gameplay1 65, all `vf13`) and `eea60abc`
+100% scheduled in the fights, **but every save got slower with scheduling on** (fight `093051` 51-52 -> 43,
+`213954` 57-59 -> 44, death save 60 -> 52; off unchanged, so not the machine). Profile: `eea60abc`'s scheduled
+parts cost 2-3x its per-pair code. Cause: JR edges (to every link label) make the whole program one 1,284-node
+loop, which `decompose` cuts arbitrarily; the new EFU nodes moved the cut through the real loops (4-5 loops of
+52-99 nodes split over 3-4 parts in `eea60abc` and `31829861`; each crossing saves/reloads ~140 values). Fix
+(in patch 37): `partition` ignores JR edges, so every loop up to 200 nodes stays whole (Mac: all loops whole
+except 3 of 218-325 nodes in `0154271b`/`9c0325ce`, not hot in the fights). Check: `tools/vu1sched/loops.py <out dir> <hash> nodyn`
+(loops and their part-crossing edges). PC run of the fix: `game\jobs\schedall.ps1`
+(sched.ps1 + `oct19.ps1 -Sched -NoBuild`).
 
 Original plan:
 

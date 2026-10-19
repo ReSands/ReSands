@@ -98,3 +98,8 @@ keeps only what carries over to other projects.
 - **A model's "already happened" values are not state.** Verifiers that compare bookkeeping (ready cycles in
   the past, flag slots) byte for byte reject code that is equivalent but keeps less bookkeeping; normalize
   what cannot influence the future (a ready cycle at or before now) and keep comparing everything else.
+- **A correct change can make generated code slower through layout alone.** Adding EFU support to the VU1
+  scheduler (19 Oct) gave identical results and no hand-overs, yet every save lost 8-15 fps: the new nodes moved
+  where the program was cut into parts, and hot loops now crossed parts on every iteration (each crossing saves
+  and reloads ~140 values). Check performance after every generator change, not only exactness, and profile
+  before guessing (the profile pointed at one program's parts within minutes).
