@@ -72,3 +72,33 @@ Not a model job:
   staged ports per entry point/path. Gives exact lighting (point lights), shading-pass UVs, sky,
   water and particles for the native renderer. Needs the capture hook first (Claude, ~half a day).
 
+
+## Harness² (Google Research) looked at, 19 Oct 2026: not adopted; one idea taken
+
+What it is (README, github.com/google-research/harness2, Apache 2.0): it refines the *harness* around an
+LLM agent (system prompt, guardrails, memory, tool guidance, subagents, skills, scripts, plugins) without
+touching the weights. Per task a Propose-Probe-Compose step proposes harness edits, re-runs the same task
+with them and composes a refined harness from the behavioural differences, **without ground-truth
+feedback**; across tasks it keeps adopted harnesses and "evidence-supported lessons". The agents run in
+OpenCode or Codex; it is benchmarked on office/legal/work agent suites (GLM-5, Gemini 3.5 Flash; up to
++11.5 points on WorkBuddy-Bench, +4.5 on JobBench, +11.8 pp partial pass on LAB).
+
+Why not for our Qwen jobs:
+- Not offline as published: models are configured through Vertex AI (gcloud auth). Local or
+  OpenAI-compatible endpoints (our llama-server) are not mentioned; OpenCode can talk to such an
+  endpoint, but whether Harness² works through it is unchecked. The proposer step presumably wants a
+  strong model, i.e. the cloud or Qwen refining itself (estimate).
+- It solves the no-judge case. Our jobs have exact judges (equivalence tests, exact-size parsing,
+  `tools/mmitest`); a strict judge is a better signal than behavioural differences between runs.
+- It drives long agent loops with tools and subagents; Qwen does best on small staged
+  spec -> code tasks under a judge (above), long loops are where a 35B-A3B model drifts (estimate).
+- Linux + Python 3.12 + Node 20 (+ Docker for some benchmarks); the PC is Windows (would need WSL).
+  Its executor has unrestricted network access and Codex runs with the sandbox off.
+
+Idea taken (not built yet): **lessons per task type from our own judged runs.** Each failed round
+already leaves the spec, the model's answer, the judge's reason and (eventually) the passing answer.
+A script collects these into short, evidence-backed lessons per task type (e.g. "Ghidra's CONCAT44
+means ...", "lh sign-extends: spell it out", "words 0 and 2 only") and prepends the relevant ones
+to later specs. This matches our own finding (14 Oct) that precise wording decides success. A lesson
+stays only if it measurably helps: re-run a fixed set of past tasks with and without it and compare
+first-round pass rates. Fully offline; the judge keeps it honest.
