@@ -14,11 +14,79 @@
 # the exact play build.
 # -Sched: build-time scheduled VU1 programs (runtime patch 37, VU1R_SCHED=1): verify boots, then fps of the
 # slowest saves with the scheduled code on and off in the same build (PS2X_VU1_SCHED=0), fps_sched_<on|off>.txt.
+# -Native (night of 19 Oct, back to the native renderer): what drawing natively would save. Fast build with
+# POP_NATIVE_SKIP (tools/overrides/pop_native_live.cpp: the covered draw paths return without building DMA;
+# measurement only, the picture is wrong), fps of the fight and slow saves per skip group
+# (game\analysis\native\prize\fps_<group>.txt), profiles of the worst fight with nothing and everything
+# skipped (game\analysis\prof\prize_<group>.*), then VU1 traces (PS2X_VU1_TRACE) of two water saves for the
+# water program P6 (game\analysis\vu1trace\<save>.trace + the vu1_<hash>.bin images): inputs for the port.
 # Run through start-job.ps1 (the window needs the desktop session).
-param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments, [switch]$Sched)
+param([switch]$NoBuild, [switch]$NoMeasure, [string]$Pattern = 'play_*.state', [switch]$Experiments, [switch]$Sched,
+      [switch]$Native)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 $Rt = 'C:\tools\PS2Recomp-sotc'
+
+if ($Native) {
+    if (-not $NoBuild) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fast play build (override: POP_NATIVE_SKIP)"
+        & "$Root\tools\windows\rebuild.ps1" -Fast -Play -RecompSrc $Rt -Out game\recomp-sotc
+        if ($LASTEXITCODE -ne 0) { "BUILD FAILED ($LASTEXITCODE)"; exit 1 }
+    }
+    $prize = "$Root\game\analysis\native\prize"
+    New-Item -ItemType Directory -Force $prize | Out-Null
+    $states = @('play_20261019_185602', 'play_20261019_185837', 'play_20261019_082854', 'play_20261017_093051',
+                'play_20261018_202311', 'play_20261017_093011', 'play_20261018_202222', 'play_20261018_214002')
+    foreach ($group in @('none', 'static', 'skinned', 'lightmap', 'gfx', 'all')) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') fps, skipping: $group"
+        $out = "$prize\fps_$group.txt"
+        Remove-Item $out -ErrorAction SilentlyContinue
+        $skip = $(if ($group -eq 'none') { '' } else { ";POP_NATIVE_SKIP=$group" })
+        foreach ($st in $states) {
+            & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 30 -Name "prize" `
+                -Env "PS2X_STATE_LOAD_AT=120:states/$st.state;POP_60FPS=1$skip" | Out-Null
+            $log = "$Root\game\recomp-sotc\prize.log"
+            $fps = (Select-String -Path $log -Pattern '\[pop:fps\] ([\d.]+)' | ForEach-Object { $_.Matches[0].Groups[1].Value }) -join ' '
+            $counts = Select-String -Path $log -Pattern 'skipped/kept' | Select-Object -Last 1 | ForEach-Object { $_.Line -replace '.*kept: ', '' }
+            $line = "$group $st fps $fps | $counts"
+            $line
+            Add-Content -Path $out -Value $line
+        }
+    }
+    $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"
+    foreach ($group in @('none', 'all')) {
+        "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') profile of the fight, skipping: $group"
+        $prof = "$Root\game\analysis\prof\prize_$group.txt"
+        Remove-Item $prof -ErrorAction SilentlyContinue
+        $skip = $(if ($group -eq 'none') { '' } else { ";POP_NATIVE_SKIP=$group" })
+        & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 35 -Name "prizeprof" `
+            -Env "PS2X_STATE_LOAD_AT=120:states/play_20261019_185602.state;POP_60FPS=1;POP_PROFILE=$($prof):8:20$skip" | Out-Null
+        if (Test-Path $prof) {
+            python -I "$Root\tools\profsym.py" $prof $map --top 30 | Set-Content -Encoding utf8 "$Root\game\analysis\prof\prize_$group.report.txt"
+            Get-Content "$Root\game\analysis\prof\prize_$group.report.txt" -TotalCount 30
+        } else { "no profile written" }
+    }
+    # VU1 traces: the save's own field counter continues after the load (field 120 of the boot), so the
+    # window starts ~6.5 s after it; if nothing was recorded, retry counted from boot (field 600)
+    $trace = "$Root\game\analysis\vu1trace"
+    New-Item -ItemType Directory -Force $trace | Out-Null
+    foreach ($s in @(@{ State = 'play_20261017_091049'; Tick = 15746 }, @{ State = 'play_20261017_091734'; Tick = 37719 })) {
+        foreach ($first in @(($s.Tick + 400), 600)) {
+            "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') VU1 trace of $($s.State) from field $first"
+            $file = "$trace\$($s.State).trace"
+            Remove-Item $file -ErrorAction SilentlyContinue
+            & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 30 -Name "vu1trace" `
+                -Env "PS2X_STATE_LOAD_AT=120:states/$($s.State).state;POP_60FPS=1;PS2X_VU1_TRACE=$($file):$($first):2" | Out-Null
+            Select-String -Path "$Root\game\recomp-sotc\vu1trace.log" -Pattern '\[vu1-trace\]' | ForEach-Object Line
+            $size = $(if (Test-Path $file) { (Get-Item $file).Length } else { 0 })
+            "$($s.State).trace: $size bytes"
+            if ($size -gt 100000) { break }
+        }
+    }
+    Get-ChildItem "$trace\vu1_*.bin" | ForEach-Object Name
+    "== $(Get-Date -Format 'yyyy-MM-dd HH:mm') job done (native prize + water traces)"
+    exit 0
+}
 if (-not (git -C $Rt log --oneline -20 | Select-String -SimpleMatch 'vu1_recomp: pairs past the last non-zero')) {
     "== applying runtime patch 35"
     git -C $Rt -c user.name=Jon -c user.email=resands@proton.me am "$Root\tools\patches\pop-sotc\35-vu1-recomp-padding-to-interpreter.patch"

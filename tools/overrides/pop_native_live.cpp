@@ -1811,9 +1811,90 @@ namespace pop_native_live
         }).detach();
     }
 
+    namespace
+    {
+        // POP_NATIVE_SKIP=<groups> (measurement only, the picture is wrong): the draw paths the native
+        // renderer already covers return without building their DMA, so the frame rate shows what
+        // drawing them natively would save on VIF1/VU1/GS work. Groups (comma-separated, or "all"):
+        // static (CJMeshElement::Display of elements without a bone palette, CJMeshElementRef::Display,
+        // CJIdxMesh::Display), skinned (CJMeshElement::Display with a bone palette at +0x48),
+        // lightmap (CLMElementList::Render), gfx (FUN_00458FC0). Without POP_NATIVE_LIVE only.
+        enum SkipGroup : unsigned
+        {
+            kSkipStatic = 1,
+            kSkipSkinned = 2,
+            kSkipLightmap = 4,
+            kSkipGfx = 8
+        };
+        unsigned g_skip = 0;
+        PS2Runtime::RecompiledFunction g_skipOrig[5] = {};
+        uint64_t g_skipCount[5] = {}, g_kept[5] = {};
+        constexpr uint32_t kSkipAddress[5] = {kMeshDisplay, kRefDisplay, 0x004BDB80u, 0x004B7B80u, kGfxDisplay};
+
+        bool skipCall(int n, uint8_t *rdram, R5900Context *ctx)
+        {
+            switch (n)
+            {
+            case 0: // the element chain shares one kind: judged by its head
+                return (g_skip & (guest32(rdram, getRegU32(ctx, 4) + 0x48u) ? kSkipSkinned : kSkipStatic)) != 0;
+            case 1:
+            case 2:
+                return (g_skip & kSkipStatic) != 0;
+            case 3:
+                return (g_skip & kSkipLightmap) != 0;
+            default:
+                return (g_skip & kSkipGfx) != 0;
+            }
+        }
+
+        template <int N>
+        void skippable(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (skipCall(N, rdram, ctx))
+            {
+                ++g_skipCount[N]; // like a stub: leave pc, the dispatcher returns to the caller
+                return;
+            }
+            ++g_kept[N];
+            g_skipOrig[N](rdram, ctx, runtime);
+        }
+
+        void installSkip(PS2Runtime &runtime, const std::string &spec)
+        {
+            for (const auto &[name, bit] : {std::pair<const char *, unsigned>{"static", kSkipStatic}, {"skinned", kSkipSkinned},
+                                            {"lightmap", kSkipLightmap}, {"gfx", kSkipGfx}, {"all", 15u}})
+                if (spec.find(name) != std::string::npos)
+                    g_skip |= bit;
+            const PS2Runtime::RecompiledFunction hooks[5] = {skippable<0>, skippable<1>, skippable<2>, skippable<3>, skippable<4>};
+            for (int n = 0; n < 5; ++n)
+                if ((g_skipOrig[n] = runtime.lookupFunction(kSkipAddress[n])))
+                    runtime.replaceFunction(kSkipAddress[n], hooks[n]);
+            std::fprintf(stderr, "[pop:native] POP_NATIVE_SKIP=%s: groups %x (measurement only)\n", spec.c_str(), g_skip);
+            std::thread([] {
+                for (;;)
+                {
+                    std::this_thread::sleep_for(std::chrono::seconds(10));
+                    std::fprintf(stderr, "[pop:native] skipped/kept: mesh %llu/%llu ref %llu/%llu idx %llu/%llu lm %llu/%llu gfx %llu/%llu\n",
+                                 (unsigned long long)g_skipCount[0], (unsigned long long)g_kept[0], (unsigned long long)g_skipCount[1],
+                                 (unsigned long long)g_kept[1], (unsigned long long)g_skipCount[2], (unsigned long long)g_kept[2],
+                                 (unsigned long long)g_skipCount[3], (unsigned long long)g_kept[3], (unsigned long long)g_skipCount[4],
+                                 (unsigned long long)g_kept[4]);
+                }
+            }).detach();
+        }
+    }
+
     void install(PS2Runtime &runtime)
     {
         const char *v = std::getenv("POP_NATIVE_LIVE");
+        if (const char *skip = std::getenv("POP_NATIVE_SKIP"); skip && *skip)
+        {
+            if (v && std::strcmp(v, "1") == 0)
+                std::fprintf(stderr, "[pop:native] POP_NATIVE_SKIP ignored with POP_NATIVE_LIVE=1\n");
+            else
+                installSkip(runtime, skip);
+            return;
+        }
         if (!v || std::strcmp(v, "1") != 0)
             return;
         g_origRead = runtime.lookupFunction(kReadElement);
