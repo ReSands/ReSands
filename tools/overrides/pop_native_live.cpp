@@ -1831,13 +1831,41 @@ namespace pop_native_live
         uint64_t g_skipCount[5] = {}, g_kept[5] = {};
         constexpr uint32_t kSkipAddress[5] = {kMeshDisplay, kRefDisplay, 0x004BDB80u, 0x004B7B80u, kGfxDisplay};
 
+        // Both mesh Display paths also switch the VU1 driver (state byte 0x700000a8: 0 = one bone, 1 = more;
+        // element without a palette: no switch) before a skinned draw, through CVuManager::DoSetShadowDriver
+        // or FUN_004B7480 (MPG uploads). Skipping a switch left the wrong program for the next draws (both
+        // skip groups dropped to ~7 fps, 19 Oct), so a chain is skipped only if none of it would switch.
+        // The palette is the element's +0x48; a CJMeshElementRef's element is at +0x20; chains: +0x4C / +0x1C.
+        bool chainSwitchesDriver(uint8_t *rdram, uint32_t node, bool ref)
+        {
+            uint8_t driver = guest8(rdram, 0x700000A8u);
+            for (unsigned link = 0; node && link < 4096; ++link)
+            {
+                const uint32_t palette = guest32(rdram, (ref ? guest32(rdram, node + 0x20u) : node) + 0x48u);
+                if (palette)
+                {
+                    const uint8_t want = int32_t(guest32(rdram, palette)) < 2 ? 0 : 1;
+                    if (want != driver)
+                        return true;
+                    driver = want;
+                }
+                node = guest32(rdram, node + (ref ? 0x1Cu : 0x4Cu));
+            }
+            return false;
+        }
+
         bool skipCall(int n, uint8_t *rdram, R5900Context *ctx)
         {
             switch (n)
             {
-            case 0: // the element chain shares one kind: judged by its head
-                return (g_skip & (guest32(rdram, getRegU32(ctx, 4) + 0x48u) ? kSkipSkinned : kSkipStatic)) != 0;
-            case 1:
+            case 0: // CJMeshElement: the kind judged by the chain's head
+            case 1: // CJMeshElementRef
+            {
+                const uint32_t node = getRegU32(ctx, 4);
+                const uint32_t element = n == 1 ? guest32(rdram, node + 0x20u) : node;
+                const unsigned group = guest32(rdram, element + 0x48u) ? kSkipSkinned : kSkipStatic;
+                return (g_skip & group) != 0 && !chainSwitchesDriver(rdram, node, n == 1);
+            }
             case 2:
                 return (g_skip & kSkipStatic) != 0;
             case 3:
