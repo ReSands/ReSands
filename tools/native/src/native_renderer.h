@@ -172,6 +172,8 @@ namespace pop_native
         // stores them) into a width x height RGBA image
         // depthOut (optional): per-pixel view depth w (0 where nothing was drawn); gsZOut (optional):
         // per-pixel GS Z as the game's VU1 programs write it (Z24, 2^23 * (1 - z / w); 0 = nothing drawn)
+        // frees renderOffscreen's targets (kept between calls of the same size)
+        void releaseOffscreen();
         bool renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
                              std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr,
                              std::vector<uint32_t> *gsZOut = nullptr);

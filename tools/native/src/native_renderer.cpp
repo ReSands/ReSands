@@ -97,6 +97,18 @@ namespace pop_native
         VkFormat swapFormat = VK_FORMAT_UNDEFINED;
         VkExtent2D swapExtent{};
         std::vector<VkImage> swapImages;
+        // renderOffscreen's targets, kept between calls (the in-game native world draws every frame);
+        // the readback buffers are host-cached where the device has such memory: reading uncached
+        // (write-combined) memory cost ~30 ms per 640x448 frame on an RTX 5070 Ti under Windows
+        struct Offscreen
+        {
+            uint32_t w = 0, h = 0;
+            Texture colour, depth;
+            Buffer readback, depthReadback;
+            VkFramebuffer fb = VK_NULL_HANDLE;
+            bool cached = false; // readback memory is HOST_CACHED (then not necessarily coherent: invalidate)
+            void *colourMap = nullptr, *depthMap = nullptr;
+        } off;
         Texture targetColour, targetDepth; // the frame at internal resolution, blitted to the window
         VkFramebuffer targetFb = VK_NULL_HANDLE;
         uint32_t targetW = 0, targetH = 0;
@@ -968,6 +980,7 @@ namespace pop_native
     {
         if (m->device)
         {
+            releaseOffscreen();
             vkDeviceWaitIdle(m->device);
             if (m->targetFb)
                 vkDestroyFramebuffer(m->device, m->targetFb, nullptr);
@@ -1357,34 +1370,77 @@ namespace pop_native
         m->ranges.clear();
     }
 
+    void Renderer::releaseOffscreen()
+    {
+        auto &o = m->off;
+        if (!m->device)
+            return;
+        vkDeviceWaitIdle(m->device);
+        if (o.fb)
+            vkDestroyFramebuffer(m->device, o.fb, nullptr);
+        if (o.colourMap)
+            vkUnmapMemory(m->device, o.readback.memory);
+        if (o.depthMap)
+            vkUnmapMemory(m->device, o.depthReadback.memory);
+        m->destroyImage(o.colour);
+        m->destroyImage(o.depth);
+        m->destroyBuffer(o.readback);
+        m->destroyBuffer(o.depthReadback);
+        o = {};
+    }
+
     bool Renderer::renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
                                    std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut,
                                    std::vector<uint32_t> *gsZOut)
     {
-        Texture colour, depth;
-        Buffer readback, depthReadback;
-        VkFramebuffer fb = VK_NULL_HANDLE;
-        bool ok = m->createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
-                                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT, colour, error) &&
-                  m->createImage(width, height, VK_FORMAT_D32_SFLOAT,
-                                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                 VK_IMAGE_ASPECT_DEPTH_BIT, depth, error) &&
-                  m->createBuffer(VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, depthReadback, error) &&
-                  m->createBuffer(VkDeviceSize(width) * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, readback, error);
-        if (ok)
+        auto &o = m->off;
+        bool ok = true;
+        if (o.w != width || o.h != height)
         {
-            VkImageView views[2] = {colour.view, depth.view};
-            VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fi.renderPass = m->renderPass;
-            fi.attachmentCount = 2;
-            fi.pAttachments = views;
-            fi.width = width;
-            fi.height = height;
-            fi.layers = 1;
-            ok = check(vkCreateFramebuffer(m->device, &fi, nullptr, &fb), "vkCreateFramebuffer", error);
+            releaseOffscreen();
+            const VkDeviceSize bytes = VkDeviceSize(width) * height * 4;
+            const VkMemoryPropertyFlags cachedFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+            const VkMemoryPropertyFlags plainFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            std::string ignored;
+            o.cached = m->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, cachedFlags, o.readback, ignored) &&
+                       m->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, cachedFlags, o.depthReadback, ignored);
+            if (!o.cached)
+            {
+                m->destroyBuffer(o.readback);
+                m->destroyBuffer(o.depthReadback);
+                ok = m->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, plainFlags, o.readback, error) &&
+                     m->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, plainFlags, o.depthReadback, error);
+            }
+            ok = ok &&
+                 m->createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                VK_IMAGE_ASPECT_COLOR_BIT, o.colour, error) &&
+                 m->createImage(width, height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                VK_IMAGE_ASPECT_DEPTH_BIT, o.depth, error);
+            if (ok)
+            {
+                VkImageView views[2] = {o.colour.view, o.depth.view};
+                VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                fi.renderPass = m->renderPass;
+                fi.attachmentCount = 2;
+                fi.pAttachments = views;
+                fi.width = width;
+                fi.height = height;
+                fi.layers = 1;
+                ok = check(vkCreateFramebuffer(m->device, &fi, nullptr, &o.fb), "vkCreateFramebuffer", error) &&
+                     check(vkMapMemory(m->device, o.readback.memory, 0, VK_WHOLE_SIZE, 0, &o.colourMap), "vkMapMemory", error) &&
+                     check(vkMapMemory(m->device, o.depthReadback.memory, 0, VK_WHOLE_SIZE, 0, &o.depthMap), "vkMapMemory", error);
+            }
+            if (!ok)
+            {
+                releaseOffscreen();
+                return false;
+            }
+            o.w = width;
+            o.h = height;
         }
+        Texture &colour = o.colour, &depth = o.depth;
+        Buffer &readback = o.readback, &depthReadback = o.depthReadback;
+        const VkFramebuffer fb = o.fb;
         if (ok)
         {
             ok = m->oneShot([&](VkCommandBuffer cb) {
@@ -1403,17 +1459,20 @@ namespace pop_native
                 }
             }, error);
         }
+        if (ok && o.cached)
+        {
+            const VkMappedMemoryRange ranges[2] = {{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, readback.memory, 0, VK_WHOLE_SIZE},
+                                                   {VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, depthReadback.memory, 0, VK_WHOLE_SIZE}};
+            vkInvalidateMappedMemoryRanges(m->device, (depthOut || gsZOut) ? 2 : 1, ranges);
+        }
         if (ok)
         {
-            void *p;
-            vkMapMemory(m->device, readback.memory, 0, readback.size, 0, &p);
-            rgbaOut.assign(static_cast<uint8_t *>(p), static_cast<uint8_t *>(p) + size_t(width) * height * 4);
-            vkUnmapMemory(m->device, readback.memory);
+            const uint8_t *p = static_cast<const uint8_t *>(o.colourMap);
+            rgbaOut.assign(p, p + size_t(width) * height * 4);
             if (depthOut || gsZOut)
             {
                 // stored depth = zScale * (1 - z / w), ~ near / w (0 = nothing drawn); GS Z = 2^23 * depth / zScale
-                vkMapMemory(m->device, depthReadback.memory, 0, depthReadback.size, 0, &p);
-                const float *z = static_cast<const float *>(p);
+                const float *z = static_cast<const float *>(o.depthMap);
                 const size_t n = size_t(width) * height;
                 if (depthOut)
                 {
@@ -1428,15 +1487,8 @@ namespace pop_native
                     for (size_t i = 0; i < n; ++i)
                         (*gsZOut)[i] = uint32_t(std::min(16777215.0, std::max(0.0, double(z[i]) * toGs + 0.5)));
                 }
-                vkUnmapMemory(m->device, depthReadback.memory);
             }
         }
-        if (fb)
-            vkDestroyFramebuffer(m->device, fb, nullptr);
-        m->destroyImage(colour);
-        m->destroyImage(depth);
-        m->destroyBuffer(readback);
-        m->destroyBuffer(depthReadback);
         return ok;
     }
 
