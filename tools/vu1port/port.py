@@ -63,7 +63,9 @@ the program stops.
 - vfN = four floats x, y, z, w (vu.vf[N][0..3]). The suffix after the opcode (".xyzw", ".xy", ".z") is the
   destination mask: only those lanes are written. A broadcast letter on the opcode (ADDx, MULAy, MADDw,
   SUBz, ...) and the matching operand (vf0x, vf14z, ...) means that single lane of the last operand is used
-  for every lane: "ADDx.xyz vf21, vf9, vf0x" is vf21[c] = vf9[c] + vf0[x] for c = x, y, z. Suffix i or q
+  for every lane: "ADDx.xyz vf21, vf9, vf0x" is vf21[c] = vf9[c] + vf0[x] for c = x, y, z. The letter on the
+  opcode is never a destination lane: "SUBx.z vf6, vf20, vf20x" writes ONLY vf6.z (= vf20.z - vf20.x) and
+  leaves vf6.x, y, w unchanged; "ADDy.x vf5, vf0, vf5y" writes only vf5.x (= 0 + vf5.y). Suffix i or q
   (ADDi, MULq, MADDAq, ...): the I or Q register instead of the last operand.
 - vf0 is always (0, 0, 0, 1): writes to vf0 are discarded (such instructions only set flags). vi0 is 0.
 - ACC: MULA, ADDA, SUBA, MADDA, MSUBA write ACC (the masked lanes) instead of a vf register. Per lane, with
