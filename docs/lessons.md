@@ -106,6 +106,11 @@ keeps only what carries over to other projects.
 - **Stopping a PC job mid-boot leaves the game running** (19 Oct): ending the scheduled task kills only the
   wrapper, the `ps2EntryRunner.exe` it started stays and locks the exe, so the next build fails with LNK1104.
   `tools/overnight-pc.command --stop` now stops the game too; a play session left open has the same effect.
+- **The PC needs an active display for game boots** (19 Oct): with the TV off (or in standby) the GPU has no
+  active display (`nvidia-smi --query-gpu=display_active` = Disabled), the GS thread's OpenGL `Present` stalls
+  and every boot runs at ~4 fps (game thread waiting in sceGsSyncPath). Keeping Windows awake
+  (SetThreadExecutionState) does not help. A whole evening's skip measurements were invalid because of it.
+  Check `display_active` before measuring frame rates (or use an HDMI dummy plug).
 - **A hook that skips a game function skips all of its side effects** (19 Oct): `CJMeshElement::Display` and
   `CJMeshElementRef::Display` also switch the VU1 driver (MPG upload) before skinned draws; skipping them for a
   measurement left the wrong program loaded and every save fell to ~7 fps. Decompile before skipping.
