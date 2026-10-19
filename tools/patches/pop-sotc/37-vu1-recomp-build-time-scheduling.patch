@@ -1,4 +1,4 @@
-From 2f66384778150ea5b9b7a03931cc3d8ade3d1893 Mon Sep 17 00:00:00 2001
+From 0834ee1cb4f0211c20dea85078a6992b41bf1dfd Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -14,21 +14,22 @@ The verifier treats ready cycles at or before the unit's cycle as equal (they st
 ---
  ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
- ps2xTest/tools/vu1_recomp.cpp           | 1107 ++++++++++++++++++++++-
- 3 files changed, 1119 insertions(+), 14 deletions(-)
+ ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |    1 +
+ ps2xTest/tools/vu1_recomp.cpp           | 1339 ++++++++++++++++++++++-
+ 4 files changed, 1352 insertions(+), 14 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 9f2f4d4..367004e 100644
+index 9f2f4d4..cd4c44e 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -605,6 +605,14 @@ if(PS2X_VU1_GENERATED_SOURCES)
      if(MSVC)
          set_source_files_properties(${PS2X_VU1_GENERATED_SOURCES} PROPERTIES
              COMPILE_OPTIONS "/bigobj;/fp:precise;/arch:AVX2;/W0")
-+        # A build-time scheduled program is one function of up to ~3,000 nodes. Above MSVC's huge-function
++        # Parts of build-time scheduled programs are large functions (up to 200 nodes). Above MSVC's huge-function
 +        # threshold it stops optimizing, including stack slot reuse: frames of 0.4-2.6 MB overflowed the VU1
 +        # thread's stack (19 Oct 2026). With the switch the frame is ~1.6 KB (compile ~6x longer).
-+        file(GLOB PS2X_VU1_SCHED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/vu1_generated/*_sched.cpp")
++        file(GLOB PS2X_VU1_SCHED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/vu1_generated/*_sched*.cpp")
 +        if(PS2X_VU1_SCHED_SOURCES)
 +            set_source_files_properties(${PS2X_VU1_SCHED_SOURCES} PROPERTIES
 +                COMPILE_OPTIONS "/bigobj;/fp:precise;/arch:AVX2;/W0;/d2OptimizeHugeFunctions")
@@ -65,8 +66,20 @@ index d557322..401f2fd 100644
          note("ready");
      if (vu.m_efuResourceReady != shadow->m_efuResourceReady)
          note("efuReady");
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl b/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
+index cee67a1..c897f92 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl
+@@ -2404,6 +2404,7 @@ struct Vu1FastCtx
+     uint64_t cycle = 0;
+     uint64_t budget = 0;
+     uint64_t xgkickDone = 0;
++    void *user = nullptr;   // build-time scheduled programs: the state passed between their parts
+     uint8_t *mem = nullptr;
+     GS *gs = nullptr;
+     PS2Memory *memory = nullptr;
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..cd7e226 100644
+index 8b44b4c..af0e826 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
 @@ -26,6 +26,9 @@ namespace
@@ -224,7 +237,7 @@ index 8b44b4c..cd7e226 100644
          case 0x3C:
              if (it != 0u)
                  viSet(it, laneBits(fs, fsf) + " & 0xFFFFu");
-@@ -1401,6 +1454,918 @@ namespace
+@@ -1401,6 +1454,1140 @@ namespace
          return !p.reserved && !p.branch && !p.d.eBit && !p.d.dBit && !p.d.tBit;
      }
  
@@ -985,6 +998,17 @@ index 8b44b4c..cd7e226 100644
 +            return "n" + num(id);
 +        }
 +
++        // the program is split into parts (functions); a jump to a node of another part returns to the driver
++        const std::vector<uint32_t> *gPartOf = nullptr;
++        uint32_t gPart = 0u;
++
++        std::string jump(uint32_t id)
++        {
++            if ((*gPartOf)[id] == gPart)
++                return "goto " + nodeLabel(id) + ";";
++            return "{ nx = " + num(id) + "u; goto x_next; }";
++        }
++
 +        // cold: hand-over blocks, placed after all nodes so the hot path stays compact
 +        std::string emitNode(const Graph &g, uint32_t id, std::string &cold)
 +        {
@@ -1015,7 +1039,7 @@ index 8b44b4c..cd7e226 100644
 +                {
 +                    out += "            case " + num(n.s0 + c) + "u:\n";
 +                    out += commits(n.cases[c].first, n.needCases[c]);
-+                    out += "                goto " + nodeLabel(n.cases[c].second) + ";\n";
++                    out += "                " + jump(n.cases[c].second) + "\n";
 +                }
 +                out += "            default: break;\n            }\n";
 +                // waited < s0 cannot happen (xgkickStall waits at least for the registers)
@@ -1032,15 +1056,15 @@ index 8b44b4c..cd7e226 100644
 +            switch (n.term)
 +            {
 +            case Node::Goto:
-+                out += "        goto " + nodeLabel(n.t0) + ";\n";
++                out += "        " + jump(n.t0) + "\n";
 +                break;
 +            case Node::Cond:
-+                out += "        if (tk) goto " + nodeLabel(n.t0) + ";\n        goto " + nodeLabel(n.t1) + ";\n";
++                out += "        if (tk) " + jump(n.t0) + "\n        " + jump(n.t1) + "\n";
 +                break;
 +            case Node::Dyn:
 +                out += "        switch (jt)\n        {\n";
 +                for (const auto &[pc, target] : n.dynTargets)
-+                    out += "        case " + hx(pc) + ": goto " + nodeLabel(target) + ";\n";
++                    out += "        case " + hx(pc) + ": " + jump(target) + "\n";
 +                out += "        default: goto j" + num(id) + ";\n        }\n";
 +                cold += "j" + num(id) + ":\n" + materialize(n.after) + "        epc = jt; goto x_deopt;\n";
 +                break;
@@ -1055,63 +1079,274 @@ index 8b44b4c..cd7e226 100644
 +            return out;
 +        }
 +
-+        // the whole scheduled program as one function: fastBlock<hash, kSchedBlock>
++        // A scheduled program: parts fastBlock<hash, kSchedBlock + 1 + k> (one per file, so they compile in
++        // parallel and each stays under MSVC's huge-function threshold) and a driver fastBlock<hash, kSchedBlock>
++        // that passes the state between them. Parts are strongly connected components (loops) packed in
++        // topological order, so a loop never crosses parts.
 +        constexpr uint32_t kSchedBlock = 0x80000000u;
++        constexpr uint32_t kPartNodes = 200u;
 +
-+        std::string emitFunction(const Graph &g, uint64_t hash, std::map<std::string, uint32_t> &stats)
++        // Strongly connected components of the nodes in `set` (edges leaving the set ignored), in topological order.
++        std::vector<std::vector<uint32_t>> components(const std::vector<std::vector<uint32_t>> &succ, const std::vector<uint32_t> &set,
++                                                      const std::vector<uint32_t> &member, uint32_t tag)
 +        {
-+            gView = RegView{};
-+            gView.local = true;
-+            gView.record = true;
-+            std::string body;
-+            std::string cold;
-+            for (uint32_t id = 0; id < g.nodes.size(); ++id)
-+                body += emitNode(g, id, cold);
-+            body += cold;
-+            const RegView view = gView;
-+            gView = RegView{};
++            std::map<uint32_t, int32_t> index, low;
++            std::set<uint32_t> onStack;
++            std::vector<uint32_t> stack;
++            std::vector<std::vector<uint32_t>> comps;
++            int32_t counter = 0;
++            for (const uint32_t root : set)
++            {
++                if (index.count(root))
++                    continue;
++                std::vector<std::pair<uint32_t, size_t>> call{{root, 0u}};
++                index[root] = low[root] = counter++;
++                stack.push_back(root);
++                onStack.insert(root);
++                while (!call.empty())
++                {
++                    const uint32_t v = call.back().first;
++                    size_t &next = call.back().second;
++                    if (next < succ[v].size())
++                    {
++                        const uint32_t w = succ[v][next++];
++                        if (member[w] != tag)
++                            continue;
++                        if (!index.count(w))
++                        {
++                            index[w] = low[w] = counter++;
++                            stack.push_back(w);
++                            onStack.insert(w);
++                            call.emplace_back(w, 0u);
++                        }
++                        else if (onStack.count(w))
++                            low[v] = std::min(low[v], index[w]);
++                        continue;
++                    }
++                    if (low[v] == index[v])
++                    {
++                        comps.emplace_back();
++                        uint32_t w = 0;
++                        do
++                        {
++                            w = stack.back();
++                            stack.pop_back();
++                            onStack.erase(w);
++                            comps.back().push_back(w);
++                        } while (w != v);
++                        std::sort(comps.back().begin(), comps.back().end());
++                    }
++                    call.pop_back();
++                    if (!call.empty())
++                        low[call.back().first] = std::min(low[call.back().first], low[v]);
++                }
++            }
++            std::reverse(comps.begin(), comps.end());
++            return comps;
++        }
 +
-+            std::string out = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock) +
-+                              ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
-+            out += "    uint64_t cyc = ctx.cycle;\n    const uint64_t budget = ctx.budget;\n    const uint8_t *const mem = ctx.mem;\n    (void)mem;\n";
-+            out += "    uint32_t epc = 0u;\n    uint64_t kc0 = 0u;\n    (void)kc0;\n    bool tk = false;\n    uint32_t jt = 0u;\n    int32_t bk = 0;\n    uint32_t endBackup = 0u;\n";
-+            out += "    (void)tk; (void)jt; (void)bk;\n";
-+            out += "    switch (vu.m_state.pc)\n    {\n";
++        // Units of at most kPartNodes nodes in an order that follows the control flow: a loop that fits stays
++        // whole; a larger one gives up its entry nodes (the outer back edges then cross parts) and is split again,
++        // so its inner loops stay whole.
++        void decompose(const std::vector<std::vector<uint32_t>> &succ, const std::vector<std::vector<uint32_t>> &pred, const std::vector<uint32_t> &set,
++                       std::vector<uint32_t> &member, uint32_t &tags, std::vector<std::vector<uint32_t>> &units)
++        {
++            const uint32_t tag = ++tags;
++            for (const uint32_t id : set)
++                member[id] = tag;
++            const auto comps = components(succ, set, member, tag);
++            for (const auto &comp : comps)
++            {
++                if (comp.size() <= kPartNodes)
++                {
++                    units.push_back(comp);
++                    continue;
++                }
++                const uint32_t inner = ++tags;
++                for (const uint32_t id : comp)
++                    member[id] = inner;
++                std::vector<uint32_t> heads, rest;
++                for (const uint32_t id : comp)
++                {
++                    bool head = false;
++                    for (const uint32_t p : pred[id])
++                        head = head || member[p] != inner;
++                    (head ? heads : rest).push_back(id);
++                }
++                if (heads.empty())
++                {
++                    heads.push_back(rest.front());
++                    rest.erase(rest.begin());
++                }
++                units.push_back(heads);
++                decompose(succ, pred, rest, member, tags, units);
++            }
++        }
++
++        std::vector<uint32_t> partition(const Graph &g, uint32_t &count)
++        {
++            const uint32_t size = static_cast<uint32_t>(g.nodes.size());
++            std::vector<std::vector<uint32_t>> succ(size), pred(size);
++            for (uint32_t id = 0; id < size; ++id)
++            {
++                succ[id] = g.targets(g.nodes[id]);
++                for (const uint32_t t : succ[id])
++                    pred[t].push_back(id);
++            }
++            std::vector<uint32_t> all(size), member(size, 0u);
++            for (uint32_t id = 0; id < size; ++id)
++                all[id] = id;
++            uint32_t tags = 0u;
++            std::vector<std::vector<uint32_t>> units;
++            decompose(succ, pred, all, member, tags, units);
++            std::vector<uint32_t> partOf(size, 0u);
++            count = 0u;
++            uint32_t fill = 0u;
++            for (const auto &unit : units)
++            {
++                const uint32_t n = static_cast<uint32_t>(unit.size());
++                if (count == 0u || (fill > 0u && fill + n > kPartNodes))
++                {
++                    ++count;
++                    fill = 0u;
++                }
++                for (const uint32_t id : unit)
++                    partOf[id] = count - 1u;
++                fill += n;
++            }
++            return partOf;
++        }
++
++        std::string stateStruct(uint64_t hash)
++        {
++            return "struct VuSched_" + hex64(hash).substr(2, 16) +
++                   "\n{\n    __m128 vr[33];\n    __m128 vn[33];\n    __m128 fAccZ, fAccS;\n    uint64_t cyc, kc0;\n    int32_t vi[16];\n"
++                   "    uint32_t fm[8], fs[8], fc[8];\n    uint32_t node, exit, epc, jt, endBackup, mac, scur, sdi, sticky, clip, wclip, fAccScalar, qdi;\n"
++                   "    int32_t bk;\n    float qpend;\n    bool tk;\n};\n\n";
++        }
++
++        const char *kScalars[] = {"kc0", "epc", "jt", "endBackup", "mac", "scur", "sdi", "sticky", "clip", "wclip", "fAccScalar", "qdi", "bk", "qpend", "tk", "fAccZ", "fAccS"};
++
++        struct Emitted
++        {
++            std::vector<std::string> parts;
++            std::string driver;
++            std::string decls;
++        };
++
++        Emitted emitProgram(const Graph &g, uint64_t hash, std::map<std::string, uint32_t> &stats)
++        {
++            Emitted result;
++            uint32_t count = 0u;
++            const std::vector<uint32_t> partOf = partition(g, count);
++            gPartOf = &partOf;
++            const std::string st = "VuSched_" + hex64(hash).substr(2, 16);
++            // nodes entered from outside their part (driver entries or other parts)
++            std::vector<bool> entered(g.nodes.size(), false);
 +            for (const auto &[pc, id] : g.entries)
-+                out += "    case " + hx(pc) + ": break;\n";
-+            out += "    default: return StepResult::Fallback;\n    }\n";
-+            out += "    uint32_t mac = vu.m_state.mac, scur = vu.m_state.status & 0xFu, sdi = vu.m_state.status & 0x30u, sticky = vu.m_state.status & 0xFC0u;\n";
-+            out += "    uint32_t clip = vu.m_state.clip, wclip = vu.m_workingClip;\n";
-+            out += "    __m128 fAccZ = _mm_setzero_ps(), fAccS = _mm_setzero_ps();\n    uint32_t fAccScalar = 0u;\n";
-+            out += "    float qpend = 0.0f;\n    uint32_t qdi = 0u;\n    (void)qpend; (void)qdi;\n";
-+            for (uint32_t slot = 0; slot < kSlots; ++slot)
-+                out += "    uint32_t fm" + num(slot) + " = 0u, fs" + num(slot) + " = 0u, fc" + num(slot) + " = 0u; (void)fm" + num(slot) + "; (void)fs" + num(slot) +
-+                       "; (void)fc" + num(slot) + ";\n";
-+            const auto memRaw = [](uint32_t reg) { return reg == 32u ? std::string("vu.m_state.acc") : vf(reg); };
-+            for (const uint32_t reg : view.vfUsed)
-+                out += "    __m128 vr" + num(reg) + " = _mm_loadu_ps(" + memRaw(reg) + "), vn" + num(reg) + " = _mm_load_ps(ctx.norm[" + num(reg) + "]);\n";
-+            for (const uint32_t reg : view.viUsed)
-+                out += "    int32_t vi" + num(reg) + " = vu.m_state.vi[" + num(reg) + "];\n";
-+            out += "    switch (vu.m_state.pc)\n    {\n";
++                entered[id] = true;
++            for (uint32_t id = 0; id < g.nodes.size(); ++id)
++                for (const uint32_t t : g.targets(g.nodes[id]))
++                    if (partOf[t] != partOf[id])
++                        entered[t] = true;
++            std::set<uint32_t> allUsed, allWritten, allViUsed, allViWritten;
++            for (uint32_t part = 0; part < count; ++part)
++            {
++                gPart = part;
++                gView = RegView{};
++                gView.local = true;
++                gView.record = true;
++                std::string body;
++                std::string cold;
++                std::string sw;
++                for (uint32_t id = 0; id < g.nodes.size(); ++id)
++                {
++                    if (partOf[id] != part)
++                        continue;
++                    body += emitNode(g, id, cold);
++                    if (entered[id])
++                        sw += "    case " + num(id) + "u: goto " + nodeLabel(id) + ";\n";
++                }
++                const RegView view = gView;
++                gView = RegView{};
++                allUsed.insert(view.vfUsed.begin(), view.vfUsed.end());
++                allWritten.insert(view.vfWritten.begin(), view.vfWritten.end());
++                allViUsed.insert(view.viUsed.begin(), view.viUsed.end());
++                allViWritten.insert(view.viWritten.begin(), view.viWritten.end());
++                std::string out = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " +
++                                  hx(kSchedBlock + 1u + part) + ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
++                out += "    " + st + " &st = *static_cast<" + st + " *>(ctx.user);\n";
++                out += "    uint64_t cyc = st.cyc;\n    const uint64_t budget = ctx.budget;\n    const uint8_t *const mem = ctx.mem;\n    (void)mem; (void)budget;\n";
++                out += "    uint32_t nx = 0u;\n";
++                for (const char *name : kScalars)
++                    out += std::string("    auto ") + name + " = st." + name + "; (void)" + name + ";\n";
++                for (uint32_t slot = 0; slot < kSlots; ++slot)
++                    out += "    uint32_t fm" + num(slot) + " = st.fm[" + num(slot) + "], fs" + num(slot) + " = st.fs[" + num(slot) + "], fc" + num(slot) + " = st.fc[" +
++                           num(slot) + "]; (void)fm" + num(slot) + "; (void)fs" + num(slot) + "; (void)fc" + num(slot) + ";\n";
++                for (const uint32_t reg : view.vfUsed)
++                    out += "    __m128 vr" + num(reg) + " = st.vr[" + num(reg) + "], vn" + num(reg) + " = st.vn[" + num(reg) + "];\n";
++                for (const uint32_t reg : view.viUsed)
++                    out += "    int32_t vi" + num(reg) + " = st.vi[" + num(reg) + "];\n";
++                out += "    switch (st.node)\n    {\n" + sw + "    default: st.exit = 4u; return StepResult::Fallback;\n    }\n";
++                out += body + cold;
++                std::string save;
++                for (const uint32_t reg : view.vfWritten)
++                    save += "    st.vr[" + num(reg) + "] = vr" + num(reg) + "; st.vn[" + num(reg) + "] = vn" + num(reg) + ";\n";
++                for (const uint32_t reg : view.viWritten)
++                    save += "    st.vi[" + num(reg) + "] = vi" + num(reg) + ";\n";
++                for (const char *name : kScalars)
++                    save += std::string("    st.") + name + " = " + name + ";\n";
++                for (uint32_t slot = 0; slot < kSlots; ++slot)
++                    save += "    st.fm[" + num(slot) + "] = fm" + num(slot) + "; st.fs[" + num(slot) + "] = fs" + num(slot) + "; st.fc[" + num(slot) + "] = fc" +
++                            num(slot) + ";\n";
++                save += "    st.cyc = cyc;\n    return StepResult::Continue;\n";
++                out += "x_next:\n    st.node = nx;\n    st.exit = 0u;\n    goto x_save;\n";
++                out += "x_end:\n    st.exit = 1u;\n    goto x_save;\n";
++                out += "x_deopt:\n    st.exit = 2u;\n    goto x_save;\n";
++                out += "x_runaway:\n    st.exit = 3u;\nx_save:\n" + save + "}\n\n";
++                result.parts.push_back(std::move(out));
++            }
++            gPartOf = nullptr;
++
++            std::string d = "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock) +
++                            ">(VU1Interpreter &vu, Vu1FastCtx &ctx)\n{\n";
++            d += "    " + st + " st;\n    switch (vu.m_state.pc)\n    {\n";
 +            for (const auto &[pc, id] : g.entries)
-+                out += "    case " + hx(pc) + ": goto " + nodeLabel(id) + ";\n";
-+            out += "    default: return StepResult::Fallback;\n    }\n";
-+            out += body;
-+            std::string store;
-+            for (const uint32_t reg : view.vfWritten)
-+                store += "    _mm_storeu_ps(" + memRaw(reg) + ", vr" + num(reg) + "); _mm_store_ps(ctx.norm[" + num(reg) + "], vn" + num(reg) + ");\n";
-+            for (const uint32_t reg : view.viWritten)
-+                store += "    vu.m_state.vi[" + num(reg) + "] = static_cast<int16_t>(vi" + num(reg) + ");\n";
-+            store += "    vu.m_state.mac = mac;\n";
-+            store += "    vu.m_state.status = ((sticky | ((stickyOf(fAccZ, fAccS) | fAccScalar) << 6)) & 0xFC0u) | sdi | scur;\n";
-+            store += "    vu.m_state.clip = clip; vu.m_workingClip = wclip;\n";
-+            store += "    vu.m_state.pc = epc;\n    ctx.cycle = cyc;\n";
-+            out += "x_end:\n" + store;
-+            out += "    if (endBackup != 0u) { vu.m_viBranchBackupValue = bk; vu.m_viBranchBackupReg = static_cast<uint8_t>(endBackup); vu.m_viBranchBackupValid = true; }\n";
-+            out += "    return StepResult::Ended;\n";
-+            out += "x_deopt:\n" + store + "    return StepResult::Continue;\n";
-+            out += "x_runaway:\n" + store + "    return StepResult::Budget;\n";
-+            out += "}\n\n";
++                d += "    case " + hx(pc) + ": st.node = " + num(id) + "u; break;\n";
++            d += "    default: return StepResult::Fallback;\n    }\n";
++            d += "    st.cyc = ctx.cycle; st.kc0 = 0u; st.epc = 0u; st.jt = 0u; st.endBackup = 0u; st.bk = 0; st.tk = false; st.qpend = 0.0f; st.qdi = 0u;\n";
++            d += "    st.mac = vu.m_state.mac; st.scur = vu.m_state.status & 0xFu; st.sdi = vu.m_state.status & 0x30u; st.sticky = vu.m_state.status & 0xFC0u;\n";
++            d += "    st.clip = vu.m_state.clip; st.wclip = vu.m_workingClip; st.fAccZ = _mm_setzero_ps(); st.fAccS = _mm_setzero_ps(); st.fAccScalar = 0u;\n";
++            d += "    for (uint32_t slot = 0; slot < 8u; ++slot) st.fm[slot] = st.fs[slot] = st.fc[slot] = 0u;\n";
++            const auto memRaw = [](uint32_t reg) { return reg == 32u ? std::string("vu.m_state.acc") : "vu.m_state.vf[" + num(reg) + "]"; };
++            for (const uint32_t reg : allUsed)
++                d += "    st.vr[" + num(reg) + "] = _mm_loadu_ps(" + memRaw(reg) + "); st.vn[" + num(reg) + "] = _mm_load_ps(ctx.norm[" + num(reg) + "]);\n";
++            for (const uint32_t reg : allViUsed)
++                d += "    st.vi[" + num(reg) + "] = vu.m_state.vi[" + num(reg) + "];\n";
++            d += "    static constexpr FastBlock parts[] = {\n";
++            for (uint32_t part = 0; part < count; ++part)
++                d += "        &fastBlock<" + hex64(hash) + ", " + hx(kSchedBlock + 1u + part) + ">,\n";
++            d += "    };\n    static constexpr uint16_t partOf[] = {";
++            for (uint32_t id = 0; id < g.nodes.size(); ++id)
++                d += (id % 32u == 0u ? "\n        " : "") + num(partOf[id]) + ",";
++            d += "\n    };\n";
++            d += "    ctx.user = &st;\n    do\n        parts[partOf[st.node]](vu, ctx);\n    while (st.exit == 0u);\n    ctx.user = nullptr;\n";
++            for (const uint32_t reg : allWritten)
++                d += "    _mm_storeu_ps(" + memRaw(reg) + ", st.vr[" + num(reg) + "]); _mm_store_ps(ctx.norm[" + num(reg) + "], st.vn[" + num(reg) + "]);\n";
++            for (const uint32_t reg : allViWritten)
++                d += "    vu.m_state.vi[" + num(reg) + "] = static_cast<int16_t>(st.vi[" + num(reg) + "]);\n";
++            d += "    vu.m_state.mac = st.mac;\n";
++            d += "    vu.m_state.status = ((st.sticky | ((stickyOf(st.fAccZ, st.fAccS) | st.fAccScalar) << 6)) & 0xFC0u) | st.sdi | st.scur;\n";
++            d += "    vu.m_state.clip = st.clip; vu.m_workingClip = st.wclip;\n";
++            d += "    vu.m_state.pc = st.epc;\n    ctx.cycle = st.cyc;\n";
++            d += "    if (st.exit == 1u)\n    {\n        if (st.endBackup != 0u) { vu.m_viBranchBackupValue = st.bk; vu.m_viBranchBackupReg = static_cast<uint8_t>(st.endBackup); "
++                 "vu.m_viBranchBackupValid = true; }\n        return StepResult::Ended;\n    }\n";
++            d += "    return st.exit == 3u ? StepResult::Budget : StepResult::Continue;\n}\n\n";
++            result.driver = std::move(d);
++            for (uint32_t part = 0; part < count; ++part)
++                result.decls += "template <>\nVU1InterpreterAccess::StepResult VU1InterpreterAccess::fastBlock<" + hex64(hash) + ", " +
++                                hx(kSchedBlock + 1u + part) + ">(VU1Interpreter &vu, Vu1FastCtx &ctx);\n";
++            stats["sched parts"] += count;
 +
 +            uint32_t deopts = 0u;
 +            for (const Node &n : g.nodes)
@@ -1135,7 +1370,7 @@ index 8b44b4c..cd7e226 100644
 +            stats["sched FMAC flag producers kept"] += kept;
 +            if (g.overflow)
 +                ++stats["sched node limit hit"];
-+            return out;
++            return result;
 +        }
 +    }
 +
@@ -1143,7 +1378,7 @@ index 8b44b4c..cd7e226 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2512,125 @@ namespace
+@@ -1547,17 +2734,135 @@ namespace
                  return false;
          }
  
@@ -1171,25 +1406,35 @@ index 8b44b4c..cd7e226 100644
 +            graph.build(entryPcs);
 +            graph.liveness();
 +            g_sched = true;
-+            const std::string fn = sched::emitFunction(graph, hash, stats);
++            const sched::Emitted program = sched::emitProgram(graph, hash, stats);
 +            g_sched = false;
++            const std::string head = "#include \"ps2_vu1_impl.inl\"\n\n"
++                                     "// CLIP's flag bits, as clipOp computes them (without queueing them)\n"
++                                     "[[maybe_unused]] static inline uint32_t clipBits(__m128 fsRaw, __m128 ftRaw)\n{\n"
++                                     "    const uint32_t wBits = static_cast<uint32_t>(_mm_extract_ps(ftRaw, 3));\n"
++                                     "    const int32_t limit = (wBits & 0x7F800000u) != 0u ? static_cast<int32_t>(wBits & 0x7FFFFFFFu) : 0x007FFFFF;\n"
++                                     "    const __m128i bits = _mm_castps_si128(fsRaw);\n"
++                                     "    const __m128i bounds = _mm_set1_epi32(limit);\n"
++                                     "    const uint32_t positive = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(bits, bounds)))) & 7u;\n"
++                                     "    const uint32_t negative = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(\n"
++                                     "        _mm_xor_si128(bits, _mm_set1_epi32(static_cast<int32_t>(0x80000000u))), bounds)))) & 7u;\n"
++                                     "    const uint32_t plus = (positive & 1u) | ((positive & 2u) << 1u) | ((positive & 4u) << 2u);\n"
++                                     "    const uint32_t minus = ((negative & 1u) << 1u) | ((negative & 2u) << 2u) | ((negative & 4u) << 3u);\n"
++                                     "    return plus | minus;\n}\n\n" +
++                                     sched::stateStruct(hash);
++            for (size_t part = 0; part < program.parts.size(); ++part)
++            {
++                char partName[64];
++                std::snprintf(partName, sizeof(partName), "vu1_%016" PRIx64 "_sched_%zu.cpp", hash, part);
++                std::ofstream partFile(outDir / partName, std::ios::binary);
++                partFile << head << program.parts[part];
++                if (!partFile)
++                    return false;
++            }
 +            char schedName[64];
 +            std::snprintf(schedName, sizeof(schedName), "vu1_%016" PRIx64 "_sched.cpp", hash);
 +            std::ofstream schedFile(outDir / schedName, std::ios::binary);
-+            schedFile << "#include \"ps2_vu1_impl.inl\"\n\n"
-+                         "// CLIP's flag bits, as clipOp computes them (without queueing them)\n"
-+                         "static inline uint32_t clipBits(__m128 fsRaw, __m128 ftRaw)\n{\n"
-+                         "    const uint32_t wBits = static_cast<uint32_t>(_mm_extract_ps(ftRaw, 3));\n"
-+                         "    const int32_t limit = (wBits & 0x7F800000u) != 0u ? static_cast<int32_t>(wBits & 0x7FFFFFFFu) : 0x007FFFFF;\n"
-+                         "    const __m128i bits = _mm_castps_si128(fsRaw);\n"
-+                         "    const __m128i bounds = _mm_set1_epi32(limit);\n"
-+                         "    const uint32_t positive = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(bits, bounds)))) & 7u;\n"
-+                         "    const uint32_t negative = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(\n"
-+                         "        _mm_xor_si128(bits, _mm_set1_epi32(static_cast<int32_t>(0x80000000u))), bounds)))) & 7u;\n"
-+                         "    const uint32_t plus = (positive & 1u) | ((positive & 2u) << 1u) | ((positive & 4u) << 2u);\n"
-+                         "    const uint32_t minus = ((negative & 1u) << 1u) | ((negative & 2u) << 2u) | ((negative & 4u) << 3u);\n"
-+                         "    return plus | minus;\n}\n\n"
-+                      << fn;
++            schedFile << "#include \"ps2_vu1_impl.inl\"\n\n" << sched::stateStruct(hash) << program.decls << "\n" << program.driver;
 +            if (!schedFile)
 +                return false;
 +            scheduled = true;
@@ -1270,7 +1515,7 @@ index 8b44b4c..cd7e226 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +2652,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +2884,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);
