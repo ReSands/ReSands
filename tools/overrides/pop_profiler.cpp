@@ -5,6 +5,9 @@
 // Environment: POP_PROFILE=<out file>:<start seconds>:<duration seconds>, e.g.
 //   POP_PROFILE=prof.txt:20:30   (samples from 20 s to 50 s after start)
 // The out file is split at the last two colons, so Windows paths with a drive letter work.
+// POP_PROFILE_LAST=<seconds>: rolling mode, sampling all the time and keeping the last <seconds>; every
+// kept quick-save (states/play_<date>_<time>.state) also writes the profile of those seconds next to it
+// as play_<date>_<time>.prof (pop_profiler::dumpLast, called from keepQuickSaves). play.ps1 turns it on.
 //
 // Stacks: Windows x64 unwinds with the image's unwind tables (RtlVirtualUnwind); macOS arm64
 // follows the frame-pointer chain. Nothing is allocated while a thread is suspended (it may hold
@@ -19,7 +22,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -245,6 +250,38 @@ namespace
 #endif
 
 #if defined(_WIN32) || (defined(__APPLE__) && defined(__aarch64__))
+    void writeProfile(const std::string &path, const std::map<ThreadKey, ThreadInfo> &threads, uint64_t rounds,
+                      double seconds)
+    {
+        FILE *f = std::fopen(path.c_str(), "w");
+        if (!f)
+        {
+            std::fprintf(stderr, "[pop:profile] cannot write %s\n", path.c_str());
+            return;
+        }
+        std::fprintf(f, "# pop profile v1, %llu rounds over %.1f s\n%s\n", static_cast<unsigned long long>(rounds),
+                     seconds, imageLine().c_str());
+#if defined(_WIN32)
+        std::fputs(moduleLines().c_str(), f);
+#endif
+        int index = 0;
+        for (auto &[id, info] : threads)
+        {
+            std::fprintf(f, "thread %d %llu %s\n", index, static_cast<unsigned long long>(info.samples), info.name.c_str());
+            for (auto &[stack, count] : info.stacks)
+            {
+                std::fprintf(f, "s %d %llu", index, static_cast<unsigned long long>(count));
+                for (uint64_t pc : stack)
+                    std::fprintf(f, " %llx", static_cast<unsigned long long>(pc));
+                std::fputc('\n', f);
+            }
+            ++index;
+        }
+        std::fclose(f);
+        std::fprintf(stderr, "[pop:profile] wrote %s (%llu rounds, %zu threads)\n", path.c_str(),
+                     static_cast<unsigned long long>(rounds), threads.size());
+    }
+
     void run(std::string path, double startSeconds, double seconds)
     {
         std::this_thread::sleep_for(std::chrono::duration<double>(startSeconds));
@@ -281,39 +318,90 @@ namespace
             ++rounds;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        FILE *f = std::fopen(path.c_str(), "w");
-        if (!f)
+        writeProfile(path, threads, rounds, seconds);
+    }
+
+    // Rolling mode (POP_PROFILE_LAST=<seconds>): samples all the time into one-second slices and keeps the
+    // last <seconds> of them; dumpLast() (called for every kept quick-save) writes those slices as one
+    // profile, so a dip noticed just after it happened can be saved with one button press.
+    struct Slice
+    {
+        uint64_t rounds = 0;
+        std::map<ThreadKey, ThreadInfo> threads; // names are added when a dump merges the slices
+    };
+    std::mutex g_rollMutex;
+    std::vector<std::string> g_dumpRequests;
+
+    void rolling(int keepSeconds)
+    {
+        std::fprintf(stderr, "[pop:profile] rolling: keeping the last %d s for every kept quick-save\n", keepSeconds);
+        std::deque<Slice> slices(1);
+        std::map<ThreadKey, std::string> names;
+        std::vector<ThreadKey> ids;
+        Sample sample;
+        auto sliceEnd = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        for (;;)
         {
-            std::fprintf(stderr, "[pop:profile] cannot write %s\n", path.c_str());
-            return;
-        }
-        std::fprintf(f, "# pop profile v1, %llu rounds over %.1f s\n%s\n", static_cast<unsigned long long>(rounds),
-                     seconds, imageLine().c_str());
-#if defined(_WIN32)
-        std::fputs(moduleLines().c_str(), f);
-#endif
-        int index = 0;
-        for (auto &[id, info] : threads)
-        {
-            std::fprintf(f, "thread %d %llu %s\n", index, static_cast<unsigned long long>(info.samples), info.name.c_str());
-            for (auto &[stack, count] : info.stacks)
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= sliceEnd)
             {
-                std::fprintf(f, "s %d %llu", index, static_cast<unsigned long long>(count));
-                for (uint64_t pc : stack)
-                    std::fprintf(f, " %llx", static_cast<unsigned long long>(pc));
-                std::fputc('\n', f);
+#if defined(__APPLE__)
+                for (ThreadKey id : ids)
+                    mach_port_deallocate(mach_task_self(), id);
+#endif
+                ids = listThreads();
+                for (ThreadKey id : ids)
+                    if (!names.count(id))
+                        names[id] = threadName(id);
+                slices.emplace_back();
+                while (static_cast<int>(slices.size()) > keepSeconds)
+                    slices.pop_front();
+                sliceEnd = now + std::chrono::seconds(1);
+
+                std::vector<std::string> requests;
+                {
+                    std::lock_guard<std::mutex> lock(g_rollMutex);
+                    requests.swap(g_dumpRequests);
+                }
+                for (const std::string &path : requests)
+                {
+                    std::map<ThreadKey, ThreadInfo> merged;
+                    uint64_t rounds = 0;
+                    for (const Slice &sl : slices)
+                    {
+                        rounds += sl.rounds;
+                        for (auto &[id, info] : sl.threads)
+                        {
+                            ThreadInfo &m = merged[id];
+                            m.name = names[id];
+                            m.samples += info.samples;
+                            for (auto &[stack, count] : info.stacks)
+                                m.stacks[stack] += count;
+                        }
+                    }
+                    writeProfile(path, merged, rounds, static_cast<double>(slices.size()));
+                }
             }
-            ++index;
+            Slice &cur = slices.back();
+            for (ThreadKey id : ids)
+            {
+                if (!sampleThread(id, sample))
+                    continue;
+                ThreadInfo &info = cur.threads[id];
+                ++info.samples;
+                ++info.stacks[std::vector<uint64_t>(sample.pc, sample.pc + sample.depth)];
+            }
+            ++cur.rounds;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        std::fclose(f);
-        std::fprintf(stderr, "[pop:profile] wrote %s (%llu rounds, %zu threads)\n", path.c_str(),
-                     static_cast<unsigned long long>(rounds), threads.size());
     }
 
     struct Starter
     {
         Starter()
         {
+            if (const char *last = std::getenv("POP_PROFILE_LAST"); last && std::atoi(last) > 0)
+                std::thread(rolling, std::atoi(last)).detach();
             const char *spec = std::getenv("POP_PROFILE");
             if (!spec || !*spec)
                 return;
@@ -328,4 +416,22 @@ namespace
         }
     } g_starter;
 #endif
+}
+
+namespace pop_profiler
+{
+    // Writes the rolling profile (POP_PROFILE_LAST) to <path> at the next one-second slice boundary; a
+    // no-op when rolling mode is off or the platform has no sampler.
+    void dumpLast(const std::string &path)
+    {
+#if defined(_WIN32) || (defined(__APPLE__) && defined(__aarch64__))
+        static const bool on = [] { const char *v = std::getenv("POP_PROFILE_LAST"); return v && std::atoi(v) > 0; }();
+        if (!on)
+            return;
+        std::lock_guard<std::mutex> lock(g_rollMutex);
+        g_dumpRequests.push_back(path);
+#else
+        (void)path;
+#endif
+    }
 }
