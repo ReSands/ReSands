@@ -103,3 +103,9 @@ keeps only what carries over to other projects.
   where the program was cut into parts, and hot loops now crossed parts on every iteration (each crossing saves
   and reloads ~140 values). Check performance after every generator change, not only exactness, and profile
   before guessing (the profile pointed at one program's parts within minutes).
+- **Stopping a PC job mid-boot leaves the game running** (19 Oct): ending the scheduled task kills only the
+  wrapper, the `ps2EntryRunner.exe` it started stays and locks the exe, so the next build fails with LNK1104.
+  `tools/overnight-pc.command --stop` now stops the game too; a play session left open has the same effect.
+- **A hook that skips a game function skips all of its side effects** (19 Oct): `CJMeshElement::Display` and
+  `CJMeshElementRef::Display` also switch the VU1 driver (MPG upload) before skinned draws; skipping them for a
+  measurement left the wrong program loaded and every save fell to ~7 fps. Decompile before skipping.

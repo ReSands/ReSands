@@ -11,8 +11,10 @@ ps() { ssh -o BatchMode=yes -o ConnectTimeout=10 $PC "powershell -NoProfile -Exe
 
 if [[ "$1" == "--stop" ]]; then
     # Ending the scheduled task stops only its PowerShell wrapper; the job's Python processes
-    # (naming, mesh workers) would keep running, so stop them too.
+    # (naming, mesh workers) would keep running, so stop them too, and a game a boot had started
+    # (an orphan keeps the exe locked, so the next build fails to link: 19 Oct).
     ps "Stop-ScheduledTask -TaskName PoP_Decomp_Job -ErrorAction SilentlyContinue
+        Stop-Process -Name ps2EntryRunner -Force -ErrorAction SilentlyContinue
         Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { \$_.CommandLine -match 'PoP_Decomp|multiprocessing' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
         Start-Sleep 2
         'job: ' + (Get-ScheduledTask -TaskName PoP_Decomp_Job).State + '; python processes left: ' + @(Get-Process python -ErrorAction SilentlyContinue).Count"
