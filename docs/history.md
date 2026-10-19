@@ -237,3 +237,23 @@ Earlier status (12 Oct morning; historical, kept for the references below): step
 - **Lessons file (user, 18 Oct):** `docs/lessons.md` collects what carries over to other decomp/recomp projects (mistakes, best practices); add to it whenever we learn something general.
 - **Survey before fixing (user, 18 Oct):** once a problem is narrowed down to a specific cause, first check how other PS2 recompilation projects met it (`docs/ps2_projects.md`, saved READMEs in `game/analysis/unbaked/readmes/` and `recompfyi/readmes/`), then fix. Check licences before reusing code.
 - **Working practice:** start fresh sessions from this file (long sessions get expensive); judge sound on the TV or from a WAV, not over Moonlight; Mac GUI boots need the display awake (`caffeinate -u -t 2`); PC jobs with complex env strings go in a wrapper script under `game\jobs\`.
+
+## Status block of CLAUDE.md as of 18 Oct 2026 night (moved verbatim on 19 Oct)
+
+Was headed "Current status (18 Oct 2026 night; start here)".
+
+Older status blocks: `docs/history.md` (last one moved there 18 Oct). Playthrough saves, profiles and the
+first-person flag: `docs/saves_1017.md`. Native renderer: `docs/native_renderer.md`.
+
+- **Game on the PC:** plays at 60 fps (`POP_60FPS=1`) on the emulated renderer with sound and native PS2 movies. Play build = pop-sotc runtime + **patches up to 29** (27: `PS2X_FULLSCREEN`, `PS2X_DEBUGGER`; 28/29: Digital Foundry-style frame-rate overlay, L3 + R3 or F3, `PS2X_FRAME_GRAPH=1`) + **29 compiled VU1 microcode images** (was 9) + the profiler + linker map. Desktop shortcuts "PoP 60 fps" / "PoP 30 fps (recheck)" start fullscreen, panel hidden; **Select** quick-saves (kept as `game\ps2\disc\states\play_<date>_<time>.state`; 77 saves so far, 51 of 17 Oct + 26 of 18 Oct), Alt+F4 quits. User (18 Oct): graph looks good; Select fine.
+- **Speed (the priority, user 18 Oct):** the slowdowns were VU1 microprograms running on the cycle-modelling interpreter: compiled VU1 programs are found by the whole 16 KB VU1 code image, and only the opening had been recorded. Recording VU1 images from the saves and compiling them (`tools/windows/oct18.ps1`: capture -> `rebuild.ps1 -Vu1` -> measure -> profiles -> nightly) took the slow cinematic and the pool to 60 fps and the sand-monster fight from 2-16 to 25-48 fps (still climbing in a 20 s test). Still slow: the fight, **earthquake effects**, and the user's worst spot, **the start of the 21:38 session right after the save point** (play log `game\recomp-sotc\play_20261018_2138.log`). VU0 microprograms also run on the interpreter (visible in the 60 fps profile; 36 VCALLMS/VCALLMSR sites, bounding-box checks and matrix maths 0x495240-0x495C18); other projects compile VU0 (black-recomp, reo, burnout3-pc: `docs/reference.md`).
+- **Committed, not built yet:** first-person camera fix (override `updateCameraInvert`: right stick X inverted only in the third-person camera; flag `*(0x672B04) + 0x90` = 1 normal, 0 first-person; boot.ps1 no longer forces `PS2X_INVERT_RIGHT_STICK`).
+- **Next session (9 h unattended, usage not limited; user 18 Oct night), in order:**
+  1. Runtime patch 30: hide the mouse pointer in fullscreen (user request).
+  2. Run `tools\windows\oct18.ps1` (all 77 saves; builds with the first-person fix and patch 30; no sleep at the end). Its first capture run was stopped after 2 saves on purpose.
+  3. Act on its measurements and profiles until the fight, the earthquake and the 21:38 save-point start hold 60: more VU1 coverage if images are still missing; compile VU0 microprograms (survey first: survey-before-fixing rule); whatever else the profiler shows.
+  4. Optional overnight local-model jobs are welcome if they have a strict judge (`docs/llm_jobs.md`).
+  5. End: commit and write up; **shut the PC down** (not sleep; user 18 Oct: wake-on-LAN from shutdown to be troubleshot another time).
+- **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner of an oversized canvas (capture quirk, also with display scaling).
+- **Native renderer (1.0's main job):** frames from any save offline (`pop_state_frame`, ~0.5 s) with lightmaps, characters from memory, glow/haze, particles; all 51 saves of 17 Oct render, mean difference 16.85. Missing: HUD/menus/text, water (VU1 program 7 tessellates it), shadows, halos. Live window and comparison mode exist (Mac). Details `docs/native_renderer.md`.
+- **Rules from the user:** survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); add general learnings to `docs/lessons.md`; one dated job script per night (`tools/windows/<mon><day>.ps1`).
