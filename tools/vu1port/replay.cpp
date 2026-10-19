@@ -139,7 +139,9 @@ namespace
         std::memcpy(out.vf, s.vf, sizeof out.vf);
         std::memcpy(out.vi, s.vi, sizeof out.vi);
         std::memcpy(out.acc, s.acc, sizeof out.acc);
-        out.q = s.q;
+        // Q as it is once a DIV in flight lands: a port computes a DIV's result at once, and stage borders
+        // may fall between a DIV and its result (P6's inner loops end with one; nothing reads Q before it lands)
+        out.q = vu.m_fdiv.valid ? vu.m_fdiv.value : s.q;
         out.p = s.p;
         out.i = s.i;
         out.mac = s.mac;
