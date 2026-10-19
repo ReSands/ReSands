@@ -550,9 +550,11 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   (`asyncvif::submitGif` -> `GS::processGIFPacket`), so it blocks the VU thread for those ~3 ms per frame
   (with the static world skipped the VU thread was 53% busy in the fight, so it should fit 60 fps; measure);
   first frames after loading new areas pay the full upload (a hitch of ~20 ms+). (2) The upload overwrites
-  the whole frame and Z: anything the GS drew before the marker in that frame is lost (expected: nothing, the
-  marker is at the first Display3DElements; check the sky, the clear, the letterbox). (3) Pixels with no
-  native draw get colour 0 / Z 0. (4) Nothing was ever run with a real game window; Vulkan and the GS's
+  the whole frame and Z: anything the GS drew before the marker in that frame is lost. Checked on the fight
+  save's last chain (offline, 20 Oct): before the first VU program call there are only the frame setup, the
+  clear (PRIM sprite, RGBAQ 0, Z test ALWAYS, 20 strips) and texture uploads, so the upload's colour 0 / Z 0
+  equals the game's own clear. Other areas (menus, letterbox) not checked. (3) Pixels with no native draw
+  get colour 0 / Z 0 (= the clear). (4) Nothing was ever run with a real game window; Vulkan and the GS's
   OpenGL share the GPU for the first time (separate devices, no interop).
 - **First boot (morning, TV on, user present):** on the PC, the fight save with and without the mode,
   compare fps and pictures:
