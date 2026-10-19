@@ -1,4 +1,4 @@
-From 68389ae4d32a6ca8ae80bbb302bf91d7ba08b50f Mon Sep 17 00:00:00 2001
+From 4b694e850b3a9963232a7999d79aadfde7beda7d Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Mon, 19 Oct 2026 09:19:15 +0100
 Subject: [PATCH] vu1_recomp: build-time scheduled VU1 programs (VU1R_SCHED=1)
@@ -16,8 +16,8 @@ The verifier treats ready cycles at or before the unit's cycle as equal (they st
  ps2xRuntime/CMakeLists.txt              |    8 +
  ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp |   18 +-
  ps2xRuntime/src/lib/vu/ps2_vu1_impl.inl |    1 +
- ps2xTest/tools/vu1_recomp.cpp           | 1470 ++++++++++++++++++++++-
- 4 files changed, 1482 insertions(+), 15 deletions(-)
+ ps2xTest/tools/vu1_recomp.cpp           | 1477 ++++++++++++++++++++++-
+ 4 files changed, 1489 insertions(+), 15 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
 index 9f2f4d4..cd4c44e 100644
@@ -80,7 +80,7 @@ index cee67a1..c897f92 100644
      GS *gs = nullptr;
      PS2Memory *memory = nullptr;
 diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
-index 8b44b4c..81a4034 100644
+index 8b44b4c..77c3e44 100644
 --- a/ps2xTest/tools/vu1_recomp.cpp
 +++ b/ps2xTest/tools/vu1_recomp.cpp
 @@ -26,6 +26,10 @@ namespace
@@ -272,7 +272,7 @@ index 8b44b4c..81a4034 100644
          case 0x7B:
              return e;
          default:
-@@ -1401,6 +1472,1199 @@ namespace
+@@ -1401,6 +1472,1206 @@ namespace
          return !p.reserved && !p.branch && !p.d.eBit && !p.d.dBit && !p.d.tBit;
      }
  
@@ -1276,9 +1276,16 @@ index 8b44b4c..81a4034 100644
 +        {
 +            const uint32_t size = static_cast<uint32_t>(g.nodes.size());
 +            std::vector<std::vector<uint32_t>> succ(size), pred(size);
++            // JR edges (to every link label) are left out: they tie the whole program into one loop that is cut
++            // arbitrarily, splitting real loops across parts (eea60abc, 19 Oct: 2-3x slower than the per-pair
++            // code). Without them the loops are small (<= 137 nodes in PoP) and stay whole; a return crosses
++            // parts at most once per call.
 +            for (uint32_t id = 0; id < size; ++id)
 +            {
-+                succ[id] = g.targets(g.nodes[id]);
++                const Node &n = g.nodes[id];
++                if (!n.deopt && !n.dyn && n.term == Node::Dyn)
++                    continue;
++                succ[id] = g.targets(n);
 +                for (const uint32_t t : succ[id])
 +                    pred[t].push_back(id);
 +            }
@@ -1472,7 +1479,7 @@ index 8b44b4c..81a4034 100644
      bool writeImage(const std::filesystem::path &outDir, uint64_t hash, const std::vector<uint8_t> &code, uint32_t maxBlockPairs,
                      std::map<std::string, uint32_t> &stats)
      {
-@@ -1547,17 +2811,187 @@ namespace
+@@ -1547,17 +2818,187 @@ namespace
                  return false;
          }
  
@@ -1661,7 +1668,7 @@ index 8b44b4c..81a4034 100644
  
          char name[64];
          std::snprintf(name, sizeof(name), "vu1_%016" PRIx64 ".cpp", hash);
-@@ -1579,6 +3013,16 @@ int main(int argc, char **argv)
+@@ -1579,6 +3020,16 @@ int main(int argc, char **argv)
      const std::filesystem::path outDir = argv[2];
      const uint32_t blockPairs = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : kDefaultBlockPairs;
      std::filesystem::create_directories(outDir);
