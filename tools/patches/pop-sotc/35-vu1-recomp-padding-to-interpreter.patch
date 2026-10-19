@@ -1,0 +1,39 @@
+From cfa6ee330aebd908b881ea571f115153b20df313 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Mon, 19 Oct 2026 08:44:29 +0100
+Subject: [PATCH] vu1_recomp: pairs past the last non-zero one go to the
+ interpreter
+
+The runtime also matches a live image by a compiled program's zero-padded
+prefix, so the bytes after a program are not known code: a pair there, or a
+branch / E-bit pair whose delay slot lies there, now exits to the interpreter
+instead of running the padding as instructions.
+---
+ ps2xTest/tools/vu1_recomp.cpp | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xTest/tools/vu1_recomp.cpp b/ps2xTest/tools/vu1_recomp.cpp
+index 1a3bbaf..0bb1a90 100644
+--- a/ps2xTest/tools/vu1_recomp.cpp
++++ b/ps2xTest/tools/vu1_recomp.cpp
+@@ -1413,12 +1413,15 @@ namespace
+                 p.target = (p.pc + 8u + static_cast<uint32_t>(fImm11(p.d.lower) * 8)) & (g_codeSize - 1u);
+             }
+         }
++        // The runtime also matches an image by a compiled program's zero-padded prefix (the rest of VU memory
++        // holds whatever an earlier, longer program left there), so the pairs past the last non-zero one are
++        // not known code: they and any branch or E-bit pair whose delay slot lies there go to the interpreter.
+         for (uint32_t index = 0; index < count; ++index)
+         {
+             Pair &p = emitter.pairs[index];
+             const Pair &next = emitter.pairs[nextPc(p.pc) / 8u];
+-            p.fallback = p.reserved || p.d.dBit || p.d.tBit;
+-            if ((p.branch || p.d.eBit) && !plainPair(next))
++            p.fallback = p.reserved || p.d.dBit || p.d.tBit || index >= used;
++            if ((p.branch || p.d.eBit) && (!plainPair(next) || next.pc / 8u >= used))
+                 p.fallback = true;
+             if (p.branch && p.d.eBit)
+                 p.fallback = true;
+-- 
+2.54.0 (Apple Git-157)
+
