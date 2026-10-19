@@ -60,8 +60,13 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "FAIL: a non-marker packet was consumed\n");
         return 1;
     }
-    // later frames as the game sends them: each texture's pixels only once (PNF6: key, w = h = 0)
+    // later frames as the game sends them: <world.pnf>.2 if pop_state_frame wrote one (POP_STATE_WORLD_SECOND:
+    // PNF7, batches by key), else the first frame without its texture pixels (PNF6: key, w = h = 0)
     std::vector<uint8_t> again;
+    std::ifstream second(std::string(argv[1]) + ".2", std::ios::binary);
+    if (second)
+        again.assign((std::istreambuf_iterator<char>(second)), std::istreambuf_iterator<char>());
+    else
     {
         size_t o = 4 + 64;
         uint32_t ni;

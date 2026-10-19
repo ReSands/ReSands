@@ -273,6 +273,11 @@ namespace pop_native_world
         g_worldFrameSeq = seq;
         g_worldFrame = std::move(pnf);
     }
+    bool meshSent(uint64_t key)
+    {
+        static std::unordered_set<uint64_t> sent;
+        return !sent.insert(key).second;
+    }
 }
 namespace pop_live_client
 {
@@ -395,8 +400,21 @@ int main(int argc, char **argv)
         std::ofstream(argv[2], std::ios::binary).write(reinterpret_cast<const char *>(g_worldFrame.data()), std::streamsize(g_worldFrame.size()));
         // the marker as the DMA list now holds it (graphics object +0xEC moved past it)
         const uint32_t cursor = rd32(0x70000620u + 0xECu) - 0x30u;
+        const size_t firstBytes = g_worldFrame.size();
+        // the same frame again as the next one would be written: batches sent before only by key
+        // (<out>.2; pop_world_test draws it as the later frames)
+        if (std::getenv("POP_STATE_WORLD_SECOND"))
+        {
+            setArgs(ctx, 0x700000C0u);
+            call(0x004BC000u, &ctx);
+            ctx.r[31] = _mm_set_epi32(0, 0, 0, 0x004A2100);
+            call(0x004A2C80u, &ctx);
+            std::ofstream(std::string(argv[2]) + ".2", std::ios::binary)
+                .write(reinterpret_cast<const char *>(g_worldFrame.data()), std::streamsize(g_worldFrame.size()));
+            std::fprintf(stderr, "[state] second world frame %u: %zu bytes\n", g_worldFrameSeq, g_worldFrame.size());
+        }
         std::fprintf(stderr, "[state] world frame %u: %zu bytes; marker at %08x: %08x %08x %08x %08x | %08x %08x %08x %08x | %08x %08x %08x %08x\n",
-                     g_worldFrameSeq, g_worldFrame.size(), cursor, rd32(cursor), rd32(cursor + 4), rd32(cursor + 8), rd32(cursor + 12),
+                     1u, firstBytes, cursor, rd32(cursor), rd32(cursor + 4), rd32(cursor + 8), rd32(cursor + 12),
                      rd32(cursor + 16), rd32(cursor + 20), rd32(cursor + 24), rd32(cursor + 28), rd32(cursor + 32), rd32(cursor + 36),
                      rd32(cursor + 40), rd32(cursor + 44));
         return 0;

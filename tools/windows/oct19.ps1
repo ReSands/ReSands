@@ -59,6 +59,7 @@ if ($World) {
     if ($LASTEXITCODE -ne 0) { "NATIVE TOOLS BUILD FAILED"; Select-String -Path "$out\build.log" -Pattern 'error' | Select-Object -First 10; exit 1 }
     Set-Location "$Root\game\ps2\disc"
     $st = 'states\play_20261019_185602.state'
+    $env:POP_STATE_WORLD_SECOND = '1' # also the next frame (batches by key) for pop_world_test
     & "$NB\pop_state_frame.exe" $st "$out\fight.world.pnf" --world --bigfile DATA\PRINCE.BF --packindex "$Root\game\analysis\packindex.txt" > "$out\state_frame.log" 2>&1
     Select-String -Path "$out\state_frame.log" -Pattern 'world frame|packs loaded'
     '1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1' | Set-Content "$out\identity.clip"

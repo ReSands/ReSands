@@ -6,4 +6,10 @@ P=$(cd "$(dirname "$0")/../.." && pwd)
 W=$P/game/analysis/vu1port
 mkdir -p "$W"
 INC="-I $R/ps2xRuntime/include -I $R/ps2xIOP/include -I $R/ps2xRuntime/src/lib/vu -I $R/ps2xRuntime/src/lib"
-clang++ -arch x86_64 -O2 -std=c++20 -msse4.1 $INC "$P/tools/vu1port/replay.cpp" -o "$W/vu1replay"
+clang++ -arch x86_64 -O2 -std=c++20 -msse4.1 $INC -I "$P/tools/vu1port" "$P/tools/vu1port/replay.cpp" -o "$W/vu1replay"
+# judge <port.cpp> <exe>: build the judge with a stage port (no FMA contraction: the VU rounds each
+# multiply and add; AddressSanitizer catches stray memory accesses)
+judge() {
+    clang++ -arch x86_64 -O1 -g -std=c++17 -ffp-contract=off -fsanitize=address -I "$P/tools/vu1port" "$P/tools/vu1port/judge.cpp" "$1" -o "$2"
+}
+[ -n "${1:-}" ] && judge "$1" "$2"

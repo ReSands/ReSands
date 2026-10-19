@@ -111,7 +111,9 @@ namespace pop_native
 
     struct Draw
     {
-        int mesh;
+        int mesh;        // a mesh of this frame (addMesh), or -1 with `kept`
+        int kept = -1;   // a kept mesh (keepMesh: stays on the GPU across frames) drawn with `material`
+        int material = -1;
         float model[16]; // object -> world, column-major (glTF order)
         bool ownFog = false;           // far layers (sky) use their own GS fog constants
         float fogA = 255.0f, fogB = 0.0f;
@@ -162,6 +164,16 @@ namespace pop_native
         int addImage(const Image &image);
         int addMaterial(const Material &material);
         int addMesh(Mesh mesh);
+        // Kept meshes: geometry that stays on the GPU across reset(true) (the in-game native world sends
+        // each static batch once), found again by the caller's 64-bit key. keepMesh returns the kept
+        // mesh's id (its material is the draw's); keptMesh(key) is -1 for an unknown key. When the kept
+        // meshes outgrow keptBudgetBytes they are all dropped at the next upload and keptEpoch() goes up
+        // (the sender must then send everything again).
+        int keepMesh(uint64_t key, Mesh mesh);
+        int keptMesh(uint64_t key) const;
+        uint32_t keptEpoch() const;
+        size_t keptBytes() const;
+        size_t keptBudgetBytes = size_t(512) << 20;
         // uploads everything added so far (call once, after all add* calls)
         bool upload(std::string &error);
         // drops the scene (materials, meshes, and the images unless keepImages) and their GPU copies

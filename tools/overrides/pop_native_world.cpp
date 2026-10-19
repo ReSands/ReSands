@@ -1,8 +1,9 @@
 // Native world in the game window, runtime side (renderer step 1; docs/native_renderer.md "Native world
 // in the game window"). The game side (pop_native_live.cpp, POP_NATIVE_WORLD=1) skips the opaque static
 // draws, puts a marker in each frame's DMA list where its 3D starts and, at the frame's DMA kick, hands
-// over the frame's native draws (PNF6). Here a worker thread draws them with the Vulkan renderer
-// (tools/native, linked as PS2X_RUNNER_EXTRA_LIBS) into a 640x448 picture and its GS Z (Z24 as the
+// over the frame's native draws (PNF7: a batch's geometry only the first time, then the renderer keeps
+// it). Here a worker thread draws them with the Vulkan renderer (tools/native, linked as
+// PS2X_RUNNER_EXTRA_LIBS) into a 640x448 picture and its GS Z (Z24 as the
 // game's VU1 programs write it), and a GS host-inject hook (runtime patch 38) replaces the marker with
 // two image transfers into the frame and Z buffers the GS is drawing with. Everything the GS draws
 // after the marker (characters, particles, decals, 2D, post effects) lands on top, depth-tested
@@ -29,6 +30,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_set>
 
 namespace pop_native_world
 {
@@ -49,6 +51,9 @@ namespace pop_native_world
         std::condition_variable g_wake, g_ready;
         std::deque<std::pair<uint32_t, std::vector<uint8_t>>> g_queue; // frames to draw
         std::deque<Picture> g_done;                                    // drawn, oldest first
+        // batches the renderer keeps (PNF7 keys sent with their geometry); cleared when it drops them
+        std::mutex g_sentMutex;
+        std::unordered_set<uint64_t> g_sent;
         bool g_started = false, g_initDone = false, g_failed = false;
 
         struct Stats
@@ -97,9 +102,17 @@ namespace pop_native_world
                 float clip[16];
                 std::istringstream in(std::string(reinterpret_cast<const char *>(job.second.data()), job.second.size()), std::ios::binary);
                 error.clear();
+                const uint32_t epoch = renderer.keptEpoch();
                 pic.ok = loader.load(renderer, in, "world", clip, draws, extras, false);
                 const auto t1 = std::chrono::steady_clock::now();
                 pic.ok = pic.ok && renderer.upload(error);
+                if (renderer.keptEpoch() != epoch || loader.keptMissing)
+                {
+                    // dropped over budget (or a key the renderer lost): the writer sends everything again
+                    std::lock_guard<std::mutex> lock(g_sentMutex);
+                    g_sent.clear();
+                    loader.keptMissing = 0;
+                }
                 const auto t2 = std::chrono::steady_clock::now();
                 pic.ok = pic.ok && renderer.renderOffscreen(kWidth, kHeight, clip, draws, pic.rgba, error, nullptr, &pic.gsZ);
                 const auto t3 = std::chrono::steady_clock::now();
@@ -231,6 +244,12 @@ namespace pop_native_world
         }
         g_wake.notify_one();
     }
+
+    bool meshSent(uint64_t key)
+    {
+        std::lock_guard<std::mutex> lock(g_sentMutex);
+        return !g_sent.insert(key).second;
+    }
 }
 
 #else // a runtime without the GS host-inject hook: the native world cannot be shown
@@ -239,6 +258,7 @@ namespace pop_native_world
 {
     bool active() { return false; }
     void submitFrame(uint32_t, std::vector<uint8_t> &&) {}
+    bool meshSent(uint64_t) { return false; }
 }
 
 #endif

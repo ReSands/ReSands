@@ -1,4 +1,4 @@
-// Native frames (PNF1..PNF6, written by tools/overrides/pop_native_live.cpp) into a Renderer: images,
+// Native frames (PNF1..PNF7, written by tools/overrides/pop_native_live.cpp) into a Renderer: images,
 // materials (the game's render state flags through materialFromGsFlags), meshes and draws in the
 // game's order, plus the frame's post-effect trailers. Shared by pop_native_view (files and the live
 // window) and the in-game native world (pop_native_world.cpp).
@@ -32,6 +32,7 @@ namespace pop_native
         void forgetImages() { imageOf_.clear(); }
 
         size_t vertexTotal = 0, triTotal = 0, imageTotal = 0;
+        size_t keptMissing = 0; // PNF7 batches sent before that the renderer no longer keeps (dropped over budget)
 
     private:
         std::unordered_map<uint32_t, int> imageOf_; // PNF6: texture key -> renderer image

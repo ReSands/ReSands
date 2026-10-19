@@ -82,6 +82,20 @@ namespace pop_native
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkRenderPass renderPass = VK_NULL_HANDLE;
         Buffer vertexBuffer, indexBuffer;
+        // kept meshes (keepMesh): append-only device buffers, grown by doubling; pending = not uploaded yet
+        struct KeptRange
+        {
+            uint32_t firstIndex, indexCount;
+            int32_t vertexOffset;
+        };
+        Buffer keptVertices, keptIndices;
+        VkDeviceSize keptVertexCap = 0, keptIndexCap = 0; // in elements
+        uint32_t keptVertexCount = 0, keptIndexCount = 0;  // uploaded
+        std::vector<KeptRange> kept;
+        std::unordered_map<uint64_t, int> keptOf;
+        std::vector<Vertex> keptPendingVertices;
+        std::vector<uint32_t> keptPendingIndices;
+        uint32_t keptEpoch = 0;
 
         std::vector<Image> images;
         std::vector<Material> materials;
@@ -333,6 +347,84 @@ namespace pop_native
             return ok;
         }
 
+        void dropKept()
+        {
+            destroyBuffer(keptVertices);
+            destroyBuffer(keptIndices);
+            keptVertexCap = keptIndexCap = 0;
+            keptVertexCount = keptIndexCount = 0;
+            kept.clear();
+            keptOf.clear();
+            keptPendingVertices.clear();
+            keptPendingIndices.clear();
+            ++keptEpoch;
+        }
+
+        // appends the pending kept meshes to the kept buffers (doubling them, old contents copied on the GPU)
+        bool uploadKept(size_t budget, std::string &error)
+        {
+            if (keptPendingIndices.empty() && keptPendingVertices.empty())
+                return true;
+            const size_t nv = keptVertexCount + keptPendingVertices.size(), ni = keptIndexCount + keptPendingIndices.size();
+            if (nv * sizeof(Vertex) + ni * 4 > budget)
+            {
+                std::fprintf(stderr, "[native] kept meshes over budget (%zu MB): dropped, epoch %u\n", budget >> 20, keptEpoch + 1);
+                dropKept();
+                return true; // this frame's draws of kept meshes are skipped; the sender sends them again
+            }
+            const auto grow = [&](Buffer &buf, VkDeviceSize &cap, size_t need, size_t used, size_t elem, VkBufferUsageFlags usage) -> bool {
+                if (need <= cap)
+                    return true;
+                VkDeviceSize newCap = cap ? cap : 65536;
+                while (newCap < need)
+                    newCap *= 2;
+                Buffer bigger;
+                if (!createBuffer(newCap * elem, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, bigger, error))
+                    return false;
+                if (used && !oneShot([&](VkCommandBuffer cb) {
+                        VkBufferCopy c{0, 0, used * elem};
+                        vkCmdCopyBuffer(cb, buf.buffer, bigger.buffer, 1, &c);
+                    }, error))
+                    return false;
+                destroyBuffer(buf);
+                buf = bigger;
+                cap = newCap;
+                return true;
+            };
+            if (!grow(keptVertices, keptVertexCap, nv, keptVertexCount, sizeof(Vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) ||
+                !grow(keptIndices, keptIndexCap, ni, keptIndexCount, 4, VK_BUFFER_USAGE_INDEX_BUFFER_BIT))
+                return false;
+            const VkDeviceSize vBytes = keptPendingVertices.size() * sizeof(Vertex), iBytes = keptPendingIndices.size() * 4;
+            Buffer staging;
+            if (!createBuffer(vBytes + iBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, error))
+                return false;
+            void *p;
+            vkMapMemory(device, staging.memory, 0, vBytes + iBytes, 0, &p);
+            std::memcpy(p, keptPendingVertices.data(), vBytes);
+            std::memcpy(static_cast<uint8_t *>(p) + vBytes, keptPendingIndices.data(), iBytes);
+            vkUnmapMemory(device, staging.memory);
+            const bool ok = oneShot([&](VkCommandBuffer cb) {
+                if (vBytes)
+                {
+                    VkBufferCopy c{0, keptVertexCount * sizeof(Vertex), vBytes};
+                    vkCmdCopyBuffer(cb, staging.buffer, keptVertices.buffer, 1, &c);
+                }
+                if (iBytes)
+                {
+                    VkBufferCopy c{vBytes, keptIndexCount * VkDeviceSize(4), iBytes};
+                    vkCmdCopyBuffer(cb, staging.buffer, keptIndices.buffer, 1, &c);
+                }
+            }, error);
+            destroyBuffer(staging);
+            keptVertexCount = uint32_t(nv);
+            keptIndexCount = uint32_t(ni);
+            keptPendingVertices.clear();
+            keptPendingIndices.clear();
+            return ok;
+        }
+
         VkShaderModule shader(const uint32_t *code, size_t bytes, std::string &error)
         {
             VkShaderModuleCreateInfo si{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -367,17 +459,32 @@ namespace pop_native
             vkCmdSetViewport(cb, 0, 1, &vp);
             vkCmdSetScissor(cb, 0, 1, &sc);
             VkDeviceSize zero = 0;
-            vkCmdBindVertexBuffers(cb, 0, 1, &vertexBuffer.buffer, &zero);
-            vkCmdBindIndexBuffer(cb, indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+            int boundBuffers = -1; // 0: this frame's meshes, 1: the kept meshes
             // opaque + alpha-tested, then blended in draw order; or one pass in the given order
             for (int pass = 0; pass < (options.gameOrder ? 1 : 2); ++pass)
             {
                 VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
                 {
-                    if (d.mesh < 0 || static_cast<size_t>(d.mesh) >= ranges.size())
+                    MeshRange r;
+                    const bool isKept = d.mesh < 0 && d.kept >= 0;
+                    if (isKept)
+                    {
+                        if (static_cast<size_t>(d.kept) >= kept.size() || !keptVertices.buffer)
+                            continue;
+                        const KeptRange &k = kept[d.kept];
+                        r = {k.firstIndex, k.indexCount, k.vertexOffset, d.material};
+                    }
+                    else if (d.mesh < 0 || static_cast<size_t>(d.mesh) >= ranges.size())
                         continue;
-                    const MeshRange &r = ranges[d.mesh];
+                    else
+                        r = ranges[d.mesh];
+                    if (boundBuffers != int(isKept))
+                    {
+                        boundBuffers = int(isKept);
+                        vkCmdBindVertexBuffers(cb, 0, 1, isKept ? &keptVertices.buffer : &vertexBuffer.buffer, &zero);
+                        vkCmdBindIndexBuffer(cb, isKept ? keptIndices.buffer : indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+                    }
                     const Material *mat = r.material >= 0 && static_cast<size_t>(r.material) < materials.size() ? &materials[r.material] : nullptr;
                     const AlphaMode mode = mat ? mat->alphaMode : AlphaMode::Opaque;
                     if ((!options.gameOrder && isBlended(mode) != (pass == 1)) || r.indexCount == 0)
@@ -982,6 +1089,7 @@ namespace pop_native
         {
             releaseOffscreen();
             vkDeviceWaitIdle(m->device);
+            m->dropKept();
             if (m->targetFb)
                 vkDestroyFramebuffer(m->device, m->targetFb, nullptr);
             m->destroyImage(m->targetColour);
@@ -1265,6 +1373,35 @@ namespace pop_native
         return static_cast<int>(m->meshes.size()) - 1;
     }
 
+    int Renderer::keepMesh(uint64_t key, Mesh mesh)
+    {
+        const auto it = m->keptOf.find(key);
+        if (it != m->keptOf.end())
+            return it->second;
+        const uint32_t v0 = m->keptVertexCount + uint32_t(m->keptPendingVertices.size());
+        const uint32_t i0 = m->keptIndexCount + uint32_t(m->keptPendingIndices.size());
+        m->kept.push_back({i0, uint32_t(mesh.indices.size()), int32_t(v0)});
+        m->keptPendingVertices.insert(m->keptPendingVertices.end(), mesh.vertices.begin(), mesh.vertices.end());
+        m->keptPendingIndices.insert(m->keptPendingIndices.end(), mesh.indices.begin(), mesh.indices.end());
+        const int id = int(m->kept.size()) - 1;
+        m->keptOf.emplace(key, id);
+        return id;
+    }
+
+    int Renderer::keptMesh(uint64_t key) const
+    {
+        const auto it = m->keptOf.find(key);
+        return it == m->keptOf.end() ? -1 : it->second;
+    }
+
+    uint32_t Renderer::keptEpoch() const { return m->keptEpoch; }
+
+    size_t Renderer::keptBytes() const
+    {
+        return (m->keptVertexCount + m->keptPendingVertices.size()) * sizeof(Vertex) +
+               (m->keptIndexCount + m->keptPendingIndices.size()) * sizeof(uint32_t);
+    }
+
     bool Renderer::upload(std::string &error)
     {
         // textures persist across reset(true): textures[0] is white (missing texture / no lightmap),
@@ -1341,7 +1478,8 @@ namespace pop_native
         }
         m->meshes.clear();
         return m->uploadBuffer(verts.data(), verts.size() * sizeof(Vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m->vertexBuffer, error) &&
-               m->uploadBuffer(idx.data(), idx.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m->indexBuffer, error);
+               m->uploadBuffer(idx.data(), idx.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m->indexBuffer, error) &&
+               m->uploadKept(keptBudgetBytes, error);
     }
 
     void Renderer::reset(bool keepImages)
@@ -1359,6 +1497,7 @@ namespace pop_native
                 m->destroyImage(t);
             m->textures.clear();
             m->images.clear();
+            m->dropKept();
         }
         if (m->descriptorPool)
             vkDestroyDescriptorPool(m->device, m->descriptorPool, nullptr);

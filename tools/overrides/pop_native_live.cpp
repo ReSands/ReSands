@@ -55,7 +55,8 @@ uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> b
 namespace pop_native_world // pop_native_world.cpp: draws the native world frames into the GS memory
 {
     bool active();                                            // the runtime can inject (GS host hook + renderer)
-    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF6)
+    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF7)
+    bool meshSent(uint64_t key); // true if the renderer keeps this batch already; false: noted as sent now
 }
 namespace pop_hdtex
 {
@@ -88,7 +89,37 @@ namespace pop_native_live
             std::unordered_set<uint64_t> positions; // hash of (x, y, z) bits
             size_t batches = 0, vertices = 0, triangles = 0;
             std::vector<pop_assets::Batch> meshes;  // kept for the frame export
+            uint32_t serial = 0;                    // which conversion (an element address can be reused): world batch keys
         };
+        uint32_t g_elementSerial = 0;
+
+        uint64_t mix64(uint64_t h, uint64_t v)
+        {
+            h = (h ^ v) * 0x9E3779B97F4A7C15ull;
+            return h ^ (h >> 29);
+        }
+        // the part of a material writeVertices applies to the vertices (a batch's bytes depend on it)
+        uint64_t vertexVariant(const struct DrawMaterial &m);
+        // world batch key of a batch whose contents are not cached per element (instanced, CJIdxMesh)
+        uint64_t contentKey(const pop_assets::Batch &b)
+        {
+            uint64_t h = 0x243F6A8885A308D3ull ^ b.vertices.size() ^ (uint64_t(b.indices.size()) << 32);
+            const auto words = [&h](const void *p, size_t bytes) {
+                const uint8_t *c = static_cast<const uint8_t *>(p);
+                size_t i = 0;
+                for (; i + 8 <= bytes; i += 8)
+                {
+                    uint64_t w;
+                    std::memcpy(&w, c + i, 8);
+                    h = mix64(h, w);
+                }
+                for (; i < bytes; ++i)
+                    h = mix64(h, c[i]);
+            };
+            words(b.vertices.data(), b.vertices.size() * sizeof(b.vertices[0]));
+            words(b.indices.data(), b.indices.size() * 4);
+            return h;
+        }
         // frame export (POP_NATIVE_FRAME)
         std::string g_framePath;
         double g_frameAfter = -1.0;
@@ -156,6 +187,7 @@ namespace pop_native_live
         struct WorldStats
         {
             uint64_t frames = 0, skipped = 0, kept = 0, lightmaps = 0, noTexture = 0, notRecorded = 0, bytes = 0;
+            uint64_t batchesSent = 0, batchesKnown = 0; // PNF7: geometry sent vs referenced (the renderer keeps it)
         } g_worldStats;
         constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
         bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
@@ -1162,6 +1194,7 @@ namespace pop_native_live
                 g_stats.batches += c.batches;
                 g_stats.vertices += c.vertices;
                 g_stats.triangles += c.triangles;
+                c.serial = ++g_elementSerial;
                 g_elements[element] = std::move(c);
             }
             else
@@ -1533,6 +1566,21 @@ namespace pop_native_live
         std::deque<std::pair<std::vector<uint8_t>, int>> g_liveDelayed; // frames waiting for GS pictures (count so far)
         uint64_t g_liveConnection = 0;
 
+        uint64_t vertexVariant(const DrawMaterial &m)
+        {
+            if (m.constColour < 0 && m.constAlpha < 0 && !m.hasUvm)
+                return 0;
+            uint64_t h = mix64(uint64_t(uint32_t(m.constColour)), uint64_t(uint32_t(m.constAlpha)));
+            if (m.hasUvm)
+                for (float u : m.uvm)
+                {
+                    uint32_t bits;
+                    std::memcpy(&bits, &u, 4);
+                    h = mix64(h, bits);
+                }
+            return h | 1;
+        }
+
         void writeVertices(std::vector<uint8_t> &f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
         {
             if (m.constColour < 0 && m.constAlpha < 0 && !m.hasUvm)
@@ -1577,7 +1625,9 @@ namespace pop_native_live
             // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame
             // live: "PNF6" = PNF5 with each image as (texture key, w, h, RGBA), RGBA only the first time
             // the viewer gets that key on this connection (w = h = 0 afterwards: it keeps the texture)
-            putBytes(f, live ? "PNF6" : "PNF5", 4);
+            // world: "PNF7" = PNF6 with a 64-bit key before each batch; a batch the renderer keeps already is
+            // (key, 0xFFFFFFFF), otherwise (key, vertex count, index count, data) as before
+            putBytes(f, worldOut ? "PNF7" : live ? "PNF6" : "PNF5", 4);
             putBytes(f, g_frameClip, size_t(4) * size_t(16));
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
@@ -1757,14 +1807,32 @@ namespace pop_native_live
                 putBytes(f, &mat.zTest, size_t(4) * size_t(1));
                 putBytes(f, &mat.fbmsk, size_t(4) * size_t(1));
                 putBytes(f, &nb, size_t(4) * size_t(1));
-                for (const auto &b : *batches)
+                const uint64_t variant = worldOut ? vertexVariant(mat) : 0;
+                for (size_t bi = 0; bi < batches->size(); ++bi)
                 {
+                    const auto &b = (*batches)[bi];
+                    if (worldOut)
+                    {
+                        const uint64_t key = o[1] == 0 ? mix64(mix64(0x5354u, (uint64_t(g_elements[g_frameDraws[o[2]].first].serial) << 16) | bi), variant)
+                                                       : mix64(contentKey(b), variant);
+                        putBytes(f, &key, 8);
+                        tris += b.indices.size() / 3;
+                        if (pop_native_world::meshSent(key))
+                        {
+                            const uint32_t known = 0xFFFFFFFFu;
+                            putBytes(f, &known, 4);
+                            ++g_worldStats.batchesKnown;
+                            continue;
+                        }
+                        ++g_worldStats.batchesSent;
+                    }
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     putBytes(f, &nv, size_t(4) * size_t(1));
                     putBytes(f, &ni, size_t(4) * size_t(1));
                     writeVertices(f, b.vertices, mat);
                     putBytes(f, b.indices.data(), size_t(4) * size_t(ni));
-                    tris += ni / 3;
+                    if (!worldOut)
+                        tris += ni / 3;
                 }
             }
             if (dl)
@@ -1985,10 +2053,12 @@ namespace pop_native_live
                 g_frameCapturing = false;
                 g_worldMarked = g_worldOpen = false;
                 if (++g_worldStats.frames % 300 == 0)
-                    std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame\n",
+                    std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame; "
+                                         "batches sent %llu, kept by the renderer %llu\n",
                                  (unsigned long long)g_worldStats.frames, (unsigned long long)g_worldStats.skipped,
                                  (unsigned long long)g_worldStats.noTexture, (unsigned long long)g_worldStats.notRecorded,
-                                 (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames));
+                                 (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames),
+                                 (unsigned long long)g_worldStats.batchesSent, (unsigned long long)g_worldStats.batchesKnown);
             }
             g_origKick(rdram, ctx, runtime);
         }
