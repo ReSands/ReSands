@@ -48,9 +48,22 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   `pop_state_frame` / `pop_native_live.cpp`. Work: convert skinned elements at load time, send each frame's bone
   palettes (and particle batches) with PNF, draw them in the worker, skip their DMA; check offline over the
   saves first, then a user boot (TV on). Plan: `docs/native_renderer.md` "Plan of attack".
-- **Water (P6) VU1 port: 13 of 24 stages pass** (8 by Qwen, 5 by hand); the 11 left are the big arithmetic
-  stages. Harness `tools/vu1port/`, results and what we learned: `docs/llm_jobs.md` "VU1 water program P6".
-  Decide: hand-port the rest or split further for Qwen, then `port.py --chain` (whole-run judge). Needed for 0.13.
+- **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
+  (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
+  llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
+  The user starts it from the PC desktop shortcut "Qwen overnight (then shuts down)"; log `game\jobs\qwen-night.log`,
+  results `game\analysis\qwen\vu1_p6_*` (PASS files). Morning: read the log, re-run what failed (or hand-port it).
+  Details: `docs/llm_jobs.md` "VU1 water program P6" (22 Oct note). Needed for 0.13.
+- **Step 2 plan (agreed 22 Oct, not started):** characters first: send the CPU-posed batches (`poseSkinned`, already
+  used by the live window) in the PNF7 frame as unkept geometry, drop the "characters stay on the GS" refusal
+  (`pop_native_live.cpp` ~line 1503) and skip their DMA (`kSkipSkinned`); GPU skinning only if the profiler asks (or
+  for motion vectors at 1.3). Skinned meshes decode from memory (`skinnedFromPacket`), so save-state boots work for
+  characters. Offline over the saves first, then a boot with the user. Particles second: they are translucent with no Z
+  write, so until step 3 any 3D still on the GS draws over them; first measure what 3D is left on the GS once
+  characters are native, then decide. Qwen candidates for later nights: standalone tested decoders
+  (`livePacketBatches`, `skinnedFromPacket`, particle quads; judged against the Python decoders on DMA captures) and
+  the character VU1 skin program (exact lighting incl. point lights; needs one traced boot, TV on). User rule:
+  Qwen work is overnight only; daytime is Claude + user.
 - **Bugs written up, not fixed (user: later), `docs/saves_1021.md`:** camera X reversed in fixed-camera views
   (low priority); a door flickering with a black web (GS output too); **two freezes in combat**: crash 1 = the
   scheduler resuming at return address 0x172844 that has no entry (Ghidra split FUN_00172800's epilogue off at
