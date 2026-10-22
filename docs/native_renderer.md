@@ -777,3 +777,16 @@ output words change; `--match <hex word>` picks the runs whose uploads hold a me
 - Implementation: pass 1 = the character lighting (`poseSkinned` no-palette path + `readLightEnv`); pass 2 =
   decode normals at +0x43 and colours at +0x83, UVs as above per vertex (depends on the camera: per frame, not at
   load). Judges as in the plan.
+- **Built (22 Oct, late night), offline results.** `driverKind()` / `litDriverPass()` (the game's driver table), `litPacketBatches()`
+  (batches split at the VU1 kicks, strip flag = the normal's fourth byte), `envUvs()` (FUN_004B6D80's matrix per draw), and a
+  display() branch before the unknown-element path: pass 1 posed + lit by `poseSkinned` (no palette: the pool matrix),
+  pass 2 posed with env UVs and the packet's colours (the material's constant colour/alpha applied by writeVertices as for
+  every draw; the sword's pass 2 gets 0x4A4740 = the trace's 40 47 4A). `POP_NATIVE_NOLIT=1` = the old behaviour (A/B);
+  world stats print "native lit/env". `POP_NATIVE_ELEMLOG=all` logs every element. Scores (`score_saves.sh`, characters on):
+  204040 13.04 -> 11.28, 204108 5.02 -> 4.25, 192521 4.70 -> 4.70. Seen: the ceiling's gold frames and horns, the mirror
+  rings and the faceted hanging mirrors now drawn (were missing); the sword drawn silver-blue with env highlights.
+  Open: (1) the faceted mirrors come out darker than the game's; (2) the gold frame of the angled mirror (204108, top
+  right) still missing (pass 4 / SetMirrorParameterForJsm or a ref; to check with POP_NATIVE_WORLD_WHY in world mode);
+  (3) the mirror-room light beam is a light shaft (not native yet: 0.13); its glow differs before/after; (4) save 192521's
+  game frame shows the orange-red sword of the 19:25 build (native injection with normals as colours), so it is no
+  reference for the sword: judge the sword in game (memory-card slot 04).

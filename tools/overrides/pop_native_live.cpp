@@ -203,6 +203,7 @@ namespace pop_native_live
             uint64_t posed = 0, drivers = 0; // skinned draws drawn natively; VU1 driver switches replayed for skipped calls
             uint64_t skinGs[3] = {};         // skinned Display calls left to the GS: render state/list, not decoded, texture
             uint64_t litStatic = 0;          // static draws of the lit driver (pass 1/4) left to the GS (see isLitStaticPass)
+            uint64_t litNative = 0, envNative = 0; // lit static passes drawn natively: pass 1 lit, pass 2 env map (litDriverPass)
         } g_worldStats;
         constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
         bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
@@ -794,6 +795,141 @@ namespace pop_native_live
                 std::fprintf(stderr, "[pop:unpack] packet %08x (format@addr x num):%s\n", packet, unpackLog.c_str());
             }
         }
+
+        // Lit static passes (measured 22 Oct on the VU1 trace of save 192521, tools/vu1port/inprobe.cpp; docs/native_renderer.md
+        // "Lit statics measured"). CElementList::Render picks the VU1 driver of a CJMeshElement pass from the table at
+        // 0x700000B0 (index pass + 5 when element +0x47 bit 1 is set); kind 1/2 runs the character program (P4) and then:
+        // pass 1 gets the light env (SetSkinDriver), its packet carries normals at VU 0x83; pass 2 gets an environment map
+        // (FUN_004B6D80), its packet carries normals at 0x43 and colours at 0x83; pass 4 gets SetMirrorParameterForJsm
+        // (not decoded: stays on the GS). Kind 0 is the static driver (unlit, the converted world).
+        uint32_t driverKind(uint8_t *rdram, uint32_t element, uint32_t pass)
+        {
+            const uint32_t i = pass + ((guest8(rdram, element + 0x47) >> 1) & 1) * 5;
+            return i < 16 ? guest8(rdram, 0x700000B0u + i) & 0xF : 0;
+        }
+        bool litDriverPass(uint8_t *rdram, uint32_t element, uint32_t pass)
+        {
+            static const bool off = std::getenv("POP_NATIVE_NOLIT") != nullptr; // A/B: lit static passes left as before
+            const uint32_t kind = driverKind(rdram, element, pass);
+            return !off && (pass == 1 || pass == 2) && (kind == 1 || kind == 2);
+        }
+
+        // A lit pass packet as one rigid part's SkinnedBatches (posed by the object matrix: poseSkinned without a palette).
+        // A batch = the uploads up to a VU1 kick (MSCAL/MSCNT; what a batch does not upload stays in VU memory): V4-32
+        // positions at 3 (w = +-1, unused), V4-8 normals (pass 1 at 0x83, pass 2 at 0x43; fourth byte 1 = no triangle,
+        // the strip flag), pass 1's V3-16 UVs at 0x43 (1/512), pass 2's V4-8 colours at 0x83 (0x80 = 1.0). Normals are
+        // kept as the VU sees them (signed bytes / 128), the V4-32 x3 header at 0 is skipped.
+        void litPacketBatches(uint8_t *rdram, uint32_t packet, bool env, std::vector<pop_assets::SkinnedBatch> &out)
+        {
+            const std::vector<uint32_t> words = packetWords(rdram, packet);
+            static const uint8_t kElementBytes[16] = {4, 2, 1, 0, 8, 4, 2, 0, 12, 6, 3, 0, 16, 8, 4, 2};
+            std::vector<uint8_t> uv, nrm, col, pos;
+            uint32_t posNum = 0;
+            auto kick = [&]() {
+                const uint32_t num = posNum;
+                if (!num || nrm.size() < 4 * size_t(num))
+                    return;
+                pop_assets::SkinnedBatch b;
+                b.positions.resize(3 * size_t(num));
+                b.uvs.assign(2 * size_t(num), 0.0f);
+                b.colours.assign(4 * size_t(num), 1.0f);
+                b.slots.assign(3 * size_t(num), 0);
+                b.weights.assign(3 * size_t(num), 0.0f);
+                b.normals.resize(3 * size_t(num));
+                std::vector<int32_t> flags(num, 0);
+                for (uint32_t v = 0; v < num; ++v)
+                {
+                    std::memcpy(&b.positions[3 * v], &pos[16 * v], 12);
+                    for (int k = 0; k < 3; ++k)
+                        b.normals[3 * v + k] = float(int8_t(nrm[4 * v + k])) / 128.0f;
+                    flags[v] = nrm[4 * v + 3];
+                    b.weights[3 * v] = 1.0f;
+                    if (!env && 6 * v + 6 <= uv.size())
+                    {
+                        int16_t st[2];
+                        std::memcpy(st, &uv[6 * v], 4);
+                        b.uvs[2 * v] = float(st[0] / 512.0);
+                        b.uvs[2 * v + 1] = float(st[1] / 512.0);
+                    }
+                    if (env)
+                        for (int k = 0; k < 4; ++k)
+                            b.colours[4 * v + k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
+                }
+                for (uint32_t v = 2; v < num; ++v)
+                {
+                    if (flags[v])
+                        continue;
+                    if (v % 2 == 0)
+                        b.indices.insert(b.indices.end(), {v - 2, v - 1, v});
+                    else
+                        b.indices.insert(b.indices.end(), {v - 1, v - 2, v});
+                }
+                if (!b.indices.empty())
+                    out.push_back(std::move(b));
+            };
+            for (size_t i = 0; i < words.size();)
+            {
+                const uint32_t w = words[i++];
+                const uint32_t cmd = (w >> 24) & 0x7F, num = ((w >> 16) & 0xFF) ? ((w >> 16) & 0xFF) : 256u;
+                if (cmd >= 0x60)
+                {
+                    const uint32_t bytes = kElementBytes[cmd & 0xF] * num, n = (bytes + 3) / 4, addr = w & 0x3FF;
+                    if (i + n > words.size())
+                        break;
+                    const uint8_t *raw = reinterpret_cast<const uint8_t *>(&words[i]);
+                    const unsigned fmt = cmd & 0xF;
+                    if (fmt == 0xC && addr == 3)
+                    {
+                        pos.assign(raw, raw + bytes);
+                        posNum = num;
+                    }
+                    else if (fmt == 9 && addr == 0x43)
+                        uv.assign(raw, raw + bytes);
+                    else if (fmt == 0xE && addr == (env ? 0x43u : 0x83u))
+                        nrm.assign(raw, raw + bytes);
+                    else if (fmt == 0xE && env && addr == 0x83)
+                        col.assign(raw, raw + bytes);
+                    i += n;
+                }
+                else if (cmd == 0x14 || cmd == 0x15 || cmd == 0x17)
+                    kick();
+                else if (cmd == 0x4A)
+                    i += 2 * num;
+                else if (cmd == 0x50 || cmd == 0x51)
+                    i += 4 * ((w & 0xFFFF) ? (w & 0xFFFF) : 65536u);
+                else if (cmd == 0x20)
+                    i += 1;
+                else if (cmd == 0x30 || cmd == 0x31)
+                    i += 4;
+            }
+        }
+
+        // Pass 2's environment map as FUN_004B6D80 uploads it (V2-32 x4 to VU 4): R = the object's matrix-pool rotation x
+        // the camera matrix at *(gp 0x6749F0 + 0x110) + 0x1B0 (row vectors, FUN_00494500), then per vertex
+        // u, v = 0.5 - 0.5 * (n . R[.][0], n . R[.][1]) with the packet's normal n (checked against every env upload of
+        // saves 204040 / 204108: 230 of 233 within 1e-4, the rest moving objects).
+        void envUvs(uint8_t *rdram, uint32_t index, std::vector<pop_assets::SkinnedBatch> &batches)
+        {
+            const uint32_t m = guestAny(rdram, 0x70000260u) + (index & 0xFFFF) * 0x40u;
+            const uint32_t cam = guestAny(rdram, 0x006749F0u + 0x110u) + 0x1B0u;
+            float r[3][2];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 2; ++j)
+                {
+                    float a = 0;
+                    for (int k = 0; k < 3; ++k)
+                        a += guestF(rdram, m + 16u * i + 4u * k) * guestF(rdram, cam + 16u * k + 4u * j);
+                    r[i][j] = -0.5f * a;
+                }
+            for (auto &b : batches)
+                for (size_t v = 0; 3 * v + 2 < b.normals.size(); ++v)
+                {
+                    const float *n = &b.normals[3 * v];
+                    for (int j = 0; j < 2; ++j)
+                        b.uvs[2 * v + j] = 0.5f + n[0] * r[0][j] + n[1] * r[1][j] + n[2] * r[2][j];
+                }
+        }
+        std::unordered_map<uint64_t, std::vector<pop_assets::SkinnedBatch>> g_litBatches; // (element << 8 | pass) -> lit pass packet
 
         std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameRefs; // instanced draws
         std::unordered_map<uint64_t, std::vector<pop_assets::Batch>> g_fromPacket; // (element << 8 | pass) -> decoded pass packet
@@ -1487,7 +1623,8 @@ namespace pop_native_live
                     }
                 return v;
             }();
-            return !wanted.empty() && std::find(wanted.begin(), wanted.end(), element) != wanted.end();
+            static const bool all = std::getenv("POP_NATIVE_ELEMLOG") && !std::strcmp(std::getenv("POP_NATIVE_ELEMLOG"), "all");
+            return all || (!wanted.empty() && std::find(wanted.begin(), wanted.end(), element) != wanted.end());
         }
         void elemLog(const char *path, uint32_t element, uint32_t pass, uint32_t index, const std::array<float, 16> &model,
                      const std::vector<pop_assets::Batch> *batches, const DrawMaterial &dm)
@@ -1669,6 +1806,43 @@ namespace pop_native_live
                             model[k] = guestF(rdram, m + 4u * k);
                         g_frameRefs.emplace_back(batches, std::make_pair(model, dm));
                         ++g_stats.drawsLightmap;
+                    }
+                }
+                else if (sk == g_skinned.end() && !guest32(rdram, element + 0x48) && litDriverPass(rdram, element, pass))
+                {
+                    // a lit static pass (litDriverPass): posed like a rigid character part, pass 1 lit with the light
+                    // env, pass 2 with the environment map's UVs and the packet's colours
+                    ++g_stats.drawsKnown;
+                    if (g_frameCapturing && g_frameSeen.insert(worldKey).second)
+                    {
+                        auto &bind = g_litBatches[(uint64_t(element) << 8) | pass];
+                        if (bind.empty())
+                            if (const uint32_t packet = guest32(rdram, element + 0x20 + 4 * pass) & 0x01FFFFF0u)
+                                litPacketBatches(rdram, packet, pass == 2, bind);
+                        std::vector<pop_assets::Batch> posed;
+                        if (pass == 1)
+                        {
+                            const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
+                            poseSkinned(rdram, element, index, bind, posed, &light);
+                        }
+                        else
+                        {
+                            std::vector<pop_assets::SkinnedBatch> env = bind;
+                            envUvs(rdram, index, env);
+                            poseSkinned(rdram, element, index, env, posed);
+                        }
+                        if (!posed.empty())
+                        {
+                            DrawMaterial dm = currentMaterial(rdram);
+                            dm.hasUvm = false; // the character program has no UV matrix
+                            if (elemLogged(element))
+                            {
+                                std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                                elemLog(pass == 1 ? "lit" : "env", element, pass, index, identity, &posed, dm);
+                            }
+                            g_framePosed.emplace_back(std::move(posed), dm);
+                            ++(pass == 1 ? g_worldStats.litNative : g_worldStats.envNative);
+                        }
                     }
                 }
                 else if (it == g_elements.end())
@@ -2371,14 +2545,16 @@ namespace pop_native_live
                 if (++g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame; "
                                          "batches sent %llu, kept by the renderer %llu; skinned draws native %llu, driver switches replayed %llu, "
-                                         "skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu, lit static draws on the GS %llu\n",
+                                         "skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu, lit static draws on the GS %llu, "
+                                         "native lit/env %llu/%llu\n",
                                  (unsigned long long)g_worldStats.frames, (unsigned long long)g_worldStats.skipped,
                                  (unsigned long long)g_worldStats.noTexture, (unsigned long long)g_worldStats.notRecorded,
                                  (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames),
                                  (unsigned long long)g_worldStats.batchesSent, (unsigned long long)g_worldStats.batchesKnown,
                                  (unsigned long long)g_worldStats.posed, (unsigned long long)g_worldStats.drivers,
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
-                                 (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic);
+                                 (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic,
+                                 (unsigned long long)g_worldStats.litNative, (unsigned long long)g_worldStats.envNative);
             }
             g_origKick(rdram, ctx, runtime);
         }
