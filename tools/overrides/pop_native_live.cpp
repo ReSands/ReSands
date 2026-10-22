@@ -2363,6 +2363,7 @@ namespace pop_native_live
             kSkipList18 = 64
         };
         unsigned g_skip = 0;
+        uint32_t g_skipRa = 0; // POP_NATIVE_SKIP_RA=<hex> (debug): mesh/ref calls skipped only from this return address
         bool g_skipReplay = false; // POP_NATIVE_SKIP_REPLAY=1: skip every chain of the group, replaying its driver switches
         PS2Runtime::RecompiledFunction g_skipOrig[8] = {};
         uint64_t g_skipCount[8] = {}, g_kept[8] = {};
@@ -2409,6 +2410,8 @@ namespace pop_native_live
             case 0: // CJMeshElement: the kind judged by the chain's head
             case 1: // CJMeshElementRef
             {
+                if (g_skipRa && getRegU32(ctx, 31) != g_skipRa)
+                    return false;
                 const uint32_t node = getRegU32(ctx, 4);
                 const uint32_t element = n == 1 ? guest32(rdram, node + 0x20u) : node;
                 const unsigned group = guest32(rdram, element + 0x48u) ? kSkipSkinned : kSkipStatic;
@@ -2485,6 +2488,8 @@ namespace pop_native_live
                     g_skip |= bit;
             g_skipReplay = std::getenv("POP_NATIVE_SKIP_REPLAY") && *std::getenv("POP_NATIVE_SKIP_REPLAY") == '1';
             g_logCallers = std::getenv("POP_NATIVE_SKIP_CALLERS") && *std::getenv("POP_NATIVE_SKIP_CALLERS") == '1';
+            if (const char *ra = std::getenv("POP_NATIVE_SKIP_RA"))
+                g_skipRa = uint32_t(std::strtoul(ra, nullptr, 16));
             const PS2Runtime::RecompiledFunction hooks[8] = {skippable<0>, skippable<1>, skippable<2>, skippable<3>,
                                                              skippable<4>, skippable<5>, skippable<6>, skippable<7>};
             for (int n = 0; n < 8; ++n)

@@ -5,9 +5,11 @@
 # First run (none/gfx/skinned/static/lightmap): the sword stayed in every one, but skinned/static chains that
 # would switch the VU1 driver were kept. -Replay (POP_NATIVE_SKIP_REPLAY=1) skips those too, replaying the switches,
 # and -Build first makes a fast play build (the new sprite/water/list18 groups). Output dir: <group>[_replay].
-# Then: -Groups callers -ExtraEnv POP_NATIVE_SKIP_CALLERS=1 (nothing skipped; Display callers by $ra in the log).
+# Then: -Groups callers -ExtraEnv POP_NATIVE_SKIP_CALLERS=1 (Display callers by $ra in the log; "callers" contains
+# "all", so that boot skipped everything too) and -Groups static -ExtraEnv POP_NATIVE_SKIP_RA=<hex> -Tag _ra<hex>
+# (static calls skipped from one caller only).
 # Run through start-job.ps1 (the window needs the desktop session); the TV must be on.
-param([string]$State = 'play_20261022_192521', [string]$Groups = 'none,gfx,skinned,static,lightmap', [switch]$Replay, [switch]$Build, [string]$ExtraEnv = '')
+param([string]$State = 'play_20261022_192521', [string]$Groups = 'none,gfx,skinned,static,lightmap', [switch]$Replay, [switch]$Build, [string]$ExtraEnv = '', [string]$Tag = '')
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 if ((nvidia-smi --query-gpu=display_active --format=csv,noheader) -notmatch 'Enabled') { "NO ACTIVE DISPLAY (switch the TV on): FAILED"; exit 1 }
@@ -34,7 +36,7 @@ foreach ($log in Get-ChildItem "$Root\game\recomp-sotc\play_*.log") {
 if (-not $field) { "saved field of $State not found: FAILED"; exit 1 }
 "== $State saved at field $field"
 foreach ($group in $Groups -split ',') {
-    $dir = "$out\$group$(if ($Replay) { '_replay' })"
+    $dir = "$out\$group$(if ($Replay) { '_replay' })$Tag"
     New-Item -ItemType Directory -Force $dir | Out-Null
     Remove-Item "$screens\*", "$dir\*" -ErrorAction SilentlyContinue
     $skip = $(if ($group -eq 'none') { '' } else { ";POP_NATIVE_SKIP=$group;POP_NATIVE_SKIP_REPLAY=$(if ($Replay) { 1 } else { 0 })" })
