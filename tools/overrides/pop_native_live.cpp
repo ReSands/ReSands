@@ -1436,6 +1436,47 @@ namespace pop_native_live
             }
         }
 
+        // POP_NATIVE_ELEMLOG=<hex>,<hex>... (debug): what the Display hook records for these elements: path, pass,
+        // list, matrix translation, batches and the posed bounding box, texture, flags
+        bool elemLogged(uint32_t element)
+        {
+            static const std::vector<uint32_t> wanted = [] {
+                std::vector<uint32_t> v;
+                if (const char *e = std::getenv("POP_NATIVE_ELEMLOG"))
+                    for (const char *c = e; *c;)
+                    {
+                        char *end = nullptr;
+                        v.push_back(uint32_t(std::strtoul(c, &end, 16)));
+                        c = *end ? end + 1 : end;
+                    }
+                return v;
+            }();
+            return !wanted.empty() && std::find(wanted.begin(), wanted.end(), element) != wanted.end();
+        }
+        void elemLog(const char *path, uint32_t element, uint32_t pass, uint32_t index, const std::array<float, 16> &model,
+                     const std::vector<pop_assets::Batch> *batches, const DrawMaterial &dm)
+        {
+            float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+            size_t nv = 0;
+            if (batches)
+                for (const auto &b : *batches)
+                    for (const auto &v : b.vertices)
+                    {
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            const float w = v.pos[0] * model[c] + v.pos[1] * model[4 + c] + v.pos[2] * model[8 + c] + model[12 + c];
+                            lo[c] = std::min(lo[c], w);
+                            hi[c] = std::max(hi[c], w);
+                        }
+                        ++nv;
+                    }
+            std::fprintf(stderr, "[pop:elem] %s el %08x pass %u list +0x%x matrix %u at (%.2f %.2f %.2f) batches %zu vertices %zu box (%.2f %.2f %.2f)-(%.2f %.2f %.2f) "
+                                 "tex %08x flags %08x ref %08x const %d/%d fbmsk %08x\n",
+                         path, element, pass, g_currentList, index, double(model[12]), double(model[13]), double(model[14]), batches ? batches->size() : 0, nv,
+                         double(lo[0]), double(lo[1]), double(lo[2]), double(hi[0]), double(hi[1]), double(hi[2]), dm.textureKey, dm.flags, dm.ref,
+                         dm.constColour, dm.constAlpha, dm.fbmsk);
+        }
+
         void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
@@ -1469,7 +1510,11 @@ namespace pop_native_live
                     const uint32_t packet = (pass == 0 || pass == 1 || pass == 4)
                                                 ? guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & 0x01FFFFF0u
                                                 : 0u;
-                    if (palette && guest8(rdram, palette) && packet)
+                    // a rigid part (no palette: the sword on the Prince's back, 22 Oct) can carry a skinned
+                    // packet too (inline cnt tags, first tag id 1/6/7 instead of a static packet's refs)
+                    const uint32_t firstTag = packet ? (guest32(rdram, packet) >> 28) & 7 : 0;
+                    const bool rigidSkinned = !palette && packet && (firstTag == 1 || firstTag == 6 || firstTag == 7);
+                    if (((palette && guest8(rdram, palette)) || rigidSkinned) && packet)
                     {
                         uint32_t pc = packet;
                         for (int steps = 0; steps < 4096 && pc + 16 <= kRam; ++steps)
@@ -1485,9 +1530,9 @@ namespace pop_native_live
                         if (skinLog)
                             std::fprintf(stderr, "[pop:skin] el %08x from memory: packet %08x, %u bytes, %s, %zu batches\n", element, packet,
                                          pc - packet, ok ? "decoded" : "FAILED", skinned.size());
-                        if (ok)
+                        if (ok && !skinned.empty())
                             g_skinned[element] = std::move(skinned);
-                        else
+                        else if (!rigidSkinned)
                             g_skipped[element] = 's';
                     }
                 }
@@ -1544,6 +1589,11 @@ namespace pop_native_live
                             flashCheck(rdram, element, index, posed, light);
                         DrawMaterial dm = currentMaterial(rdram);
                         dm.hasUvm = false; // the skin driver has no UV matrix
+                        if (elemLogged(element))
+                        {
+                            std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                            elemLog("posed", element, pass, index, identity, &posed, dm);
+                        }
                         g_framePosed.emplace_back(std::move(posed), dm);
                     }
                 }
@@ -1586,6 +1636,9 @@ namespace pop_native_live
                     // skinned element has a bone palette at +0x48); the decode is kept per (element,
                     // pass), the packets do not change after load.
                     const uint32_t palette = guest32(rdram, element + 0x48);
+                    if (elemLogged(element))
+                        std::fprintf(stderr, "[pop:elem] unknown el %08x pass %u: skipped as '%c', palette %08x, capturing %d\n", element, pass,
+                                     sk == g_skipped.end() ? '-' : sk->second, palette, int(g_frameCapturing));
                     if (sk == g_skipped.end() && !(palette && guest8(rdram, palette)) && g_frameCapturing &&
                         (pass == 0 || pass == 1 || pass == 4) &&
                         g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
@@ -1602,6 +1655,8 @@ namespace pop_native_live
                                 model[k] = guestF(rdram, m + 4u * k);
                             g_frameRefs.emplace_back(batches, std::make_pair(model, currentMaterial(rdram)));
                             ++g_stats.drawsFromPacket;
+                            if (elemLogged(element))
+                                elemLog("from packet", element, pass, index, model, &batches, g_frameRefs.back().second.second);
                         }
                     }
                 }
@@ -1655,6 +1710,8 @@ namespace pop_native_live
                         const uint32_t sub = guestAny(rdram, 0x70000034u);
                         g_frameSub.push_back(sub);
                         g_frameMaterials.push_back(currentMaterial(rdram));
+                        if (elemLogged(element))
+                            elemLog("converted", element, pass, index, model, nullptr, g_frameMaterials.back());
                     }
                 }
                 if (worldOk)

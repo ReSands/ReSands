@@ -655,3 +655,36 @@ judged in game. Off reproduces step 1 exactly (all 49 saves of 19 Oct: the same 
   `poseSkinned`. Save 192521: the Prince's mean 65.3 (no point lights) -> 67.6 (GS 73.7 with glow).
   Qwen candidate (user asked): the whole character program (2,048 lines, ~60 stages at the water job's
   25-35 pairs) to C++, judged on this trace: exact lighting incl. any other light types.
+
+## The Prince's missing sword (22 Oct night): a lit static mesh
+
+Found with skip boots of save `play_20261022_192521` (PC, TV on; `tools/windows/oct22-sword.ps1`, shots in
+`game/analysis/native/sword/<group>/`; plain GS, `POP_NATIVE_SKIP` per group, measurement only):
+- gfx, lightmap, CJIdxMesh, sprite, water, list18 (FUN_00469C00): the sword stays.
+- skinned with `POP_NATIVE_SKIP_REPLAY=1` (every palette chain skipped, its VU1 driver switches replayed as
+  `worldReplayDriver` does): the Prince and Farah vanish, **the sword stays** (plus two small wrist parts).
+  Without replay the skip is leaky (chains that would switch the driver are kept), so the first run said nothing.
+- static: the sword vanishes. `POP_NATIVE_SKIP_RA=<hex>` (one caller only): from 0x4B98A0 (CElementList::Render)
+  it vanishes; from the shadow-list renderer FUN_004B80C0 (its two Display calls return to 0x4B8220 / 0x4B84A0,
+  `POP_NATIVE_SKIP_CALLERS=1` lists callers) it stays.
+
+The element: **0x00B395B0** (list +0x2C, matrix 126 at (-12.08, -16.33, 3.61), next to the Prince's skinned parts
+at matrices 960-966; chained with 0x00B3A2C0 / 0x00B3A4B0), passes 1 and 2, no bone palette. Its pass-1 packet is
+static-style (ref tags, RET) but **lit**: per batch a V3-16 UV upload to VU 0x43, then one shared block with
+V4-8 **normals** at 0x83, **V4-32 positions** at 0x3 and a V4-32 x3 header at 0 (pass 2 reuses the block with
+its own UVs). So pass 1 here is the lit driver (as the characters' pass 1), on a static mesh.
+- In a normal boot ReadElement's `convertElement` accepts it (format 0xC at addr 3 = positions) and the world
+  path draws it natively as an unlit static mesh, reading the normals as colours: the first vertex's
+  7D 11 03 01 gives alpha 1/128, and the material alpha-tests (flags 0x17, AREF 0x18). **Likely why it is
+  invisible (not yet confirmed in game).**
+- Offline (`pop_state_frame`) `livePacketBatches` closes batches on V3-32 positions only, so it decodes nothing.
+
+Related, fixed offline: rigid parts with a skinned packet but no palette (0x018421B0 / 0x018426F0, the wrist
+pieces; 0x00B3AAC0 + glow pass 0x00B3BBD0 at matrix 1, likely the Dagger) were decoded from memory only with a
+palette; the from-memory skinned decode now also takes palette-less elements whose packet starts with
+cnt/ret/end tags (posed by the object matrix, as poseSkinned already did). `POP_NATIVE_ELEMLOG=<hex>,...` prints
+what the Display hook records for chosen elements (path, list, matrix, posed box, material).
+
+Fix to do: recognise lit static packets (V4-8 at 0x83 + V4-32 at 0x3) in both decoders and draw them lit like
+the characters (normals + `LightEnv`, object matrix), or as a first step keep such elements on the GS (not
+recorded -> the call runs). Then check the sword in game from a normal boot (title -> memory card).

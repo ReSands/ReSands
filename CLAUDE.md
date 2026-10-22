@@ -48,16 +48,14 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
   character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`; built on the
   PC, not yet seen in game). Details: `docs/native_renderer.md` "Native characters in the game window".
-- **NEXT (user's choice, 22 Oct night): the Prince's missing sword.** In the GS picture of save 192521 (Mac copy
-  `game/analysis/play1022/states/`) a yellow/red sword (the Dagger of Time?) hangs on his back; no native draw is near
-  him (world or full frame). Ruled out offline: the blended skinned calls left on the GS (other characters ~50 units
-  away), the CJIdxMesh entries (matrices 27-30, x = -61/-80), instanced draw 2. Not ruled out: GFX entry gfx 0 (type
-  0x8c, list +0x2c, opaque alpha-tested, texture 2e005850, matrix 13 = identity; the native frame never draws GFX),
-  skinned elements without a bone palette (their counter only prints in game: report() is throttled), list kind 6
-  (0x469C00, not decoded) / 11 (skipped). Proposed next step: three ~30 s boots from save 192521 on the TV (ask
-  first) with `POP_NATIVE_SKIP=gfx` / `skinned` / `static` (measurement only; boot.ps1 -Shots) to see which group
-  loses the sword, then decode that path. `POP_STATE_KINDS=1 pop_state_frame ...` lists every list entry (kind,
-  matrix).
+- **NEXT: fix the Prince's missing sword (found 22 Oct night, not fixed).** Skip boots of save 192521 (shots in
+  `game/analysis/native/sword/`) put it in the static group, drawn by CElementList::Render: element 0x00B395B0
+  (matrix 126), a **lit static mesh** (pass-1 packet with V4-8 normals at VU 0x83 + V4-32 positions at 0x3). The
+  load converter takes it as an unlit static mesh, reads the normals as colours (alpha ~1/128) and the alpha test
+  drops it (likely; to confirm in game). Fix: decode lit static packets with normals and light them like the
+  characters (or keep them on the GS first), then check from a normal boot. Details: `docs/native_renderer.md`
+  "The Prince's missing sword". New debug switches: `POP_NATIVE_SKIP_REPLAY`, `POP_NATIVE_SKIP_RA`,
+  `POP_NATIVE_SKIP_CALLERS`, `POP_NATIVE_ELEMLOG`; skip groups sprite/water/list18.
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`.
