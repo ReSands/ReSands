@@ -45,9 +45,9 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 - **Renderer step 2, characters: done and in daily use (22 Oct evening).** `POP_NATIVE_CHARACTERS=1`, on by default
   in `play.ps1` (`-NoNativeCharacters` turns it off): opaque CPU-posed characters join the world frame, their
   Display calls are skipped with the VU1 driver switches replayed. In game ~59.9 fps, user: fixed after the light-set
-  fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). **Point lights are
-  left out of character lighting** (falloff not decoded: next, from a VU1 trace). Open notes: a full-frame flash
-  right after the loading glyph (not yet checked against the GS-only shortcut), trouser flicker (gone in the last
+  fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
+  character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`). Open notes: a full-frame flash
+  right after the loading glyph (ours: the GS-only boot does not flash), trouser flicker (gone in the last
   session: watch), the Prince's sword missing from the native frame. Details: `docs/native_renderer.md` "Native
   characters in the game window".
 - **Then: renderer step 2 (roadmap 0.12): particles native** (characters above), so the GS stops drawing 3D. Start

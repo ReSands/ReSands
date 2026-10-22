@@ -396,12 +396,15 @@ namespace pop_native_live
         // colours, +0xE0 + 4i types, +1 point-light flag. No lights and no ambient: the global
         // environment (gp+0x140 directions as columns, gp+0x180 colours as rows, gp = 0x6749F0).
         // A constant colour (render state 0x70000039) replaces the ambient and switches the lights off.
-        // Vertex colour = ambient + sum max(0, n . d_i) * colour_i (tools/chainskin.py; game-checked).
+        // Vertex colour = ambient + sum max(0, n . d_i) * colour_i (tools/chainskin.py; game-checked)
+        // + per point light colour * clamp(a + b * d^2, 0, 1) * max(0, n . unit(pos - vertex)) (checked
+        // against the VU1 program's own output, tools/vu1port/lightprobe.cpp, 22 Oct).
         struct LightEnv
         {
             bool valid = false;
-            int count = 0;
+            int count = 0, points = 0;
             float dir[4][3] = {}, col[4][3] = {}, amb[3] = {};
+            float pos[4][3] = {}, pcol[4][3] = {}, fall[4][2] = {}; // point lights: world position, colour, (a, b)
         };
         uint64_t alphaPassBit(uint8_t *rdram) { return guestAny(rdram, 0x70000044u) == 0xFF000000u ? uint64_t(1) << 62 : 0; }
         LightEnv readLightEnv(uint8_t *rdram)
@@ -442,12 +445,27 @@ namespace pop_native_live
                 // type 1 = directional, its direction (unit) at +0x10 (uploaded to VU 0x3FC); type 0 = point
                 // light, position at +0x50 (w 1) and two falloff parameters at +0x90 (e.g. 1, -0.00163), its +0x10
                 // left over (junk, e.g. 1.6e29: lit with it, the Prince flashed white when facing +x, user 22 Oct).
-                // The VU1 falloff is not decoded yet, so point lights are left out (ambient + directional).
+                // The falloff, measured by replaying the VU1 program (character program 31829861 in the
+                // trace of save 192521, 22 Oct): colour * clamp(a + b * d^2, 0, 1) * max(0, n . unit(pos - vertex)).
+                // Other types (2: spot?) are not seen yet and stay out.
                 const bool typed = guest8(rdram, set + 1) == 0;
                 for (int i = 0; i < count && i < 4; ++i)
                 {
                     const uint32_t c = guestAny(rdram, set + 0xD0 + 4 * i);
-                    if (c == 0 || (typed && guestAny(rdram, set + 0xE0 + 4 * i) != 1))
+                    const uint32_t type = typed ? guestAny(rdram, set + 0xE0 + 4 * i) : 1u;
+                    if (c != 0 && type == 0)
+                    {
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            e.pos[e.points][k] = guestF(rdram, set + 0x50 + 16 * i + 4 * k);
+                            e.pcol[e.points][k] = float((c >> (8 * k)) & 0xFF);
+                        }
+                        e.fall[e.points][0] = guestF(rdram, set + 0x90 + 16 * i);
+                        e.fall[e.points][1] = guestF(rdram, set + 0x94 + 16 * i);
+                        ++e.points;
+                        continue;
+                    }
+                    if (c == 0 || type != 1)
                         continue;
                     for (int k = 0; k < 3; ++k)
                     {
@@ -543,6 +561,22 @@ namespace pop_native_live
                             const float k = std::max(0.0f, (nacc[0] * light->dir[l][0] + nacc[1] * light->dir[l][1] + nacc[2] * light->dir[l][2]) / nl);
                             for (int c = 0; c < 3; ++c)
                                 c3[c] += k * light->col[l][c];
+                        }
+                        for (int l = 0; l < light->points; ++l)
+                        {
+                            float to[3], d2 = 0, dot = 0;
+                            for (int c = 0; c < 3; ++c)
+                            {
+                                to[c] = light->pos[l][c] - out1.pos[c];
+                                d2 += to[c] * to[c];
+                                dot += nacc[c] * to[c];
+                            }
+                            const float att = std::clamp(light->fall[l][0] + light->fall[l][1] * d2, 0.0f, 1.0f);
+                            if (att <= 0 || dot <= 0 || d2 <= 0)
+                                continue;
+                            const float k = att * dot / (nl * std::sqrt(d2));
+                            for (int c = 0; c < 3; ++c)
+                                c3[c] += k * light->pcol[l][c];
                         }
                         for (int c = 0; c < 3; ++c)
                             out1.colour[c] = std::min(c3[c], 255.0f) / 128.0f;

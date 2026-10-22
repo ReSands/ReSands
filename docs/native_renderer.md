@@ -637,3 +637,21 @@ judged in game. Off reproduces step 1 exactly (all 49 saves of 19 Oct: the same 
   38 fps one-second sample (unattributed). New: **a full-frame flash right after the loading glyph** when
   entering a scene (consistent); to check with `play.ps1 -NoNativeWorld` whether the game does it too. Native
   characters made the default in `play.ps1`; the flash detector is opt-in now (`POP_NATIVE_FLASHLOG=1`).
+- **Load flash is ours:** the same scene entry with `play.ps1 -NoNativeWorld` (GS only) does not flash (user,
+  22 Oct). So the first frame(s) after a load with the native world injected show a full-frame flash.
+  Candidates: the frame(s) between the loading screen and the first 3D frame (marker present but the picture
+  from a frame drawn before the new area's geometry arrived, or the clear colour 0 / Z 0 over a fade the game
+  draws before its 3D), the kept-mesh reset when a new area loads. To do: capture the frames after a load
+  (`boot.ps1 -Shots` around a scripted load, or a frame dump of the injected pictures) and compare.
+- **Point lights decoded (22 Oct evening)** by replaying the character VU1 program (image 31829861, 2,820 runs
+  in the trace of save 192521, `tools/windows/vu1trace.ps1`) with changed inputs (`tools/vu1port/lightprobe.cpp`;
+  build like vu1replay, x86_64): all other lights and the ambient off, the point light's colour 200, then the
+  falloff pair varied. Output vertex colours: linear in a, linear in b, additive (a 0.5 + b 1e-3 = 69 vs
+  44 + 24), clamped to [0, 1] (a 2 = a 1, a -0.5 = 0), the recorded pair reproduced to 1-2 levels (48.9 vs
+  48), the b factor = d^2 to the light (Prince at (-12.3, -16.4, 3.5), light at (-5.0, -3.8, 10.6): 262 vs
+  ~273 measured), no-falloff contribution <= the colour (196 of 200: unit direction). So a point light adds
+  colour * clamp(a + b d^2, 0, 1) * max(0, n . unit(pos - vertex)); (a, b) = near/far falloff, a =
+  far^2/(far^2 - near^2), b = -1/(far^2 - near^2) (seen: far 24.8; near 2.47, far 5.94). Now in
+  `poseSkinned`. Save 192521: the Prince's mean 65.3 (no point lights) -> 67.6 (GS 73.7 with glow).
+  Qwen candidate (user asked): the whole character program (2,048 lines, ~60 stages at the water job's
+  25-35 pairs) to C++, judged on this trace: exact lighting incl. any other light types.
