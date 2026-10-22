@@ -48,15 +48,17 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
   character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`; built on the
   PC, not yet seen in game). Details: `docs/native_renderer.md` "Native characters in the game window".
-- **Static world audit + sword (22 Oct night, offline; in-game check pending).** The sword (element 0x00B395B0) is a
-  lit static mesh: pass 1 carries normals at VU 0x83 (pass 0 colours), which the converter drew unlit, alpha-tested
-  away. Census of 196 saves (`tools/staticcensus.py`) + world accounting: lit static passes now stay on the GS;
-  V4-32-position objects (mirror-room puzzle pieces) decode from memory (instanced ones were always GS); instanced
-  pass 2 had a shared dedupe key (would lose the second layer); packetless refs end the chain. Undecoded calls
-  3,629 -> 1,044, all explained (lit pass 1 = step 2; pass-2 layers of V4-32 objects). Details:
-  `docs/native_renderer.md` "Static world audit". **NEXT: the in-game check** (fast build, normal boot title ->
-  memory card: sword visible, mirror room unchanged, log line "lit static draws on the GS"; ask first, TV on),
-  then renderer step 2 (lit statics with the character lighting; translucents + particles).
+- **Static world audit + sword: done and checked in game (22 Oct night).** The sword (element 0x00B395B0) is a lit
+  static mesh: pass 1 carries normals at VU 0x83 (pass 0 colours); the converter drew it with normals as colours
+  (in game: reddish-brown, not missing; the "missing" sword was the offline frame). Census of 196 saves
+  (`tools/staticcensus.py`) + world accounting: lit static passes stay on the GS; V4-32-position objects
+  (mirror-room puzzle pieces) decode from memory; instanced pass 2 had a shared dedupe key; packetless refs end
+  the chain. Undecoded calls 3,629 -> 1,044, all explained (lit pass 1 = step 2; pass-2 layers of V4-32 objects).
+  User check (memory-card slot 04, the fountain after the mirror room): sword silver, mirror room right, ~60 fps.
+  Details: `docs/native_renderer.md` "Static world audit". Memory-card slots: header +4 = play time (s), +0x10 =
+  save-point key; copies in `game/analysis/memcard/`.
+- **NEXT: renderer step 2, the rest (roadmap 0.12):** lit statics with the character lighting (the 500 pass-1
+  calls), then translucents + particles (below).
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`.

@@ -674,9 +674,10 @@ static-style (ref tags, RET) but **lit**: per batch a V3-16 UV upload to VU 0x43
 V4-8 **normals** at 0x83, **V4-32 positions** at 0x3 and a V4-32 x3 header at 0 (pass 2 reuses the block with
 its own UVs). So pass 1 here is the lit driver (as the characters' pass 1), on a static mesh.
 - In a normal boot ReadElement's `convertElement` accepts it (format 0xC at addr 3 = positions) and the world
-  path draws it natively as an unlit static mesh, reading the normals as colours: the first vertex's
-  7D 11 03 01 gives alpha 1/128, and the material alpha-tests (flags 0x17, AREF 0x18). **Likely why it is
-  invisible (not yet confirmed in game).**
+  path draws it natively as an unlit static mesh, reading the normals as colours (first vertex 7D 11 03 01).
+  **In game it was not missing but reddish-brown** (user, 22 Oct 20:37, old build; save
+  `play_20261022_203744` shows the orange-red stripe in the game's own frame); silver again with the fix
+  (20:40). The "missing" sword was the offline frame only:
 - Offline (`pop_state_frame`) `livePacketBatches` closes batches on V3-32 positions only, so it decodes nothing.
 
 Related, fixed offline: rigid parts with a skinned packet but no palette (0x018421B0 / 0x018426F0, the wrist
@@ -720,3 +721,6 @@ by design: list +0x4C opaque (671 draws over the saves; opened with the transluc
 `play_20261019_191304` (gold arcs and mirror frames now native, matching the game; mirror faces get their
 reflection from the pass-2 layer on the GS). **To check in game from a normal boot (title -> memory card):** the
 sword back, the mirror room unchanged to the eye, `lit static draws on the GS` in the log.
+**Checked in game 22 Oct 20:39 (memory-card slot 04, the fountain after the mirror room):** sword silver, mirror
+room right (gold pieces, faceted mirrors), 59.8-60 fps (lowest 59.4), 0 missed injections, worker 3.4 ms,
+~12-15 lit static draws per frame on the GS. Saves `play_20261022_204040` / `204108` (mirror room, new build).
