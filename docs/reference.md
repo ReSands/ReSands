@@ -196,3 +196,17 @@ Open: only 21 elements found in the Aviary pack (check other grammars: CJMeshEle
 - JadeStudio: https://www.github.com/4g3v/JadeStudio
 - Texture packs (gbatemp.net threads for TexMaster, xXtherockoXx and the Remastered Project; Nexus Mods collection): https://www.nexusmods.com/princeofpersiathesandsoftime/mods/17
 - Also covered in chat, not sourced here: Ridge Racer Type 4 recomp (PS1, omegakatana92/RidgeRacer4Recomp, v1.0.0 released 3 Sep 2026, built on PSXRecomp).
+
+## Mac tool setup (done 11 Oct 2026)
+
+- Tools live outside the repo in `~/tools/`: `ghidra_12.1.4_PUBLIC/` (EE Reloaded v2.1.38 installed in `Ghidra/Extensions/`), `PS2Recomp/` (clone).
+- Java: Homebrew `openjdk@21`. Ghidra's launcher does not find it on its own in non-interactive shells; export it first:
+  `export JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH`
+- Ghidra ships no macOS natives. They were built with `cd ~/tools/ghidra_12.1.4_PUBLIC/support/gradle && ./gradlew buildNatives` and copied from each module's `build/os/mac_arm_64/` into `os/mac_arm_64/`. Redo this after any Ghidra upgrade.
+- EE language ID for headless imports: `r5900:LE:32:default`.
+- `innoextract` (Homebrew) unpacks the GOG installer.
+- PS2Recomp recompiler builds on Apple Silicon (uses sse2neon on ARM). Homebrew `cmake` + `ninja`; recompiler only:
+  `cmake -S ~/tools/PS2Recomp -B ~/tools/PS2Recomp/build-mac -G Ninja -DCMAKE_BUILD_TYPE=Release -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_ANALYZER=OFF -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF && cmake --build ~/tools/PS2Recomp/build-mac`
+- Export from Ghidra headlessly (script's two `askFile` prompts are answered by positional args):
+  `analyzeHeadless game/ghidra PoP_SLUS20743 -process SLUS_207.43 -noanalysis -readOnly -scriptPath ~/tools/PS2Recomp/ps2xRecomp/tools/ghidra -postScript ExportPS2Functions.java <abs>/game/recomp/config.toml <abs>/game/recomp/functions.csv`
+- Recompile: `~/tools/PS2Recomp/build-mac/ps2xRecomp/ps2_recomp game/recomp/config.toml` (about 15 s, 0.8 GB RAM; 59,674 `.cpp` files, 458 MB in `game/recomp/output/`).

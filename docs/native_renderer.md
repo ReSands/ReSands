@@ -498,12 +498,13 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
 
 ## Plan of attack (agreed with the user 19 Oct night)
 Renderer, in order:
-1. **Native static world in the game window**: in-process Vulkan drawing (the live window exists only as a
+1. **Native static world in the game window** (DONE 22 Oct: `POP_NATIVE_WORLD`, on by default in play.ps1; see
+   "Native world in the game window" below): in-process Vulkan drawing (the live window exists only as a
    separate process today; recommend porting the presenter to Vulkan over GL interop), the static draw paths
    no longer build DMA (as `POP_NATIVE_SKIP=static`, keeping the driver switches), the emulated GS draws the
    rest on top. The 60 fps win. Open design point: depth for GS draws over the native world (characters and
    particles test against it) - step 2 makes that moot.
-2. **Characters and particles native** (decoders exist): the GS stops drawing 3D.
+2. **Characters and particles native** (decoders exist; NEXT, see CLAUDE.md status): the GS stops drawing 3D.
 3. **Gaps**: water (P6 on VU1: Qwen port judged by the trace replayer), sprites (P9), shadows, halos, light
    shafts / the mirror beam (191059: not type 0x18), full-screen flashes and white-outs, UV animation details.
 4. **2D**: HUD, menus, text, loading screens, letterbox bars, the movie picture.

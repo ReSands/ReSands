@@ -383,3 +383,64 @@ Older status blocks: `docs/history.md` (last one: "19 Oct 2026 evening"). Tonigh
   later (a quiet/missing track in one fight, Prince-Farah in-engine dialogue out of sync, sound slows with the
   frame rate); the PC's play build is the scheduled VU1 build (patch 37) plus `POP_NATIVE_SKIP`.
 - **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner.
+
+## Moved from CLAUDE.md on 22 Oct 2026 evening (clean-up after the approach was settled; verbatim)
+
+### Goal
+
+Personal-use project to get a better PC version of Prince of Persia: The Sands of Time (Ubisoft Montreal, 2003) than the original PC port, using:
+
+1. A static recompilation of the PS2 version (PS2Recomp), with a modern renderer.
+2. Community HD texture packs, integrated into that renderer.
+3. Later: DLSS (and possibly path tracing).
+
+In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) version.
+
+### Status block as of 22 Oct 2026 evening, before the clean-up
+
+Older status blocks: `docs/history.md` (last one: "19 Oct 2026 night"). The overnight run of 19-20 Oct ended early
+(usage credits ran out on the morning of 20 Oct); the Qwen queue ran on unattended until the PC's llama-server went away.
+
+- **Renderer step 1 (native static world in the game window): works in game (22 Oct).** `POP_NATIVE_WORLD=1`
+  (off by default): static draws skip their DMA, a worker draws them in Vulkan, a GS host hook (runtime patch
+  38) writes picture + Z into the GS buffers where the frame's 3D starts. Normal boot (save-state boots convert
+  nothing): ~60 fps, 3.4 ms per frame, world correct after the ZMSK fix (bd89bd4). Next: in-game check of the
+  shadow-flicker depth bias `POP_NATIVE_WORLD_ZBIAS` (default 128; compare 0) when the user is at the PC, then
+  step 2 (characters + particles). Details: `docs/native_renderer.md` "Native world in the game window".
+- **Water (P6) VU1 port: 13 of 24 stages pass** (8 by Qwen, 5 by hand); the 11 left are the big arithmetic
+  stages. Harness `tools/vu1port/`, results and what we learned: `docs/llm_jobs.md` "VU1 water program P6".
+  Decide: hand-port the rest or split further for Qwen, then `port.py --chain` (whole-run judge).
+- **New saves and bug reports (user, 20-21 Oct): `docs/saves_1021.md`.** 19 + 58 saves plus a crash save,
+  copied to `game/analysis/play1020/` and `play1021/`. Bugs written up, not fixed (user: later):
+  camera X reversed in fixed-camera views (override treats them as the orbiting camera; low priority); a door
+  flickering with a black web (in the GS output too); **two freezes in combat**: crash 1 = the scheduler resuming
+  at return address 0x172844 that has no entry (Ghidra split FUN_00172800's epilogue off at the delay slot of a
+  `jal`; its save was lost), crash 2 = cause unknown, save kept (`crash_20261021_210951.state`).
+- **Agreed order (19 Oct, unchanged):** renderer 1 native static world -> 2 characters + particles native ->
+  3 gaps (water P6, sprites P9, shadows, halos, light shafts, flashes) -> 4 2D/HUD/menus -> 5 GS off by
+  default; then sound (save-state boots with sound first), IOP, frame pacing. Details: `docs/native_renderer.md`
+  "Plan of attack". Playtesting plan: the user gathers saves; I work offline; milestone checks by the user.
+- **Rules from the user (19 Oct):** the PC's TV is off unless the user is playing: ask before any job that boots
+  the game (`nvidia-smi --query-gpu=display_active` must be Enabled). Survey other projects before fixing a
+  narrowed-down problem (`docs/ps2_projects.md`); general learnings to `docs/lessons.md`; one dated job script
+  per night; optimise in order of biggest win. Shut the PC down after overnight work.
+- **Open items carried over:** audio bugs (a quiet/missing track in one fight, Prince-Farah in-engine dialogue out
+  of sync, sound slows with the frame rate); the first-person X fix of 19 Oct works in normal play as far as we
+  know (the user's only report is the fixed-camera case). Known limits: save-state boots have no sound; runtime
+  screenshots come out as the game in a corner.
+
+### Project direction (user, 14 Oct 2026)
+
+Target: a **gold-standard recompilation**: native game code (static recompilation) with the hardware replaced **at the engine level**, not emulated: a native renderer that understands the Jade draw manager's draw calls (not GS emulation), a native sound mixer driven by the engine's sound calls (DARE/UbiSound, not IOP/SPU2 emulation), native movie decoding behind the game's own player (not IPU emulation). Migrate part by part; emulated parts remain until replaced.
+
+Nightly validation **built and proven on the PC (14 Oct)**: Mac button `tools/overnight-pc.command` option 4 = `llm-job.ps1 -Job nightly` -> `tools/nightly/checks.py` (order: mmi ~6 s, boot from gameplay1.state 60 s with frame/ADPCM captures, then meshes over all 566 world packs: saved per pack under `game/analysis/nightly/meshes/<converter fingerprint>/`, resumed across runs, 3 workers, one process per pack; c2py_rt runaway guards turn misread sizes into errors) -> `tools/nightly/report.py` (script decides findings + evidence; Gemma explains one finding per small prompt) -> `docs/nightly/<date>.md`. First run found: 18 MMI instructions still wrong (known), **missing branch target 0x16AA0C in RPS2::UpdateBuffer** (new; switch-table candidate), meshes (67 packs so far) 39 of 1,307 geometry records mis-parsed, 11 of 797 elements without vertices. Gemma's explanations are correct but generic; the value is the scripted findings. Original plan: a check suite on the PC (instruction test, decoder record/replay, converter over all world packs with exact-size parsing, save-state boots with screenshot/log diffs against a baseline, frame capture vs conversion) produces failures by script; Gemma only turns them into grouped bug reports (`docs/nightly/<date>.md`), every line citing evidence. Scripts find wrong bytes; the model writes the reports.
+
+### Renderer task order (agreed 14 Oct 2026)
+
+Priority (user): a native renderer using **only PS2 assets and no GS emulation** first; finish A3 (materials/blend) and A7 (skinning) before B (user, 14 Oct); higher-quality assets (PC textures, Xbox movies) only after that. Dependency order:
+- A. Read everything (offline, Mac): 1 PC save-state screenshot + packs loaded (judge for A) -> 2 lighting/brightness check -> 3 materials/blend state (alpha test/blend, additive, double-sided, sky) -> 4 positions-only elements -> 5 whole levels (all packs) -> 6 coverage of all world packs -> 7 skinned mesh data.
+- B. Static world native (PC): 8 **API: Vulkan (user decision 14 Oct 2026: DLSS and ray tracing support, Windows + Linux; the emulated GS renderer is OpenGL, so plan an interop layer or port the presenter)** + native pass in the presenter -> 9 load-time conversion in C++ (hook CJMeshElement::ReadElement) -> 10 per-frame capture (element lists, matrices, camera) -> 11 draw natively, hybrid with the GS, frame comparison.
+- C. Characters: 12 GPU skinning with the game's bone matrices.
+- D. Remove the GS: 13 particles/water/sand/shadows -> 14 post-processing shaders -> 15 2D/HUD/menus/loading screen/movie display -> 16 GS emulation off by default (kept as the reference renderer toggle).
+- E. Later: 17 resolution/widescreen/frame rate/DLSS/RTX; 18 higher-quality assets.
+Sound and PS2 movies are in scope too (user, 14 Oct): eventually native sound (no IOP/SPU2 emulation) and native playback of the PS2 movies (no IPU emulation) - separate tracks after the renderer. Judge frames for section A come from our own recompiled game on the PC (SotC GPU GS emulation of the game's own GS commands), not PCSX2.
