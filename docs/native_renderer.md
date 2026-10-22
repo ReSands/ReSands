@@ -785,8 +785,13 @@ output words change; `--match <hex word>` picks the runs whose uploads hold a me
   world stats print "native lit/env". `POP_NATIVE_ELEMLOG=all` logs every element. Scores (`score_saves.sh`, characters on):
   204040 13.04 -> 11.28, 204108 5.02 -> 4.25, 192521 4.70 -> 4.70. Seen: the ceiling's gold frames and horns, the mirror
   rings and the faceted hanging mirrors now drawn (were missing); the sword drawn silver-blue with env highlights.
-  Open: (1) the faceted mirrors come out darker than the game's; (2) the gold frame of the angled mirror (204108, top
-  right) still missing (pass 4 / SetMirrorParameterForJsm or a ref; to check with POP_NATIVE_WORLD_WHY in world mode);
+  Then (same night) the **instanced refs** too (refDisplay: the ref's element picks the driver; posed by poseSkinned into
+  g_frameRefs with an identity model) and **V3-8 normals** (most refs' pass 1; strip flag from the UV's third value);
+  pass-2 colours no longer clamped at 0x80 (GS modulate). Offline counts (`[state] lit static passes native`): 192521
+  lit 1 / env 1 (the sword), 204040 13 / 76 (incl. the 12 lit refs at (-2.7, 54.6, -34)), 204108 0 / 83.
+  Open: (1) the faceted mirrors looked darker than the game's when zoomed, but region means match (69/77/75 vs
+  68/73/69): the facet-to-facet pattern differs a little; (2) the gold frame of the angled mirror (204108, top right)
+  is missing before and after: not a lit static (no pass-4 draw in any 22 Oct save), another path (translucents?);
   (3) the mirror-room light beam is a light shaft (not native yet: 0.13); its glow differs before/after; (4) save 192521's
   game frame shows the orange-red sword of the 19:25 build (native injection with normals as colours), so it is no
   reference for the sword: judge the sword in game (memory-card slot 04).

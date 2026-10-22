@@ -467,5 +467,7 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "[state] lightmap draws %llu, from packets %llu, instanced lightmaps skipped %llu\n",
                  (unsigned long long)pop_native_live::g_stats.drawsLightmap, (unsigned long long)pop_native_live::g_stats.drawsFromPacket,
                  (unsigned long long)g_lightmapRefs);
+    std::fprintf(stderr, "[state] lit static passes native: lit %llu, env %llu\n", (unsigned long long)pop_native_live::g_worldStats.litNative,
+                 (unsigned long long)pop_native_live::g_worldStats.envNative);
     return 0;
 }

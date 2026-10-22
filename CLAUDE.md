@@ -57,8 +57,13 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   User check (memory-card slot 04, the fountain after the mirror room): sword silver, mirror room right, ~60 fps.
   Details: `docs/native_renderer.md` "Static world audit". Memory-card slots: header +4 = play time (s), +0x10 =
   save-point key; copies in `game/analysis/memcard/`.
-- **Lit statics, in progress (22 Oct late):** measured (docs/native_renderer.md "Lit statics measured"): pass 1 = character lighting (P4), pass 2 = env map from FUN_004B6D80 (also covers the mirrors' pass-2 layers), pass 4 = SetMirrorParameterForJsm (stays on the GS). Code: `packetWords()` factored out of `livePacketBatches`; next write `driverKind()` (table 0x700000B0, index pass + 5 x bit 1 of element +0x47), `litPacketBatches()` (batches split at MSCAL/MSCNT, strip flag = normal byte 4) and a display() branch before `it == g_elements.end()` that poses via `poseSkinned` (pass 1 lit, pass 2 env UVs); then judge offline.
-- **NEXT (user agreed 22 Oct night): renderer step 2, the rest (roadmap 0.12), first the lit statics:** the 500
+- **Lit statics native: built, judged offline (22 Oct late night); PC play build rebuilt, in-game check by the user pending.**
+  Pass 1 = character lighting (P4), pass 2 = env map from FUN_004B6D80's matrix, driver from the game's table (0x700000B0);
+  elements and instanced refs; `POP_NATIVE_NOLIT=1` = old behaviour. Offline: 204040 13.04 -> 11.28, 204108 5.02 -> 4.23;
+  the mirror room's gold frames, rings and faceted mirrors now drawn; the sword silver-blue with env highlights. In game:
+  memory-card slot 04 (sword, mirror room), also check the mirror room for anything worse. Details and open items:
+  `docs/native_renderer.md` "Lit statics measured".
+- **Was NEXT (22 Oct night; lit statics now built, above):** the 500
   pass-1 static calls now left to the GS (the sword, 40 instanced refs) drawn natively with the character lighting.
   Plan, element list, open question (which VU1 program/formula lights them: measure first) and judges (saves 192521,
   204040, 204108; in game memory-card slot 04): `docs/native_renderer.md` "Next: lit statics native". Then the

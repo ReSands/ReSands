@@ -817,17 +817,18 @@ namespace pop_native_live
         // A lit pass packet as one rigid part's SkinnedBatches (posed by the object matrix: poseSkinned without a palette).
         // A batch = the uploads up to a VU1 kick (MSCAL/MSCNT; what a batch does not upload stays in VU memory): V4-32
         // positions at 3 (w = +-1, unused), V4-8 normals (pass 1 at 0x83, pass 2 at 0x43; fourth byte 1 = no triangle,
-        // the strip flag), pass 1's V3-16 UVs at 0x43 (1/512), pass 2's V4-8 colours at 0x83 (0x80 = 1.0). Normals are
-        // kept as the VU sees them (signed bytes / 128), the V4-32 x3 header at 0 is skipped.
+        // the strip flag) or V3-8 normals (most instanced refs' pass 1: the strip flag is then the UV's third value),
+        // pass 1's V3-16 UVs at 0x43 (1/512), pass 2's V4-8 colours at 0x83 (0x80 = 1.0). Normals are kept as the VU
+        // sees them (signed bytes / 128), the V4-32 x3 header at 0 is skipped.
         void litPacketBatches(uint8_t *rdram, uint32_t packet, bool env, std::vector<pop_assets::SkinnedBatch> &out)
         {
             const std::vector<uint32_t> words = packetWords(rdram, packet);
             static const uint8_t kElementBytes[16] = {4, 2, 1, 0, 8, 4, 2, 0, 12, 6, 3, 0, 16, 8, 4, 2};
             std::vector<uint8_t> uv, nrm, col, pos;
-            uint32_t posNum = 0;
+            uint32_t posNum = 0, nrmBytes = 4; // per normal: 4 (V4-8) or 3 (V3-8)
             auto kick = [&]() {
                 const uint32_t num = posNum;
-                if (!num || nrm.size() < 4 * size_t(num))
+                if (!num || nrm.size() < nrmBytes * size_t(num))
                     return;
                 pop_assets::SkinnedBatch b;
                 b.positions.resize(3 * size_t(num));
@@ -841,8 +842,15 @@ namespace pop_native_live
                 {
                     std::memcpy(&b.positions[3 * v], &pos[16 * v], 12);
                     for (int k = 0; k < 3; ++k)
-                        b.normals[3 * v + k] = float(int8_t(nrm[4 * v + k])) / 128.0f;
-                    flags[v] = nrm[4 * v + 3];
+                        b.normals[3 * v + k] = float(int8_t(nrm[nrmBytes * v + k])) / 128.0f;
+                    if (nrmBytes == 4)
+                        flags[v] = nrm[4 * v + 3];
+                    else if (6 * v + 6 <= uv.size())
+                    {
+                        int16_t flag;
+                        std::memcpy(&flag, &uv[6 * v + 4], 2);
+                        flags[v] = flag;
+                    }
                     b.weights[3 * v] = 1.0f;
                     if (!env && 6 * v + 6 <= uv.size())
                     {
@@ -853,7 +861,7 @@ namespace pop_native_live
                     }
                     if (env)
                         for (int k = 0; k < 4; ++k)
-                            b.colours[4 * v + k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
+                            b.colours[4 * v + k] = 4 * v + 4 <= col.size() ? col[4 * v + k] / 128.0f : 1.0f; // GS modulate: 0xFF = ~2x
                 }
                 for (uint32_t v = 2; v < num; ++v)
                 {
@@ -885,8 +893,11 @@ namespace pop_native_live
                     }
                     else if (fmt == 9 && addr == 0x43)
                         uv.assign(raw, raw + bytes);
-                    else if (fmt == 0xE && addr == (env ? 0x43u : 0x83u))
+                    else if ((fmt == 0xE || fmt == 0xA) && addr == (env ? 0x43u : 0x83u))
+                    {
                         nrm.assign(raw, raw + bytes);
+                        nrmBytes = fmt == 0xE ? 4 : 3;
+                    }
                     else if (fmt == 0xE && env && addr == 0x83)
                         col.assign(raw, raw + bytes);
                     i += n;
@@ -1022,18 +1033,50 @@ namespace pop_native_live
                     if (g_frameSeen.insert(key).second)
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
-                        std::vector<pop_assets::Batch> batches;
-                        // texture UVs 1/512 (VU1 drivers: ITOF4 * 1/32); pass 4 sends pass 0's packet here
-                        livePacketBatches(rdram, packet, 512.0, batches, pass == 0 || pass == 4);
-                        std::array<float, 16> model;
-                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
-                        for (int k = 0; k < 16; ++k)
+                        const uint32_t el = guestAny(rdram, ref + 0x20u);
+                        if (el && !guestAny(rdram, el + 0x48u) && litDriverPass(rdram, el, pass))
                         {
-                            const uint32_t bits = guestAny(rdram, m + 4u * k);
-                            std::memcpy(&model[k], &bits, 4);
+                            // a lit pass (as CJMeshElement::Display's, litDriverPass with the ref's element): posed in
+                            // world space by poseSkinned (the element has no palette: the pool entry), identity model
+                            auto &bind = g_litBatches[(uint64_t(ref) << 8) | pass];
+                            if (bind.empty() && packet)
+                                litPacketBatches(rdram, packet, pass == 2, bind);
+                            std::vector<pop_assets::Batch> posed;
+                            if (pass == 1)
+                            {
+                                const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
+                                poseSkinned(rdram, el, index, bind, posed, &light);
+                            }
+                            else
+                            {
+                                std::vector<pop_assets::SkinnedBatch> env = bind;
+                                envUvs(rdram, index, env);
+                                poseSkinned(rdram, el, index, env, posed);
+                            }
+                            if (!posed.empty())
+                            {
+                                DrawMaterial dm = currentMaterial(rdram);
+                                dm.hasUvm = false; // the character program has no UV matrix
+                                const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                                g_frameRefs.emplace_back(std::move(posed), std::make_pair(identity, dm));
+                                ++(pass == 1 ? g_worldStats.litNative : g_worldStats.envNative);
+                            }
                         }
-                        if (!batches.empty())
-                            g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                        else
+                        {
+                            std::vector<pop_assets::Batch> batches;
+                            // texture UVs 1/512 (VU1 drivers: ITOF4 * 1/32); pass 4 sends pass 0's packet here
+                            livePacketBatches(rdram, packet, 512.0, batches, pass == 0 || pass == 4);
+                            std::array<float, 16> model;
+                            const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+                            for (int k = 0; k < 16; ++k)
+                            {
+                                const uint32_t bits = guestAny(rdram, m + 4u * k);
+                                std::memcpy(&model[k], &bits, 4);
+                            }
+                            if (!batches.empty())
+                                g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                        }
                     }
                     if (worldOk)
                     {
