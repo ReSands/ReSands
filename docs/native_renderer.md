@@ -795,3 +795,11 @@ output words change; `--match <hex word>` picks the runs whose uploads hold a me
   (3) the mirror-room light beam is a light shaft (not native yet: 0.13); its glow differs before/after; (4) save 192521's
   game frame shows the orange-red sword of the 19:25 build (native injection with normals as colours), so it is no
   reference for the sword: judge the sword in game (memory-card slot 04).
+- **Mirror flicker fixed offline (22 Oct, ~22:00):** in game the mirrors flickered in first person while turning (user; save
+  `play_20261022_214633`); offline the additive gold horns (env pass 2, list +0x3C, flags 00244207) were missing in that
+  view. Cause: the env layer was posed on the CPU into world space, the base pass is drawn in object space with the model
+  matrix on the GPU: different float paths, so the second layer's depth sat a hair behind the base and failed the depth test
+  (always in one view, on and off while turning). Now lit/env passes keep object-space positions (lit in world space for
+  the colours only: `poseSkinned(..., objectSpace)` via `litPose`) and go to g_frameRefs with `poolMatrix(index)`.
+  Scores: 214633 8.14 -> 4.85, 204040 11.28 -> 11.21, 204108 4.23 -> 4.22. Left in that save: the centre faceted mirror
+  greyer than the game's, one facet of the right hexagon darker.

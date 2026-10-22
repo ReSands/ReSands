@@ -490,8 +490,11 @@ namespace pop_native_live
         uint64_t g_skinnedNoPalette = 0; // skinned draws without a bone palette (posed by the object matrix)
         uint64_t g_passDraws[8][2] = {};  // CJMeshElement::Display calls per pass, static / skinned
         uint64_t g_refPassDraws[8] = {};   // CJMeshElementRef::Display calls per pass
+        // objectSpace (lit statics, no palette): lit in world space, but the vertices keep their object-space positions for
+        // a draw with the object's model matrix, as the base pass is drawn: the same transform gives the second layer the
+        // base's exact depth (pre-transformed on the CPU it z-fought with it: mirrors flickering, user 22 Oct)
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
-                         std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr)
+                         std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr, bool objectSpace = false)
         {
             const uint32_t pal = guestAny(rdram, element + 0x48);
             const uint32_t n = pal ? guest8(rdram, pal) : 0;
@@ -585,6 +588,8 @@ namespace pop_native_live
                             out1.colour[c] = std::min(c3[c], 255.0f) / 128.0f;
                     }
                     out1.uv2[0] = out1.uv2[1] = 0;
+                    if (objectSpace)
+                        std::memcpy(out1.pos, v, sizeof out1.pos);
                 }
                 o.indices = b.indices;
                 out.push_back(std::move(o));
@@ -941,6 +946,29 @@ namespace pop_native_live
                 }
         }
         std::unordered_map<uint64_t, std::vector<pop_assets::SkinnedBatch>> g_litBatches; // (element << 8 | pass) -> lit pass packet
+        std::array<float, 16> poolMatrix(uint8_t *rdram, uint32_t index)
+        {
+            const uint32_t m = guestAny(rdram, 0x70000260u) + (index & 0xFFFF) * 0x40u;
+            std::array<float, 16> model;
+            for (int k = 0; k < 16; ++k)
+                model[k] = guestF(rdram, m + 4u * k);
+            return model;
+        }
+        // A lit static pass's vertices for this draw, in object space (drawn with poolMatrix(index)): pass 1 lit with the
+        // light env, pass 2 with the environment map's UVs and the packet's colours (element: no palette)
+        void litPose(uint8_t *rdram, uint32_t element, uint32_t index, uint32_t pass, const std::vector<pop_assets::SkinnedBatch> &bind,
+                     std::vector<pop_assets::Batch> &out)
+        {
+            if (pass == 1)
+            {
+                const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
+                poseSkinned(rdram, element, index, bind, out, &light, true);
+                return;
+            }
+            std::vector<pop_assets::SkinnedBatch> env = bind;
+            envUvs(rdram, index, env);
+            poseSkinned(rdram, element, index, env, out, nullptr, true);
+        }
 
         std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameRefs; // instanced draws
         std::unordered_map<uint64_t, std::vector<pop_assets::Batch>> g_fromPacket; // (element << 8 | pass) -> decoded pass packet
@@ -1036,29 +1064,17 @@ namespace pop_native_live
                         const uint32_t el = guestAny(rdram, ref + 0x20u);
                         if (el && !guestAny(rdram, el + 0x48u) && litDriverPass(rdram, el, pass))
                         {
-                            // a lit pass (as CJMeshElement::Display's, litDriverPass with the ref's element): posed in
-                            // world space by poseSkinned (the element has no palette: the pool entry), identity model
+                            // a lit pass (as CJMeshElement::Display's, litDriverPass with the ref's element): litPose
                             auto &bind = g_litBatches[(uint64_t(ref) << 8) | pass];
                             if (bind.empty() && packet)
                                 litPacketBatches(rdram, packet, pass == 2, bind);
                             std::vector<pop_assets::Batch> posed;
-                            if (pass == 1)
-                            {
-                                const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
-                                poseSkinned(rdram, el, index, bind, posed, &light);
-                            }
-                            else
-                            {
-                                std::vector<pop_assets::SkinnedBatch> env = bind;
-                                envUvs(rdram, index, env);
-                                poseSkinned(rdram, el, index, env, posed);
-                            }
+                            litPose(rdram, el, index, pass, bind, posed);
                             if (!posed.empty())
                             {
                                 DrawMaterial dm = currentMaterial(rdram);
                                 dm.hasUvm = false; // the character program has no UV matrix
-                                const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-                                g_frameRefs.emplace_back(std::move(posed), std::make_pair(identity, dm));
+                                g_frameRefs.emplace_back(std::move(posed), std::make_pair(poolMatrix(rdram, index), dm));
                                 ++(pass == 1 ? g_worldStats.litNative : g_worldStats.envNative);
                             }
                         }
@@ -1853,8 +1869,7 @@ namespace pop_native_live
                 }
                 else if (sk == g_skinned.end() && !guest32(rdram, element + 0x48) && litDriverPass(rdram, element, pass))
                 {
-                    // a lit static pass (litDriverPass): posed like a rigid character part, pass 1 lit with the light
-                    // env, pass 2 with the environment map's UVs and the packet's colours
+                    // a lit static pass (litDriverPass): litPose, drawn with the object's model matrix like the base pass
                     ++g_stats.drawsKnown;
                     if (g_frameCapturing && g_frameSeen.insert(worldKey).second)
                     {
@@ -1863,27 +1878,15 @@ namespace pop_native_live
                             if (const uint32_t packet = guest32(rdram, element + 0x20 + 4 * pass) & 0x01FFFFF0u)
                                 litPacketBatches(rdram, packet, pass == 2, bind);
                         std::vector<pop_assets::Batch> posed;
-                        if (pass == 1)
-                        {
-                            const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
-                            poseSkinned(rdram, element, index, bind, posed, &light);
-                        }
-                        else
-                        {
-                            std::vector<pop_assets::SkinnedBatch> env = bind;
-                            envUvs(rdram, index, env);
-                            poseSkinned(rdram, element, index, env, posed);
-                        }
+                        litPose(rdram, element, index, pass, bind, posed);
                         if (!posed.empty())
                         {
                             DrawMaterial dm = currentMaterial(rdram);
                             dm.hasUvm = false; // the character program has no UV matrix
+                            const std::array<float, 16> model = poolMatrix(rdram, index);
                             if (elemLogged(element))
-                            {
-                                std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-                                elemLog(pass == 1 ? "lit" : "env", element, pass, index, identity, &posed, dm);
-                            }
-                            g_framePosed.emplace_back(std::move(posed), dm);
+                                elemLog(pass == 1 ? "lit" : "env", element, pass, index, model, &posed, dm);
+                            g_frameRefs.emplace_back(std::move(posed), std::make_pair(model, dm));
                             ++(pass == 1 ? g_worldStats.litNative : g_worldStats.envNative);
                         }
                     }
