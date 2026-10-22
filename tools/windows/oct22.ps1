@@ -33,7 +33,9 @@ try {
     function Test-Llama { try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 http://127.0.0.1:8033/health).StatusCode -eq 200 } catch { $false } }
     if (-not (Test-Llama)) {
         Say 'starting llama-server (LlamaServe)'
-        & "$Root\tools\windows\llama-serve.ps1" | Out-Null
+        # start the registered task: registering it again (llama-serve.ps1) needs an elevated shell
+        if (Get-ScheduledTask -TaskName LlamaServe -ErrorAction SilentlyContinue) { Start-ScheduledTask -TaskName LlamaServe }
+        else { & "$Root\tools\windows\llama-serve.ps1" | Out-Null }
         $t = 0
         while (-not (Test-Llama) -and $t -lt 900) { Start-Sleep 10; $t += 10 }
         if (-not (Test-Llama)) { throw 'llama-server did not come up within 15 minutes (game\jobs\llama.log)' }
