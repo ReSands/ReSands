@@ -613,3 +613,23 @@ judged in game. Off reproduces step 1 exactly (all 49 saves of 19 Oct: the same 
 - **First boot (TV on, user present):** normal boot (title -> memory card; save-state boots convert no
   world but characters decode from memory), `play.ps1 -NativeCharacters`, A/B against `play.ps1`: fps in
   fights, character look, the driver-switch count in the log (`driver switches replayed`), no ~7 fps drop.
+- **First in-game sessions (22 Oct evening, user on the TV, `play.ps1 -NativeCharacters`):** 59.9 fps over
+  21,600 frames, 0 missed; ~70 skinned draws native per frame, 172k driver switches replayed, no slowdown;
+  worker 3.44 ms (3.40 without characters), 293 KB per frame (66 KB). User: frame rate good; (1) the
+  Prince's white trousers flicker a little (minor; not investigated yet: candidates are the blended layers
+  left on the GS over native characters, Z bias, or lit colours at the clamp); (2) **the Prince's whole body
+  lit up briefly, when walking towards the camera.** The flash detector (`[pop:flash]` lines; per posed
+  draw, a >35% jump of the mean lit colour from the frame before, logged with both light sets;
+  `POP_NATIVE_FLASH_SAVE=1` quick-saves) found it: light set 1 (+1 = 0) had a slot whose +0x10 vector was
+  (1.6e29, 0, 0), read as a directional light, so any normal with +x lit to white.
+- **Light sets, decompiled (`CVuManager::DoSetSkinLightEnv` 0x4B64C0):** sets with +1 != 0 or no lights:
+  `count` slots as directional lights, +0x10 vector, +0xD0 colour, no type check (as the code did). Sets
+  with +1 == 0 (the characters' sets in play): per slot type at +0xE0: type 1 = directional with its unit
+  direction at +0x10 (uploaded to VU 0x3FC; the main slot gets a zero vector with w = type << 4); type 0 =
+  point light, position at +0x50 (w 1), falloff pair at +0x90 (e.g. 1, -0.00163; 1.21, -0.0343), colour
+  +0xD0; its +0x10 is left over. `readLightEnv` now lights typed sets with the type-1 slots only; point
+  lights are left out until the VU1 falloff is decoded (the program that reads VU 1020-1023 in
+  vu1_527ef67b uses them as a matrix with a point at 1019: a projection, not this light loop). Save 192521:
+  the Prince's mean brightness 68.2 -> 65.3 (GS 73.7 with glow).
+- **Noticed:** the Prince's sword (on his back) is in the GS picture but not in the native frame (save
+  192521): another draw path, still drawn by the GS in game.

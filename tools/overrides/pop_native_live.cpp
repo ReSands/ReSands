@@ -433,16 +433,22 @@ namespace pop_native_live
             }
             else
             {
-                // As DoSetSkinLightEnv uploads them: for point-light sets (+1 != 0) it takes its other path
-                // (retail 0x4B6A40) and reads `count` slots as directional lights without looking at their
-                // types: vector at +0x10 + 16i (not normalised), colour bytes at +0xD0 + 4i (slots with a
-                // zero colour word skipped). The title scene's set 0 holds a position and floats there; the
-                // game lights with them as they are (the backlit curtains come out bright, as in the GS frame).
+                // As CVuManager::DoSetSkinLightEnv (0x4B64C0, decompiled 22 Oct) uploads them. Sets with +1 != 0
+                // (or no lights): `count` slots as directional lights without looking at their types, vector at
+                // +0x10 + 16i (not normalised), colour bytes at +0xD0 + 4i (slots with a zero colour word
+                // skipped). The title scene's set 0 holds a position and floats there; the game lights with them
+                // as they are (the backlit curtains come out bright, as in the GS frame).
+                // Sets with +1 == 0 (the characters' sets in play) take its full path, by slot type at +0xE0 + 4i:
+                // type 1 = directional, its direction (unit) at +0x10 (uploaded to VU 0x3FC); type 0 = point
+                // light, position at +0x50 (w 1) and two falloff parameters at +0x90 (e.g. 1, -0.00163), its +0x10
+                // left over (junk, e.g. 1.6e29: lit with it, the Prince flashed white when facing +x, user 22 Oct).
+                // The VU1 falloff is not decoded yet, so point lights are left out (ambient + directional).
+                const bool typed = guest8(rdram, set + 1) == 0;
                 for (int i = 0; i < count && i < 4; ++i)
                 {
-                    if (guestAny(rdram, set + 0xD0 + 4 * i) == 0)
-                        continue;
                     const uint32_t c = guestAny(rdram, set + 0xD0 + 4 * i);
+                    if (c == 0 || (typed && guestAny(rdram, set + 0xE0 + 4 * i) != 1))
+                        continue;
                     for (int k = 0; k < 3; ++k)
                     {
                         e.dir[e.count][k] = guestF(rdram, set + 0x10 + 16 * i + 4 * k);
