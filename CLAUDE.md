@@ -42,7 +42,13 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   bias `POP_NATIVE_WORLD_ZBIAS=128` (the default; 0 = off). **Test it from a normal boot (title -> memory card):
   save-state boots never run ReadElement, so nothing is converted.** Details and numbers:
   `docs/native_renderer.md` "Native world in the game window".
-- **Next: renderer step 2 (roadmap 0.12): characters and particles native**, so the GS stops drawing 3D. Start
+- **Renderer step 2, characters: built and checked offline (22 Oct), not booted yet.** `POP_NATIVE_CHARACTERS=1`
+  (`play.ps1 -NativeCharacters`, off by default): opaque CPU-posed characters join the world frame, their
+  Display calls are skipped with the VU1 driver switches replayed (decompiled leaf functions). Offline over 49
+  saves: posed characters never in front of the game's surfaces, step 1 unchanged with the switch off. **Next: a
+  normal boot with the user (TV on), A/B fps and look**; lighting is the approximation without point lights.
+  Details: `docs/native_renderer.md` "Native characters in the game window".
+- **Then: renderer step 2 (roadmap 0.12): particles native** (characters above), so the GS stops drawing 3D. Start
   point: in game every skinned element stays on the GS ("937 not converted (skinned/instanced/no pass)",
   ~3.6M skinned draws "unknown" per session); offline, skinning (A7) and the particle decoders already work in
   `pop_state_frame` / `pop_native_live.cpp`. How: see "Step 2 plan" below (CPU-posed batches first, bone
@@ -53,7 +59,7 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   The user starts it from the PC desktop shortcut "Qwen overnight (then shuts down)"; log `game\jobs\qwen-night.log`,
   results `game\analysis\qwen\vu1_p6_*` (PASS files). Morning: read the log, re-run what failed (or hand-port it).
   Details: `docs/llm_jobs.md` "VU1 water program P6" (22 Oct note). Needed for 0.13.
-- **Step 2 plan (agreed 22 Oct, not started):** characters first: send the CPU-posed batches (`poseSkinned`, already
+- **Step 2 plan (agreed 22 Oct; characters built 22 Oct, see above):** characters first: send the CPU-posed batches (`poseSkinned`, already
   used by the live window) in the PNF7 frame as unkept geometry, drop the "characters stay on the GS" refusal
   (`pop_native_live.cpp` ~line 1503) and skip their DMA (`kSkipSkinned`); GPU skinning only if the profiler asks (or
   for motion vectors at 1.3). Skinned meshes decode from memory (`skinnedFromPacket`), so save-state boots work for

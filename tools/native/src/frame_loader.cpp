@@ -2,7 +2,8 @@
 // batches); PNF2 + images and per draw alpha mode + cutoff; PNF3 render state flags + AREF word
 // instead; PNF4 + fog a, b, FOGCOL, Z test per draw (game order); PNF5 + FBMSK per draw, GLOW and
 // HAZE trailers; PNF6 = PNF5 with images by texture key, pixels only the first time; PNF7 (the in-game
-// native world) = PNF6 with a 64-bit key per batch, its geometry only the first time (kept meshes).
+// native world) = PNF6 with a 64-bit key per batch, its geometry only the first time (kept meshes); key 0 =
+// a batch for this frame only (posed characters), always with its geometry.
 #include "frame_loader.h"
 
 #include <cstdio>
@@ -146,7 +147,7 @@ namespace pop_native
                 mesh.material = material;
                 vertexTotal += nv;
                 triTotal += ni / 3;
-                if (v7)
+                if (v7 && key) // key 0: this frame only (posed characters), an ordinary mesh
                 {
                     d.mesh = -1;
                     d.kept = r.keepMesh(key, std::move(mesh));

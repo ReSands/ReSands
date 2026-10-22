@@ -417,6 +417,12 @@ int main(int argc, char **argv)
                      1u, firstBytes, cursor, rd32(cursor), rd32(cursor + 4), rd32(cursor + 8), rd32(cursor + 12),
                      rd32(cursor + 16), rd32(cursor + 20), rd32(cursor + 24), rd32(cursor + 28), rd32(cursor + 32), rd32(cursor + 36),
                      rd32(cursor + 40), rd32(cursor + 44));
+        const auto &ws = pop_native_live::g_worldStats;
+        std::fprintf(stderr, "[state] world calls: native %llu, kept for textures %llu, not decoded %llu; skinned draws native %llu, "
+                             "driver switches replayed %llu, skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu\n",
+                     (unsigned long long)ws.skipped, (unsigned long long)ws.noTexture, (unsigned long long)ws.notRecorded,
+                     (unsigned long long)ws.posed, (unsigned long long)ws.drivers, (unsigned long long)ws.skinGs[0],
+                     (unsigned long long)ws.skinGs[1], (unsigned long long)ws.skinGs[2]);
         return 0;
     }
     // two Display3DElements calls: the first starts the capture and replays the lists, the second writes

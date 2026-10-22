@@ -1,7 +1,8 @@
 # Play the game on the PC: the pop-sotc play build at 60 fps (POP_60FPS=1), no time limit.
-# Usage: tools\windows\play.ps1 [-Fps30] [-Profile] [-NoNativeWorld] [-Env 'A=1;B=2']
+# Usage: tools\windows\play.ps1 [-Fps30] [-Profile] [-NoNativeWorld] [-NativeCharacters] [-Env 'A=1;B=2']
 #        The static world is drawn by the native Vulkan renderer (POP_NATIVE_WORLD=1, renderer step 1, in game
-#        since 22 Oct); -NoNativeWorld leaves it all to the emulated GS.
+#        since 22 Oct); -NoNativeWorld leaves it all to the emulated GS. -NativeCharacters (POP_NATIVE_CHARACTERS=1,
+#        renderer step 2, not yet judged in game) draws the opaque characters natively too.
 #        -Fps30 plays at the original 30 fps (to recheck something seen at 60).
 #        -Profile: every kept quick-save also gets a profile of the seconds before it (see below); costs a
 #        little speed itself, so it is a separate shortcut.
@@ -15,7 +16,7 @@
 # game is closed, each new .prof is symbolized to <name>.report.txt with this build's linker map.
 # Esc, Alt+F4 or closing the window quits (Esc: runtime patch 39; PS2X_ESC_QUITS=0 turns it off). Avoid F9 (quick-load).
 # Log: game\recomp-sotc\play_<date>_<time>.log, written when the game window is closed.
-param([switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [string]$Env = '', [switch]$Shortcuts)
+param([switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [switch]$NativeCharacters, [string]$Env = '', [switch]$Shortcuts)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 
@@ -36,7 +37,7 @@ if ($Shortcuts) {
 
 $fps = $(if ($Fps30) { '0' } else { '1' })
 $name = "play_$(Get-Date -Format 'yyyyMMdd_HHmm')"
-& "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
+& "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });$(if ($NativeCharacters) { 'POP_NATIVE_CHARACTERS=1;' })$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
 
 $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"
 foreach ($prof in Get-ChildItem "$Root\game\ps2\disc\states\play_*.prof" -ErrorAction SilentlyContinue) {

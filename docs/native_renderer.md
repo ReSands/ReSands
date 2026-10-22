@@ -580,3 +580,36 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   period only (native shadows come in step 3). In game (22 Oct evening, A/B 128 vs 0): flickers less with
   128, no clipping seen (user); kept as the default.
 
+
+## Native characters in the game window (renderer step 2, first part; built 22 Oct, offline only)
+Switch: `POP_NATIVE_CHARACTERS=1` with `POP_NATIVE_WORLD=1` (`play.ps1 -NativeCharacters`); off by default until
+judged in game. Off reproduces step 1 exactly (all 49 saves of 19 Oct: the same `world_check.py` numbers).
+- **Game side** (`pop_native_live.cpp` `display`): the CPU-posed skinned draws (`poseSkinned`, already made
+  every frame in world mode and thrown away) are world records (kind 1); a CJMeshElement::Display call whose
+  chain is all recorded (opaque world lists 200/+0x2C/+0x3C, as step 1) is skipped. Skipping a skinned call
+  must keep its **VU1 driver switch** (the 19 Oct ~7 fps lesson): decompiled, both switch functions are leaf
+  functions, `CVuManager::DoSetShadowDriver` (0x4B5BC0, used when word 0x700000AC = 2) and FUN_004B7480
+  (otherwise), each appending one 2-qword packet (CNT 1; FLUSH; UNPACK V4-32 to VU 0x1D resp. 0x1E: 0x8000,
+  0x303EC000, 0x412, driver index) and storing the index at 0x70000080. Display switches when byte
+  0x700000A8 (0 one-bone driver, 1 more) differs from the palette's word (< 2: one bone), moving the index
+  by -/+ the word 0x700000AC. `worldReplayDriver` does exactly that per skipped chain element, in order.
+  Also from the decompile: Display draws nothing and does not follow the chain (+0x4C) when the element has
+  no packet for the pass (+0x20 + 4 * pass, pass 4 -> 1); the hook's chain walk now stops there too (it used
+  to record such elements).
+- **PNF7**: batch key 0 = this frame only (posed geometry changes every frame), always with its data; the
+  loader adds it as an ordinary per-frame mesh (dropped by `reset(true)`), not a kept one.
+- **Offline** (`POP_NATIVE_CHARACTERS=1 tools/native/world_saves.sh`, 49 saves of 19 Oct): world coverage mean
+  69.6% -> 71.4%, "other native" 4.3% -> 2.4% (the rest is step-1 leftovers: blended statics, Z-writing draws
+  of later lists), "extra" 0.00% on all. Saves whose camera matches (neither 0%): 25-125 skinned draws native
+  each, "ahead" <= 0.02%, so posed characters never stand in front of the game's own surfaces. Calls left
+  on the GS are all for render state (list +0x88 translucent, blend kind 1 with local alpha: fading
+  enemies); none for decoding or textures (`POP_NATIVE_WORLD_WHY=1` lists them; the 300-frame
+  `[pop:world]` line counts them).
+- **Known differences, to judge in game:** lighting is the 16 Oct approximation (ambient + directional
+  lights, no point lights: "Character lighting live" above), so characters come out a little paler/whiter
+  than the GS's (save 185803 with post effects: close, trousers whiter); skinned second layers (pass 2) and
+  translucent characters stay on the GS and draw over the native ones with the world's Z bias; posing costs
+  game-thread time (it already ran in world mode); posed geometry is uploaded every frame.
+- **First boot (TV on, user present):** normal boot (title -> memory card; save-state boots convert no
+  world but characters decode from memory), `play.ps1 -NativeCharacters`, A/B against `play.ps1`: fps in
+  fights, character look, the driver-switch count in the log (`driver switches replayed`), no ~7 fps drop.

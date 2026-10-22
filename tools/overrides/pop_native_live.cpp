@@ -179,6 +179,11 @@ namespace pop_native_live
         // ignores it) with "PNWD" and the frame number. At the frame's DMA kick (from PS2_Flip) the
         // frame's native draws go to pop_native_world, whose GS hook swaps the marker for the images.
         bool g_world = false;     // the mode is on
+        // renderer step 2: opaque skinned draws (characters) too, posed on the CPU (POP_NATIVE_CHARACTERS=1; off: on the GS)
+        const bool g_worldCharacters = [] {
+            const char *e = std::getenv("POP_NATIVE_CHARACTERS");
+            return e && *e == '1';
+        }();
         bool g_worldMarked = false; // this frame has a marker (Display3DElements ran since the kick)
         bool g_worldOpen = false; // draws may go native: the frame's first Display3DElements call
         uint32_t g_worldSeq = 0;
@@ -188,6 +193,8 @@ namespace pop_native_live
         {
             uint64_t frames = 0, skipped = 0, kept = 0, lightmaps = 0, noTexture = 0, notRecorded = 0, bytes = 0;
             uint64_t batchesSent = 0, batchesKnown = 0; // PNF7: geometry sent vs referenced (the renderer keeps it)
+            uint64_t posed = 0, drivers = 0; // skinned draws drawn natively; VU1 driver switches replayed for skipped calls
+            uint64_t skinGs[3] = {};         // skinned Display calls left to the GS: render state/list, not decoded, texture
         } g_worldStats;
         constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
         bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
@@ -196,13 +203,14 @@ namespace pop_native_live
         // Display3DElements' first Z-test-less and alpha passes), opaque (blend kind 0; alpha test
         // allowed), writes depth and RGB, Z test on, not the alpha-only pass.
         bool worldStateOk(uint8_t *rdram);
-        // the records a Display call added (kind 0: g_frameMaterials index, 2: g_frameRefs index)
+        // the records a Display call added (kind 0: g_frameMaterials index, 1: g_framePosed index, 2: g_frameRefs index)
         struct WorldRecord
         {
             int kind;
             size_t index;
         };
         size_t worldCount0();
+        size_t worldCount1();
         size_t worldCount2();
         DrawMaterial &worldMaterial(const WorldRecord &r);
         const bool g_noLighting = std::getenv("POP_NATIVE_NOLIGHT") != nullptr; // A/B: unlit characters
@@ -722,8 +730,35 @@ namespace pop_native_live
         std::unordered_map<uint64_t, std::vector<pop_assets::Batch>> g_fromPacket; // (element << 8 | pass) -> decoded pass packet
 
         size_t worldCount0() { return g_frameMaterials.size(); }
+        size_t worldCount1() { return g_framePosed.size(); }
         size_t worldCount2() { return g_frameRefs.size(); }
-        DrawMaterial &worldMaterial(const WorldRecord &r) { return r.kind == 0 ? g_frameMaterials[r.index] : g_frameRefs[r.index].second.second; }
+        DrawMaterial &worldMaterial(const WorldRecord &r)
+        {
+            return r.kind == 0 ? g_frameMaterials[r.index] : r.kind == 1 ? g_framePosed[r.index].second : g_frameRefs[r.index].second.second;
+        }
+        // A skipped CJMeshElement::Display still switches the VU1 skin driver as the call would have (the
+        // draws the GS still does after it need the right one; skipping the switches dropped every save to
+        // ~7 fps, 19 Oct). Before a skinned draw Display compares the state byte 0x700000A8 (0 = one-bone
+        // driver, 1 = more) with the palette's bone count (word at the palette; < 2: one bone) and, if it
+        // differs, moves the driver index 0x70000080 by -/+ the word 0x700000AC and sets the byte:
+        // CVuManager::DoSetShadowDriver (0x4B5BC0, word 0x700000AC = 2) or FUN_004B7480 (otherwise), both
+        // leaf functions that append one 2-qword packet (CNT 1; FLUSH; UNPACK V4-32 to VU 0x1D or 0x1E:
+        // 0x8000, 0x303EC000, 0x412, index) and store the index at 0x70000080.
+        void worldReplayDriver(uint8_t *rdram, uint32_t palette)
+        {
+            const uint8_t want = int32_t(guestAny(rdram, palette)) < 2 ? 0 : 1;
+            if (guest8(rdram, 0x700000A8u) == want)
+                return;
+            const uint32_t step = guestAny(rdram, 0x700000ACu), now = guestAny(rdram, 0x70000080u);
+            const uint32_t index = want ? now + step : now - step;
+            const uint32_t gs = guestAny(rdram, 0x00675148u), cursor = guestAny(rdram, gs + 0xECu), next = cursor + 0x20u;
+            const uint32_t qw[8] = {0x10000001u, 0u, 0x13000000u, step == 2 ? 0x6C01001Du : 0x6C01001Eu, 0x8000u, 0x303EC000u, 0x412u, index};
+            std::memcpy(getMemPtr(rdram, cursor), qw, sizeof qw);
+            std::memcpy(getMemPtr(rdram, gs + 0xECu), &next, 4);
+            std::memcpy(getMemPtr(rdram, 0x70000080u), &index, 4);
+            *getMemPtr(rdram, 0x700000A8u) = want;
+            ++g_worldStats.drivers;
+        }
         // A Display call's records go native if each has its texture: marks them, notes the drawn
         // bases (for their lightmap passes); false: the call runs as usual (its records stay GS-only)
         bool worldFinish(const std::vector<WorldRecord> &recs, const std::vector<uint64_t> &base)
@@ -1291,13 +1326,20 @@ namespace pop_native_live
             bool worldOk = g_world && g_frameCapturing && (pass == 3 ? g_worldOpen && g_currentList == 0x5Cu : worldStateOk(rdram));
             std::vector<WorldRecord> worldRecs;
             std::vector<uint64_t> worldBase;
+            std::vector<uint32_t> worldPalettes; // the chain's bone palettes in order (driver switches to replay)
+            const bool worldState = worldOk;
+            bool skinnedChain = false;
             for (unsigned link = 0; element && link < 4096; ++link)
             {
+                // Display draws nothing for an element without a packet for the pass, and does not follow
+                // its chain either (the recursion is inside that test; pass 4 uses pass 1's packet)
+                if (!guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)))
+                    break;
                 ++g_stats.draws;
                 const uint64_t worldKey = (uint64_t(element) << 16) | index | (pass == 2 ? uint64_t(2) << 56 : 0) |
                                           (pass == 3 ? uint64_t(3) << 56 : alphaPassBit(rdram));
                 const bool worldSeen = worldOk && g_frameSeen.count(worldKey);
-                const size_t world0 = worldOk ? worldCount0() : 0, world2 = worldOk ? worldCount2() : 0;
+                const size_t world0 = worldOk ? worldCount0() : 0, world1 = worldOk ? worldCount1() : 0, world2 = worldOk ? worldCount2() : 0;
                 if (g_frameCapturing && !g_elements.count(element) && !g_skipped.count(element) && !g_skinned.count(element))
                 {
                     // Skinned, never seen at load (a save-state scene): the drawn pass's packet in memory
@@ -1330,6 +1372,7 @@ namespace pop_native_live
                     }
                 }
                 ++g_passDraws[pass & 7][g_skinned.count(element) ? 1 : 0];
+                skinnedChain = skinnedChain || guest32(rdram, element + 0x48);
                 const auto it = g_elements.find(element);
                 const auto sk = g_skinned.find(element);
                 if (sk != g_skinned.end() && g_frameCapturing && (pass == 0 || pass == 1 || pass == 4) &&
@@ -1496,12 +1539,22 @@ namespace pop_native_live
                     bool recorded = false;
                     if (worldCount0() > world0)
                         worldRecs.push_back({0, world0}), recorded = true;
+                    if (worldCount1() > world1)
+                    {
+                        worldRecs.push_back({1, world1}), recorded = true;
+                        worldOk = worldOk && g_worldCharacters; // posed (also rigid skinned parts without a palette)
+                    }
                     if (worldCount2() > world2)
                         worldRecs.push_back({2, world2}), recorded = true;
                     const uint64_t base = (uint64_t(element) << 16) | index;
-                    if (guest32(rdram, element + 0x48))
-                        worldOk = false; // a skinned element (bone palette): characters stay on the GS
-                    else if (pass == 3 && !g_worldBase.count(base))
+                    if (const uint32_t palette = guest32(rdram, element + 0x48))
+                    {
+                        if (g_worldCharacters)
+                            worldPalettes.push_back(palette); // drawn natively, its driver switches replayed
+                        else
+                            worldOk = false; // characters stay on the GS
+                    }
+                    if (pass == 3 && !g_worldBase.count(base))
                         worldOk = false; // its base was drawn by the GS
                     else if (!recorded && !(worldSeen && (pass == 3 || g_worldBase.count(base))))
                     {
@@ -1517,7 +1570,22 @@ namespace pop_native_live
             {
                 if (pass == 3)
                     ++g_worldStats.lightmaps;
+                for (const uint32_t palette : worldPalettes)
+                    worldReplayDriver(rdram, palette);
                 return; // like a stub: leave pc, the dispatcher returns to the caller
+            }
+            if (g_world && g_worldCharacters && g_frameCapturing && skinnedChain && pass != 3)
+            {
+                const int why = !worldState ? 0 : !worldOk ? 1 : 2;
+                ++g_worldStats.skinGs[why];
+                static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr; // debug: each skinned call left to the GS
+                if (whyLog)
+                {
+                    const uint32_t sub = guestAny(rdram, 0x70000034u);
+                    std::fprintf(stderr, "[pop:world] skinned call on the GS (%s): element %08x pass %u list +0x%x flags %08x Z test %u mask %08x\n",
+                                 why == 0 ? "render state" : why == 1 ? "not decoded" : "texture", getRegU32(ctx, 4), pass, g_currentList,
+                                 sub ? guestAny(rdram, sub + 4) : 0u, guest8(rdram, 0x70000038u), guestAny(rdram, 0x70000044u));
+                }
             }
             g_origDisplay(rdram, ctx, runtime);
         }
@@ -1626,7 +1694,8 @@ namespace pop_native_live
             // live: "PNF6" = PNF5 with each image as (texture key, w, h, RGBA), RGBA only the first time
             // the viewer gets that key on this connection (w = h = 0 afterwards: it keeps the texture)
             // world: "PNF7" = PNF6 with a 64-bit key before each batch; a batch the renderer keeps already is
-            // (key, 0xFFFFFFFF), otherwise (key, vertex count, index count, data) as before
+            // (key, 0xFFFFFFFF), otherwise (key, vertex count, index count, data) as before; key 0 = this frame
+            // only (posed characters: always with their data, never kept)
             putBytes(f, worldOut ? "PNF7" : live ? "PNF6" : "PNF5", 4);
             putBytes(f, g_frameClip, size_t(4) * size_t(16));
             std::unordered_map<uint32_t, int32_t> imageOf;
@@ -1637,7 +1706,7 @@ namespace pop_native_live
                 if (!worldOut || m.native)
                     allMaterials.push_back(m);
             for (const auto &p : g_framePosed)
-                if (!worldOut)
+                if (!worldOut || p.second.native)
                     allMaterials.push_back(p.second);
             for (const auto &r : g_frameRefs)
                 if (!worldOut || r.second.second.native)
@@ -1740,8 +1809,12 @@ namespace pop_native_live
             for (size_t i = 0; i < g_frameDraws.size(); ++i)
                 if (!worldOut || g_frameMaterials[i].native)
                     order.push_back({g_frameMaterials[i].seq, 0u, uint32_t(i)});
-            for (size_t i = 0; i < g_framePosed.size() && !worldOut; ++i)
-                order.push_back({g_framePosed[i].second.seq, 1u, uint32_t(i)});
+            for (size_t i = 0; i < g_framePosed.size(); ++i)
+                if (!worldOut || g_framePosed[i].second.native)
+                {
+                    order.push_back({g_framePosed[i].second.seq, 1u, uint32_t(i)});
+                    g_worldStats.posed += worldOut ? 1 : 0;
+                }
             for (size_t i = 0; i < g_frameRefs.size(); ++i)
                 if (!worldOut || g_frameRefs[i].second.second.native)
                     order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
@@ -1813,18 +1886,20 @@ namespace pop_native_live
                     const auto &b = (*batches)[bi];
                     if (worldOut)
                     {
-                        const uint64_t key = o[1] == 0 ? mix64(mix64(0x5354u, (uint64_t(g_elements[g_frameDraws[o[2]].first].serial) << 16) | bi), variant)
-                                                       : mix64(contentKey(b), variant);
+                        // posed (skinned) batches change every frame: key 0, drawn for this frame only
+                        const uint64_t key = o[1] == 0   ? mix64(mix64(0x5354u, (uint64_t(g_elements[g_frameDraws[o[2]].first].serial) << 16) | bi), variant)
+                                             : o[1] == 1 ? 0u
+                                                         : mix64(contentKey(b), variant);
                         putBytes(f, &key, 8);
                         tris += b.indices.size() / 3;
-                        if (pop_native_world::meshSent(key))
+                        if (key && pop_native_world::meshSent(key))
                         {
                             const uint32_t known = 0xFFFFFFFFu;
                             putBytes(f, &known, 4);
                             ++g_worldStats.batchesKnown;
                             continue;
                         }
-                        ++g_worldStats.batchesSent;
+                        g_worldStats.batchesSent += key ? 1 : 0;
                     }
                     const uint32_t nv = uint32_t(b.vertices.size()), ni = uint32_t(b.indices.size());
                     putBytes(f, &nv, size_t(4) * size_t(1));
@@ -2054,11 +2129,15 @@ namespace pop_native_live
                 g_worldMarked = g_worldOpen = false;
                 if (++g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame; "
-                                         "batches sent %llu, kept by the renderer %llu\n",
+                                         "batches sent %llu, kept by the renderer %llu; skinned draws native %llu, driver switches replayed %llu, "
+                                         "skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu\n",
                                  (unsigned long long)g_worldStats.frames, (unsigned long long)g_worldStats.skipped,
                                  (unsigned long long)g_worldStats.noTexture, (unsigned long long)g_worldStats.notRecorded,
                                  (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames),
-                                 (unsigned long long)g_worldStats.batchesSent, (unsigned long long)g_worldStats.batchesKnown);
+                                 (unsigned long long)g_worldStats.batchesSent, (unsigned long long)g_worldStats.batchesKnown,
+                                 (unsigned long long)g_worldStats.posed, (unsigned long long)g_worldStats.drivers,
+                                 (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
+                                 (unsigned long long)g_worldStats.skinGs[2]);
             }
             g_origKick(rdram, ctx, runtime);
         }

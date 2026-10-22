@@ -4,6 +4,7 @@
 # tools/native/world_check.py: how much of the game's final picture (by its Z buffer) the native world
 # covers, and whether a native surface ever lies in front of the game's (it must not).
 # Usage: tools/native/world_saves.sh <states dir> <out dir>   (needs game/native-build)
+# Characters (renderer step 2) in the world frame too: POP_NATIVE_CHARACTERS=1 tools/native/world_saves.sh ...
 set -u
 P=$(cd "$(dirname "$0")/../.." && pwd)
 IN=$(cd "$1" && pwd)
