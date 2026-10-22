@@ -72,6 +72,14 @@ namespace
             uint64_t word;
             std::memcpy(&word, getConstMemPtr(g_ram.data(), e), 8);
             const uint32_t type = *getConstMemPtr(g_ram.data(), e + 6), kind = (type & 0x3F) >> 2;
+            static const bool kinds = std::getenv("POP_STATE_KINDS") != nullptr; // debug: every list entry
+            if (kinds)
+            {
+                uint64_t w0;
+                std::memcpy(&w0, getConstMemPtr(g_ram.data(), e), 8);
+                std::fprintf(stderr, "[state] list +0x%x entry %u: kind %u word %016llx matrix %u\n", list - base, i, kind, (unsigned long long)w0,
+                             uint32_t((w0 & 0x3FFFFFFFFFull) >> 28));
+            }
             uint16_t h4, h6;
             std::memcpy(&h4, getConstMemPtr(g_ram.data(), e + 4), 2);
             std::memcpy(&h6, getConstMemPtr(g_ram.data(), e + 6), 2);

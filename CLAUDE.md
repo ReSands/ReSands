@@ -29,7 +29,7 @@ Decided 22 Oct: keep our own native renderer (the PS2 look, haze and post-proces
 - Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
-## Current status (22 Oct 2026 evening; start here)
+## Current status (22 Oct 2026 night; start here)
 
 Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on 22 Oct 2026 evening").
 
@@ -46,31 +46,38 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   in `play.ps1` (`-NoNativeCharacters` turns it off): opaque CPU-posed characters join the world frame, their
   Display calls are skipped with the VU1 driver switches replayed. In game ~59.9 fps, user: fixed after the light-set
   fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
-  character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`). Open notes: a full-frame flash
-  right after the loading glyph (ours: the GS-only boot does not flash), trouser flicker (gone in the last
-  session: watch), the Prince's sword missing from the native frame. Details: `docs/native_renderer.md` "Native
-  characters in the game window".
-- **Then: renderer step 2 (roadmap 0.12): particles native** (characters above), so the GS stops drawing 3D. Start
-  point: in game every skinned element stays on the GS ("937 not converted (skinned/instanced/no pass)",
-  ~3.6M skinned draws "unknown" per session); offline, skinning (A7) and the particle decoders already work in
-  `pop_state_frame` / `pop_native_live.cpp`. How: see "Step 2 plan" below (CPU-posed batches first, bone
-  palettes / GPU skinning only if needed).
+  character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`; built on the
+  PC, not yet seen in game). Details: `docs/native_renderer.md` "Native characters in the game window".
+- **NEXT (user's choice, 22 Oct night): the Prince's missing sword.** In the GS picture of save 192521 (Mac copy
+  `game/analysis/play1022/states/`) a yellow/red sword (the Dagger of Time?) hangs on his back; no native draw is near
+  him (world or full frame). Ruled out offline: the blended skinned calls left on the GS (other characters ~50 units
+  away), the CJIdxMesh entries (matrices 27-30, x = -61/-80), instanced draw 2. Not ruled out: GFX entry gfx 0 (type
+  0x8c, list +0x2c, opaque alpha-tested, texture 2e005850, matrix 13 = identity; the native frame never draws GFX),
+  skinned elements without a bone palette (their counter only prints in game: report() is throttled), list kind 6
+  (0x469C00, not decoded) / 11 (skipped). Proposed next step: three ~30 s boots from save 192521 on the TV (ask
+  first) with `POP_NATIVE_SKIP=gfx` / `skinned` / `static` (measurement only; boot.ps1 -Shots) to see which group
+  loses the sword, then decode that path. `POP_STATE_KINDS=1 pop_state_frame ...` lists every list entry (kind,
+  matrix).
+- **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
+  `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
+  last session (watch). Load-flash candidates in `docs/native_renderer.md`.
+- **Then: renderer step 2, the rest (roadmap 0.12): translucent draws + particles native.** Measured 22 Oct over 108
+  saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
+  frame; the GS still draws ~136 mesh draws / 3.8k triangles, all translucent (blend 1/4/6 in lists +0x3C, +0x4C,
+  +0x88, +0x98, +0xA8) except ~5 opaque in +0x4C, plus ~14 GFX particle and ~6 sprite draws (shadows, halos, shafts
+  not replayed). Plan: open the world mode to these lists in the game's order together with the particles (particles
+  alone would be drawn over by later GS draws), offline over the saves first. Qwen candidate after the water job: the
+  whole character VU1 program (image 31829861, 2,048 lines) to C++, judged on the trace of save 192521
+  (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
 - **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
   (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
   llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
   The user starts it from the PC desktop shortcut "Qwen overnight (then shuts down)"; log `game\jobs\qwen-night.log`,
   results `game\analysis\qwen\vu1_p6_*` (PASS files). Morning: read the log, re-run what failed (or hand-port it).
   Details: `docs/llm_jobs.md` "VU1 water program P6" (22 Oct note). Needed for 0.13.
-- **Step 2 plan (agreed 22 Oct; characters built 22 Oct, see above):** characters first: send the CPU-posed batches (`poseSkinned`, already
-  used by the live window) in the PNF7 frame as unkept geometry, drop the "characters stay on the GS" refusal
-  (`pop_native_live.cpp` ~line 1503) and skip their DMA (`kSkipSkinned`); GPU skinning only if the profiler asks (or
-  for motion vectors at 1.3). Skinned meshes decode from memory (`skinnedFromPacket`), so save-state boots work for
-  characters. Offline over the saves first, then a boot with the user. Particles second: they are translucent with no Z
-  write, so until step 3 any 3D still on the GS draws over them; first measure what 3D is left on the GS once
-  characters are native, then decide. Qwen candidates for later nights: standalone tested decoders
-  (`livePacketBatches`, `skinnedFromPacket`, particle quads; judged against the Python decoders on DMA captures) and
-  the character VU1 skin program (exact lighting incl. point lights; needs one traced boot, TV on). User rule:
-  Qwen work is overnight only; daytime is Claude + user.
+- **Qwen candidates for later nights:** standalone tested decoders (`livePacketBatches`, `skinnedFromPacket`, particle
+  quads; judged against the Python decoders on DMA captures) and the character VU1 program (above). User rule: Qwen
+  work is overnight only; daytime is Claude + user. GPU skinning only if the profiler asks (or for motion vectors at 1.3).
 - **Bugs written up, not fixed (user: later), `docs/saves_1021.md`:** camera X reversed in fixed-camera views
   (low priority); a door flickering with a black web (GS output too); **two freezes in combat**: crash 1 = the
   scheduler resuming at return address 0x172844 that has no entry (Ghidra split FUN_00172800's epilogue off at
