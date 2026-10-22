@@ -23,6 +23,8 @@
 
 #include <cstdio>
 #include <fstream>
+#include <map>
+#include <tuple>
 #include <set>
 
 namespace
@@ -390,6 +392,29 @@ int main(int argc, char **argv)
         R5900Context ctx{};
         setArgs(ctx, 0x700000C0u);
         call(0x004BC000u, &ctx);
+        // what the GS still draws of the recorded draws: per (kind, list, blend kind) native / left, with triangles
+        {
+            using namespace pop_native_live;
+            std::map<std::tuple<int, uint32_t, uint32_t>, std::array<size_t, 4>> by; // native, left, native tris, left tris
+            auto add = [&](int kind, const DrawMaterial &m, const std::vector<pop_assets::Batch> &bs) {
+                size_t tris = 0;
+                for (const auto &b : bs)
+                    tris += b.indices.size() / 3;
+                auto &e = by[{kind, m.list, (m.flags >> 16) & 0xF}];
+                e[m.native ? 0 : 1] += 1;
+                e[m.native ? 2 : 3] += tris;
+            };
+            for (size_t i = 0; i < g_frameMaterials.size(); ++i)
+                add(0, g_frameMaterials[i], g_elements[g_frameDraws[i].first].meshes);
+            for (const auto &p : g_framePosed)
+                add(1, p.second, p.first);
+            for (const auto &r : g_frameRefs)
+                add(2, r.second.second, r.first);
+            for (const auto &[k, v] : by)
+                std::fprintf(stderr, "[state] %s list +0x%x blend %u: native %zu (%zu tris), GS %zu (%zu tris)\n",
+                             std::get<0>(k) == 0 ? "static" : std::get<0>(k) == 1 ? "skinned" : "instanced", std::get<1>(k), std::get<2>(k), v[0],
+                             v[2], v[1], v[3]);
+        }
         ctx.r[31] = _mm_set_epi32(0, 0, 0, 0x004A2100);
         call(0x004A2C80u, &ctx);
         if (g_worldFrame.empty())
