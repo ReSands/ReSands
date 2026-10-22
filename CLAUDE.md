@@ -45,9 +45,8 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 - **Next: renderer step 2 (roadmap 0.12): characters and particles native**, so the GS stops drawing 3D. Start
   point: in game every skinned element stays on the GS ("937 not converted (skinned/instanced/no pass)",
   ~3.6M skinned draws "unknown" per session); offline, skinning (A7) and the particle decoders already work in
-  `pop_state_frame` / `pop_native_live.cpp`. Work: convert skinned elements at load time, send each frame's bone
-  palettes (and particle batches) with PNF, draw them in the worker, skip their DMA; check offline over the
-  saves first, then a user boot (TV on). Plan: `docs/native_renderer.md` "Plan of attack".
+  `pop_state_frame` / `pop_native_live.cpp`. How: see "Step 2 plan" below (CPU-posed batches first, bone
+  palettes / GPU skinning only if needed).
 - **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
   (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
   llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
