@@ -10,7 +10,7 @@
 # game\ps2\disc\states\play_<date>_<time>.state; with -Profile also play_<date>_<time>.prof: a profile of the ~12 s
 # before the save (POP_PROFILE_LAST, rolling profiler), so a dip can be saved just after it happened. When the
 # game is closed, each new .prof is symbolized to <name>.report.txt with this build's linker map.
-# Alt+F4 or closing the window quits. Avoid F9 (quick-load).
+# Esc, Alt+F4 or closing the window quits (Esc: runtime patch 39; PS2X_ESC_QUITS=0 turns it off). Avoid F9 (quick-load).
 # Log: game\recomp-sotc\play_<date>_<time>.log, written when the game window is closed.
 param([switch]$Fps30, [switch]$Profile, [string]$Env = '', [switch]$Shortcuts)
 $ErrorActionPreference = 'Stop'

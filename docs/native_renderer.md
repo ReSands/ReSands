@@ -576,5 +576,6 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   flicker more than on the GS: the native Z is nearer than VU1's on 26.7% of world pixels (49 saves of
   19 Oct, 2.9M pixels: p50 -19, p90 +15, p99 +106, p99.9 +442 Z24 units), so GEQUAL second passes fail
   there. `POP_NATIVE_WORLD_ZBIAS` (default 128) pushes the injected Z back; a cheap fix for the hybrid
-  period only (native shadows come in step 3). Not yet tested in game.
+  period only (native shadows come in step 3). In game (22 Oct evening, A/B 128 vs 0): flickers less with
+  128, no clipping seen (user); kept as the default.
 

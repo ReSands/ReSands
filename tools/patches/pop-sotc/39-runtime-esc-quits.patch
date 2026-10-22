@@ -1,0 +1,29 @@
+From 82149943666b013be07cf2c02970a0b1ea204e00 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Thu, 22 Oct 2026 18:30:29 +0100
+Subject: [PATCH] runtime: Esc quits the game (PS2X_ESC_QUITS=0 keeps it off)
+
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 6ebf2c1..ab4cf81 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -878,7 +878,11 @@ bool PS2Runtime::initialize(const char *title)
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
+         if (ps2_host_display::startMaximized && !ps2_host_display::headless)
+             MaximizeWindow();
+-        SetExitKey(KEY_NULL);
++        // Esc quits, like closing the window (WindowShouldClose -> requestStop); PS2X_ESC_QUITS=0 turns it off.
++        {
++            const char *escQuits = std::getenv("PS2X_ESC_QUITS");
++            SetExitKey(escQuits && escQuits[0] == '0' ? KEY_NULL : KEY_ESCAPE);
++        }
+         if (ps2_host_display::headless)
+         {
+             m_audioBackend.setAudioReady(false);
+-- 
+2.55.0.windows.5
+
