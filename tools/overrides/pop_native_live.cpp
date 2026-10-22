@@ -2349,18 +2349,24 @@ namespace pop_native_live
         // drawing them natively would save on VIF1/VU1/GS work. Groups (comma-separated, or "all"):
         // static (CJMeshElement::Display of elements without a bone palette, CJMeshElementRef::Display,
         // CJIdxMesh::Display), skinned (CJMeshElement::Display with a bone palette at +0x48),
-        // lightmap (CLMElementList::Render), gfx (FUN_00458FC0). Without POP_NATIVE_LIVE only.
+        // lightmap (CLMElementList::Render), gfx (FUN_00458FC0), sprite (CJadeSpriteElement::Display), water
+        // (CJSmWaterElement::Display), list18 (FUN_00469C00). Without POP_NATIVE_LIVE only.
         enum SkipGroup : unsigned
         {
             kSkipStatic = 1,
             kSkipSkinned = 2,
             kSkipLightmap = 4,
-            kSkipGfx = 8
+            kSkipGfx = 8,
+            kSkipSprite = 16,
+            kSkipWater = 32,
+            kSkipList18 = 64
         };
         unsigned g_skip = 0;
-        PS2Runtime::RecompiledFunction g_skipOrig[5] = {};
-        uint64_t g_skipCount[5] = {}, g_kept[5] = {};
-        constexpr uint32_t kSkipAddress[5] = {kMeshDisplay, kRefDisplay, 0x004BDB80u, 0x004B7B80u, kGfxDisplay};
+        bool g_skipReplay = false; // POP_NATIVE_SKIP_REPLAY=1: skip every chain of the group, replaying its driver switches
+        PS2Runtime::RecompiledFunction g_skipOrig[8] = {};
+        uint64_t g_skipCount[8] = {}, g_kept[8] = {};
+        constexpr uint32_t kSkipAddress[8] = {kMeshDisplay, kRefDisplay, 0x004BDB80u, 0x004B7B80u, kGfxDisplay,
+                                              0x004C6200u, 0x004C77C0u, 0x00469C00u};
 
         // Both mesh Display paths also switch the VU1 driver (state byte 0x700000a8: 0 = one bone, 1 = more;
         // element without a palette: no switch) before a skinned draw, through CVuManager::DoSetShadowDriver
@@ -2385,6 +2391,16 @@ namespace pop_native_live
             return false;
         }
 
+        void chainReplayDrivers(uint8_t *rdram, uint32_t node, bool ref)
+        {
+            for (unsigned link = 0; node && link < 4096; ++link)
+            {
+                if (const uint32_t palette = guest32(rdram, (ref ? guest32(rdram, node + 0x20u) : node) + 0x48u))
+                    worldReplayDriver(rdram, palette);
+                node = guest32(rdram, node + (ref ? 0x1Cu : 0x4Cu));
+            }
+        }
+
         bool skipCall(int n, uint8_t *rdram, R5900Context *ctx)
         {
             switch (n)
@@ -2395,14 +2411,27 @@ namespace pop_native_live
                 const uint32_t node = getRegU32(ctx, 4);
                 const uint32_t element = n == 1 ? guest32(rdram, node + 0x20u) : node;
                 const unsigned group = guest32(rdram, element + 0x48u) ? kSkipSkinned : kSkipStatic;
-                return (g_skip & group) != 0 && !chainSwitchesDriver(rdram, node, n == 1);
+                if (!(g_skip & group))
+                    return false;
+                if (g_skipReplay)
+                {
+                    chainReplayDrivers(rdram, node, n == 1);
+                    return true;
+                }
+                return !chainSwitchesDriver(rdram, node, n == 1);
             }
             case 2:
                 return (g_skip & kSkipStatic) != 0;
             case 3:
                 return (g_skip & kSkipLightmap) != 0;
-            default:
+            case 4:
                 return (g_skip & kSkipGfx) != 0;
+            case 5:
+                return (g_skip & kSkipSprite) != 0;
+            case 6:
+                return (g_skip & kSkipWater) != 0;
+            default:
+                return (g_skip & kSkipList18) != 0;
             }
         }
 
@@ -2421,23 +2450,30 @@ namespace pop_native_live
         void installSkip(PS2Runtime &runtime, const std::string &spec)
         {
             for (const auto &[name, bit] : {std::pair<const char *, unsigned>{"static", kSkipStatic}, {"skinned", kSkipSkinned},
-                                            {"lightmap", kSkipLightmap}, {"gfx", kSkipGfx}, {"all", 15u}})
+                                            {"lightmap", kSkipLightmap}, {"gfx", kSkipGfx}, {"sprite", kSkipSprite},
+                                            {"water", kSkipWater}, {"list18", kSkipList18}, {"all", 15u}})
                 if (spec.find(name) != std::string::npos)
                     g_skip |= bit;
-            const PS2Runtime::RecompiledFunction hooks[5] = {skippable<0>, skippable<1>, skippable<2>, skippable<3>, skippable<4>};
-            for (int n = 0; n < 5; ++n)
+            g_skipReplay = std::getenv("POP_NATIVE_SKIP_REPLAY") && *std::getenv("POP_NATIVE_SKIP_REPLAY") == '1';
+            const PS2Runtime::RecompiledFunction hooks[8] = {skippable<0>, skippable<1>, skippable<2>, skippable<3>,
+                                                             skippable<4>, skippable<5>, skippable<6>, skippable<7>};
+            for (int n = 0; n < 8; ++n)
                 if ((g_skipOrig[n] = runtime.lookupFunction(kSkipAddress[n])))
                     runtime.replaceFunction(kSkipAddress[n], hooks[n]);
-            std::fprintf(stderr, "[pop:native] POP_NATIVE_SKIP=%s: groups %x (measurement only)\n", spec.c_str(), g_skip);
+            std::fprintf(stderr, "[pop:native] POP_NATIVE_SKIP=%s: groups %x%s (measurement only)\n", spec.c_str(), g_skip,
+                         g_skipReplay ? ", driver switches replayed" : "");
             std::thread([] {
                 for (;;)
                 {
                     std::this_thread::sleep_for(std::chrono::seconds(10));
-                    std::fprintf(stderr, "[pop:native] skipped/kept: mesh %llu/%llu ref %llu/%llu idx %llu/%llu lm %llu/%llu gfx %llu/%llu\n",
+                    std::fprintf(stderr, "[pop:native] skipped/kept: mesh %llu/%llu ref %llu/%llu idx %llu/%llu lm %llu/%llu gfx %llu/%llu "
+                                         "sprite %llu/%llu water %llu/%llu list18 %llu/%llu\n",
                                  (unsigned long long)g_skipCount[0], (unsigned long long)g_kept[0], (unsigned long long)g_skipCount[1],
                                  (unsigned long long)g_kept[1], (unsigned long long)g_skipCount[2], (unsigned long long)g_kept[2],
                                  (unsigned long long)g_skipCount[3], (unsigned long long)g_kept[3], (unsigned long long)g_skipCount[4],
-                                 (unsigned long long)g_kept[4]);
+                                 (unsigned long long)g_kept[4], (unsigned long long)g_skipCount[5], (unsigned long long)g_kept[5],
+                                 (unsigned long long)g_skipCount[6], (unsigned long long)g_kept[6], (unsigned long long)g_skipCount[7],
+                                 (unsigned long long)g_kept[7]);
                 }
             }).detach();
         }
