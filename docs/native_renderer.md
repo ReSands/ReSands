@@ -751,3 +751,29 @@ silver and lit as on the GS.
 
 Left after that (also 0.12): the pass-2 second layers of V4-32-position objects (544 calls: V4-8 at 0x43, meaning
 not decoded; the mirrors' reflection), then the translucent lists + particles (status block in CLAUDE.md).
+
+## Lit statics measured (22 Oct, late night): which program, which formula
+
+Measured on the VU1 trace of save 192521 (`game/analysis/vu1trace/`) with `tools/vu1port/inprobe.cpp` (new; build
+like vu1replay: replays one recorded run, then once per VU data quadword with that quadword changed, and lists which
+output words change; `--match <hex word>` picks the runs whose uploads hold a mesh's first position, `--dump`,
+`--out`). The sword's first position word is 3cccfe09; it runs three times per frame:
+| Run | Program | Data | What it is |
+|---|---|---|---|
+| record 1809 | P4 (image 31829861, the character program) | pass 1: V3-16 UVs +0x43, V4-8 normals +0x83, V4-32 positions +0x3 | lit: reads the light block (qw 0-3 directions/point position, 5/7, 16-18 colours, 22 falloff, 29 ambient) and the normals |
+| record 2034 | P4 | pass 2: V4-8 **normals at +0x43**, V4-8 colours at +0x83 (40 47 4A 80 live) | **environment map**: no light input; colour = the V4-8 at +0x83 as is; UV from the normals |
+| record 2548 | P7 (image b720d191) | pass 1's packet | the shadow-list draw (FUN_004B80C0): every vertex colour = qw 21 (128,128,128,~53), normals unused |
+
+- **Pass 2's env map** (checked by hand on the first vertex, output STQ / q): u = 0.5 + n . (qw4.x, qw5.x, qw6.x),
+  v = 0.5 + n . (qw4.y, qw5.y, qw6.y), n = the V4-8 normal / 128. qw 4-7 come from **FUN_004B6D80** (called by
+  CElementList::Render before the Display of an env-mapped pass, sub-type 2): V2-32 x4 to VU 4 = -0.5 x the xy
+  columns of R = M3 x C3 (row vectors, FUN_00494500), then (0.5, 0.5); M = the entry's matrix-pool rotation
+  (translation cleared), C = the camera matrix at *(gp 0x6749F0 + 0x110) + 0x1B0. Checked against every env
+  upload in the chains of saves 204040 / 204108: 230 of 233 match a pool entry within 1e-4 (the rest, and the
+  sword in 192521 at 0.025, are moving objects: the chain and the pool are from different moments).
+- So the **544 pass-2 "second layers" of V4-32 objects (the mirrors) are the same env map**, not a separate job.
+- The chain-side attribution (MSCAL/MSCNT under the program in the save's VU1 code memory, scratch script) said
+  pass 1 = P7: wrong, the save's code memory is not what ran then. Trust the trace's image hash.
+- Implementation: pass 1 = the character lighting (`poseSkinned` no-palette path + `readLightEnv`); pass 2 =
+  decode normals at +0x43 and colours at +0x83, UVs as above per vertex (depends on the camera: per frame, not at
+  load). Judges as in the plan.
