@@ -685,6 +685,38 @@ palette; the from-memory skinned decode now also takes palette-less elements who
 cnt/ret/end tags (posed by the object matrix, as poseSkinned already did). `POP_NATIVE_ELEMLOG=<hex>,...` prints
 what the Display hook records for chosen elements (path, list, matrix, posed box, material).
 
-Fix to do: recognise lit static packets (V4-8 at 0x83 + V4-32 at 0x3) in both decoders and draw them lit like
-the characters (normals + `LightEnv`, object matrix), or as a first step keep such elements on the GS (not
-recorded -> the call runs). Then check the sword in game from a normal boot (title -> memory card).
+Step 1 (same night): static pass-1/4 draws stay on the GS (below); native lit statics are renderer step 2.
+
+## Static world audit (22 Oct night)
+Is renderer step 1 complete? Two offline measures over all 196 saves on the Mac (`game/analysis/play10*/states`):
+- **Layout census** (`tools/staticcensus.py <dirs> [--elements]`): every palette-less CJMeshElement and
+  CJMeshElementRef entry by pass and upload layout (format@VU address per batch), and what the V4-8 at 0x83
+  holds. **Pass 0 always has colours there; pass 1 always normals** (V4-8 with a spare 0/1 byte, or V3-8). Plain
+  static (V3-32 positions) is 69.5k of 77k draws; objects with V4-32 positions to VU 0x3 (their own matrix:
+  the mirror-room puzzle pieces, gold arcs, frames) come with colours in pass 0 and a second layer in pass 2
+  (V4-8 at 0x43, not decoded). Lit pass 1: the sword (one ref-style mesh), 6 + 34 instanced refs, and 106
+  inline rigid character parts (skinned-style packet, no palette).
+- **World accounting** (pop_state_frame --world with `POP_NATIVE_CHARACTERS=1`; `POP_NATIVE_WORLD_WHY=1` now
+  also logs each static/instanced call left undecoded).
+
+Fixes from it (`pop_native_live.cpp`):
+1. **Lit statics stay on the GS** (`isLitStaticPass`: CJMeshElement passes 1 and 4) unless the character path
+   posed them; the converted path used to draw them unlit with normals as colours (the sword). Counter: "lit
+   static draws on the GS" in the [pop:world] report.
+2. **`livePacketBatches(..., v4Positions)`**: V4-32 positions at VU 0x3, as the load converter takes them, for
+   pass-0 packets (static from memory, instanced pass 0/4) and lightmap pass 3. Instanced refs use this decoder in
+   every boot, so these objects were always on the GS; in save-state boots the meshes were too.
+3. **Instanced keys carry pass 2**: pass 0 and pass 2 of a ref shared one dedupe key (pass 0 first and native:
+   the pass-2 call looked drawn and was skipped, losing the layer; pass 2 first: pass 0 never decoded).
+4. **A ref without a packet for the pass ends the chain** as in the game (FUN_004C7B40: the recursion is inside
+   the packet test); it used to count as undecoded and send the whole call to the GS.
+5. Palette-less rigid parts with a skinned packet are posed from memory too (see the sword section).
+
+Result over the 196 saves: undecoded calls 3,629 -> 1,044, all accounted for: 500 lit pass-1 calls (step 2) and
+544 pass-2 second layers of V4-32 objects (format to decode); native calls 76,933 -> 79,530 (+107k triangles in
+list +0x2C). The old/new comparison changed no static or instanced line before fix 2 (25 saves). Still on the GS
+by design: list +0x4C opaque (671 draws over the saves; opened with the translucent lists in 0.12), +0x98 blend 0
+(the alpha-only pass), 23 calls kept for textures. Before/after/game pictures of the mirror room: save
+`play_20261019_191304` (gold arcs and mirror frames now native, matching the game; mirror faces get their
+reflection from the pass-2 layer on the GS). **To check in game from a normal boot (title -> memory card):** the
+sword back, the mirror room unchanged to the eye, `lit static draws on the GS` in the log.

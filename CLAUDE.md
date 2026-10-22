@@ -48,14 +48,15 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
   character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`; built on the
   PC, not yet seen in game). Details: `docs/native_renderer.md` "Native characters in the game window".
-- **NEXT: fix the Prince's missing sword (found 22 Oct night, not fixed).** Skip boots of save 192521 (shots in
-  `game/analysis/native/sword/`) put it in the static group, drawn by CElementList::Render: element 0x00B395B0
-  (matrix 126), a **lit static mesh** (pass-1 packet with V4-8 normals at VU 0x83 + V4-32 positions at 0x3). The
-  load converter takes it as an unlit static mesh, reads the normals as colours (alpha ~1/128) and the alpha test
-  drops it (likely; to confirm in game). Fix: decode lit static packets with normals and light them like the
-  characters (or keep them on the GS first), then check from a normal boot. Details: `docs/native_renderer.md`
-  "The Prince's missing sword". New debug switches: `POP_NATIVE_SKIP_REPLAY`, `POP_NATIVE_SKIP_RA`,
-  `POP_NATIVE_SKIP_CALLERS`, `POP_NATIVE_ELEMLOG`; skip groups sprite/water/list18.
+- **Static world audit + sword (22 Oct night, offline; in-game check pending).** The sword (element 0x00B395B0) is a
+  lit static mesh: pass 1 carries normals at VU 0x83 (pass 0 colours), which the converter drew unlit, alpha-tested
+  away. Census of 196 saves (`tools/staticcensus.py`) + world accounting: lit static passes now stay on the GS;
+  V4-32-position objects (mirror-room puzzle pieces) decode from memory (instanced ones were always GS); instanced
+  pass 2 had a shared dedupe key (would lose the second layer); packetless refs end the chain. Undecoded calls
+  3,629 -> 1,044, all explained (lit pass 1 = step 2; pass-2 layers of V4-32 objects). Details:
+  `docs/native_renderer.md` "Static world audit". **NEXT: the in-game check** (fast build, normal boot title ->
+  memory card: sword visible, mirror room unchanged, log line "lit static draws on the GS"; ask first, TV on),
+  then renderer step 2 (lit statics with the character lighting; translucents + particles).
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`.

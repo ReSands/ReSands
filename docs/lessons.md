@@ -147,3 +147,13 @@ mode boots the game check for an active display first, so a mistake like this ca
   died on a timeout halfway with nothing to resume from; a per-file loop that skips complete files
   (`game/analysis/play1021/fetch.sh`) finished on the second try. PowerShell's `-Filter` has no `[01]` classes:
   use `Where Name -match`.
+- **The same VIF layout can mean different things per pass.** A static packet's V4-8 at VU 0x83 is a colour in
+  pass 0 and a normal in pass 1 (the lit driver); the converter read the sword's normals as colours (alpha 1/128,
+  alpha-tested away). Decide what an upload is from the pass/driver that consumes it, and audit with a census over
+  all saves (`tools/staticcensus.py`) rather than one scene.
+- **Skip tests must keep the hardware state the skipped call would have left.** `POP_NATIVE_SKIP` kept any chain
+  whose skip would miss a VU1 driver switch, so "skinned" looked as if it did not hold the sword; replaying the
+  switches (`POP_NATIVE_SKIP_REPLAY=1`) made the test clean.
+- **A dedupe key without the pass hides a bug until a decoder improves.** Instanced pass 0 and pass 2 shared one
+  key: harmless while pass 0 never decoded, a lost second layer once it did. Give every key every field that makes
+  two draws different.

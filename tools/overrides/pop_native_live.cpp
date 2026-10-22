@@ -202,6 +202,7 @@ namespace pop_native_live
             uint64_t batchesSent = 0, batchesKnown = 0; // PNF7: geometry sent vs referenced (the renderer keeps it)
             uint64_t posed = 0, drivers = 0; // skinned draws drawn natively; VU1 driver switches replayed for skipped calls
             uint64_t skinGs[3] = {};         // skinned Display calls left to the GS: render state/list, not decoded, texture
+            uint64_t litStatic = 0;          // static draws of the lit driver (pass 1/4) left to the GS (see isLitStaticPass)
         } g_worldStats;
         constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
         bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
@@ -650,7 +651,11 @@ namespace pop_native_live
         // memory, its VIF UNPACKs in order; each V3-32 positions upload closes a batch with the
         // latest V3-16 UVs (s, t, strip flag; raw / uvscale) and V4-8 colours (0x80 = 1.0) before it.
         // Used for instanced (CJMeshElementRef) draws, whose colours/UVs are per instance.
-        void livePacketBatches(uint8_t *rdram, uint32_t packet, double uvscale, std::vector<pop_assets::Batch> &out)
+        // v4Positions: V4-32 positions to VU 0x3 (x, y, z, w) count too, as the load converter takes them (objects
+        // with their own matrix; the V4-32 x3 header goes to VU 0). Pass-0 packets only: the same layout in pass 1
+        // carries normals at 0x83 (isLitStaticPass), and pass 2's V4-8 at 0x43 is not decoded yet.
+        void livePacketBatches(uint8_t *rdram, uint32_t packet, double uvscale, std::vector<pop_assets::Batch> &out,
+                               bool v4Positions = false)
         {
             std::vector<uint32_t> words;
             uint32_t pc = packet;
@@ -739,12 +744,21 @@ namespace pop_native_live
                     const unsigned fmt = cmd & 0xF;
                     if (unpackLogs > 0)
                         unpackLog += " " + std::to_string(fmt) + "@" + std::to_string(w & 0x3FF) + "x" + std::to_string(num);
+                    const bool v4Pos = v4Positions && fmt == 0xC && (w & 0x3FF) == 3;
                     if (fmt == 8 || fmt == 9 || fmt == 0xC || fmt == 0xE)
                     {
-                        if (have & (1u << fmt))
+                        const unsigned slot = v4Pos ? 16u : fmt; // the V4-32 header and V4-32 positions: one each per batch
+                        if (have & (1u << slot))
                             flush();
-                        have |= 1u << fmt;
-                        if (fmt == 9)
+                        have |= 1u << slot;
+                        if (v4Pos)
+                        {
+                            pos.resize(12 * size_t(num));
+                            for (uint32_t v = 0; v < num; ++v)
+                                std::memcpy(&pos[12 * v], raw + 16 * v, 12);
+                            posNum = num;
+                        }
+                        else if (fmt == 9)
                             uv.assign(raw, raw + bytes);
                         else if (fmt == 0xE)
                             col.assign(raw, raw + bytes);
@@ -845,7 +859,13 @@ namespace pop_native_live
                 // passes 0, 1, 4 (main) and 2 (second layer); 3 is the lightmap pass
                 for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 2 || pass == 4); ++link)
                 {
-                    const uint64_t key = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram);
+                    // as the game: a ref without a packet for the pass draws nothing and ends the chain
+                    // (CJMeshElementRef::Display's recursion is inside its packet test)
+                    if (!(guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu))
+                        break;
+                    // pass 2 (the second layer) has its own key: sharing pass 0's lost one of the two (22 Oct)
+                    const uint64_t key = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram) |
+                                         (pass == 2 ? uint64_t(2) << 56 : 0);
                     const uint64_t base = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63);
                     const bool seen = worldOk && g_frameSeen.count(key);
                     const size_t world2 = worldOk ? worldCount2() : 0;
@@ -859,7 +879,8 @@ namespace pop_native_live
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
                         std::vector<pop_assets::Batch> batches;
-                        livePacketBatches(rdram, packet, 512.0, batches); // texture UVs 1/512 (VU1 drivers: ITOF4 * 1/32)
+                        // texture UVs 1/512 (VU1 drivers: ITOF4 * 1/32); pass 4 sends pass 0's packet here
+                        livePacketBatches(rdram, packet, 512.0, batches, pass == 0 || pass == 4);
                         std::array<float, 16> model;
                         const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
                         for (int k = 0; k < 16; ++k)
@@ -878,6 +899,13 @@ namespace pop_native_live
                         {
                             worldOk = false;
                             ++g_worldStats.notRecorded;
+                            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+                            if (whyLog)
+                            {
+                                const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & 0x01FFFFF0u;
+                                std::fprintf(stderr, "[pop:world] not decoded: ref %08x pass %u list +0x%x element %08x packet %08x first tag %u\n", ref,
+                                             pass, g_currentList, guestAny(rdram, ref + 0x20u), packet, packet ? (guestAny(rdram, packet) >> 28) & 7 : 0u);
+                            }
                         }
                         worldBase.push_back(base);
                     }
@@ -1477,6 +1505,15 @@ namespace pop_native_live
                          dm.constColour, dm.constAlpha, dm.fbmsk);
         }
 
+        // CJMeshElement passes 1 and 4 (4 sends pass 1's packet) use the lit driver: the V4-8 (or V3-8) upload
+        // at VU 0x83 holds normals, not colours (V4-8: a spare fourth byte, 0/1). The static converters read it as
+        // colours (the Prince's sword: alpha 1/128, alpha-tested away; 22 Oct). Census of 196 saves
+        // (tools/staticcensus.py): every static pass-0 packet has colours there, every pass-1 packet normals. Until
+        // lit statics are drawn natively (renderer step 2, with the character lighting), a palette-less element
+        // drawn with these passes stays on the GS unless the character path posed it (g_skinned, lit: rigid parts
+        // with a skinned packet).
+        bool isLitStaticPass(uint32_t pass) { return pass == 1 || pass == 4; }
+
         void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
@@ -1609,7 +1646,7 @@ namespace pop_native_live
                     const uint32_t packet = guest32(rdram, element + 0x2C) & ~0xFu;
                     auto &batches = g_fromPacket[(uint64_t(element) << 8) | 3];
                     if (batches.empty() && packet)
-                        livePacketBatches(rdram, packet, 32768.0, batches);
+                        livePacketBatches(rdram, packet, 32768.0, batches, true); // positions as the base pass's
                     if (!batches.empty() && key && g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(3) << 56)).second)
                     {
                         DrawMaterial dm;
@@ -1639,14 +1676,13 @@ namespace pop_native_live
                     if (elemLogged(element))
                         std::fprintf(stderr, "[pop:elem] unknown el %08x pass %u: skipped as '%c', palette %08x, capturing %d\n", element, pass,
                                      sk == g_skipped.end() ? '-' : sk->second, palette, int(g_frameCapturing));
-                    if (sk == g_skipped.end() && !(palette && guest8(rdram, palette)) && g_frameCapturing &&
-                        (pass == 0 || pass == 1 || pass == 4) &&
+                    if (sk == g_skipped.end() && !(palette && guest8(rdram, palette)) && g_frameCapturing && pass == 0 &&
                         g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
                     {
                         const uint32_t packet = guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & ~0xFu;
                         auto &batches = g_fromPacket[(uint64_t(element) << 8) | pass];
                         if (batches.empty() && packet)
-                            livePacketBatches(rdram, packet, 512.0, batches);
+                            livePacketBatches(rdram, packet, 512.0, batches, true); // pass 0 (lit passes stay on the GS)
                         if (!batches.empty())
                         {
                             const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
@@ -1680,7 +1716,13 @@ namespace pop_native_live
                         g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
                     }
                 }
-                else if (pass == 0 || pass == 1 || pass == 4)
+                else if (isLitStaticPass(pass))
+                {
+                    ++g_stats.drawsKnown;
+                    if (g_frameCapturing)
+                        ++g_worldStats.litStatic; // left to the GS: not recorded, so worldOk drops below
+                }
+                else if (pass == 0)
                 {
                     ++g_stats.drawsKnown;
                     const uint32_t packet = guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass));
@@ -1740,6 +1782,17 @@ namespace pop_native_live
                     {
                         worldOk = false; // nothing decoded for it
                         ++g_worldStats.notRecorded;
+                        static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+                        if (whyLog)
+                        {
+                            const uint32_t packet = pass < 8 ? guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & 0x01FFFFF0u : 0u;
+                            const auto sk = g_skipped.find(element);
+                            std::fprintf(stderr, "[pop:world] not decoded: element %08x pass %u list +0x%x palette %08x packet %08x first tag %u "
+                                                 "known %d skipped '%c' skinned %d\n",
+                                         element, pass, g_currentList, guest32(rdram, element + 0x48), packet,
+                                         packet ? (guest32(rdram, packet) >> 28) & 7 : 0u, int(it != g_elements.end()),
+                                         sk == g_skipped.end() ? '-' : sk->second, int(g_skinned.count(element)));
+                        }
                     }
                     worldBase.push_back(base);
                 }
@@ -2310,14 +2363,14 @@ namespace pop_native_live
                 if (++g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] frames %llu: calls native %llu, kept for textures %llu, not decoded %llu, lightmaps %llu; %.0f KB per frame; "
                                          "batches sent %llu, kept by the renderer %llu; skinned draws native %llu, driver switches replayed %llu, "
-                                         "skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu\n",
+                                         "skinned calls on the GS (state/not decoded/texture) %llu/%llu/%llu, lit static draws on the GS %llu\n",
                                  (unsigned long long)g_worldStats.frames, (unsigned long long)g_worldStats.skipped,
                                  (unsigned long long)g_worldStats.noTexture, (unsigned long long)g_worldStats.notRecorded,
                                  (unsigned long long)g_worldStats.lightmaps, double(g_worldStats.bytes) / 1024.0 / double(g_worldStats.frames),
                                  (unsigned long long)g_worldStats.batchesSent, (unsigned long long)g_worldStats.batchesKnown,
                                  (unsigned long long)g_worldStats.posed, (unsigned long long)g_worldStats.drivers,
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
-                                 (unsigned long long)g_worldStats.skinGs[2]);
+                                 (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic);
             }
             g_origKick(rdram, ctx, runtime);
         }
