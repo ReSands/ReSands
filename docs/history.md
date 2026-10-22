@@ -329,3 +329,57 @@ The 19 Oct morning block is in `docs/history.md` (to be moved there; it is summa
   today: `oct19.ps1`, modes `-Sched`, `-Experiments`).
 - **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner.
 - **Native renderer (1.0's main job):** unchanged since 18 Oct; details `docs/native_renderer.md`.
+
+## Status block of CLAUDE.md as of 19 Oct 2026 night (moved verbatim on 22 Oct)
+
+Older status blocks: `docs/history.md` (last one: "19 Oct 2026 evening"). Tonight's details: `docs/native_renderer.md`
+"Restart, 19 Oct evening".
+
+- **Back on the native renderer (user, 19 Oct).** Agreed order (details in `docs/native_renderer.md` "Plan of attack"):
+  renderer 1 native static world in the game window (the 60 fps win) -> 2 characters + particles native (GS stops
+  drawing 3D) -> 3 gaps (water P6, sprites P9, shadows, halos, light shafts/mirror beams, flashes/white-outs) ->
+  4 2D/HUD/menus/letterbox -> 5 GS off by default (reference toggle). Then sound: save-state boots with sound
+  first, sound-call map, native mixer, dual-render comparison. Then IOP (pad via SDL, memory card as files),
+  native frame pacing. Movies are already native (16 Oct).
+- **Playtesting plan (agreed 19 Oct):** the user does a data-gathering playthrough on the current build soon
+  (quick-saves at every new room/effect/menu/cutscene, in chunks); I work offline from saves and the user checks
+  milestones; one full verification playthrough at the end. Sound is the playtest-heavy part until save-state
+  boots have sound.
+- **Measured tonight (PC, TV on; `game\analysis\native\prize\fps_<group>.txt`, `POP_NATIVE_SKIP`, measurement
+  only):** skipping the **static world** (non-skinned CJMeshElement, CJMeshElementRef, CJIdxMesh) puts **every**
+  fight/slow save at a steady 60 (were 46-56). Skipping lightmaps or GFX particles: no gain (cheap). Skipping
+  characters: little, but most character calls had to stay (they switch the VU1 driver). Profiles of the fight
+  185602: nothing skipped = VU thread 88% busy, game thread 46% in sceGsSyncPath; all skipped = VU 53%, game
+  thread 35% idle waiting for vblank (headroom). **So renderer step 1 alone removes the fight dips.**
+- **Baseline (Mac):** `tools/native/score_saves.sh` over the 49 saves of 19 Oct: all render, mean difference
+  18.6, no regressions (`game/analysis/play1019/native/`). **VU1 inventory** (`tools/vu1inventory.py`): P1 static
+  + lightmaps (most runs), P4/P7/P8 characters, P5 particles, P9 sprites, **P6 = water** (the old "program 7").
+- **Water VU1 traces recorded** (`PS2X_VU1_TRACE`, runtime-built-in): `game/analysis/vu1trace/` (Mac and PC):
+  courtyard pool 091049 (240 P6 runs) and healing pool 091734 (360), with all other programs and the code
+  images. Record format: `ps2_vu1_core.cpp` traceVu1Run ('V1TR', maxCycles, image hash, tick, TraceState as the
+  MSVC build lays it out, then VU data deltas against the previous record); `traceRestore` exists in the runtime.
+- **Overnight plan, 19-20 Oct (user: fill the night; no game boots, the TV is off):**
+  1. **Main work: renderer step 1, native static world in the game window** (`docs/native_renderer.md` "Plan
+     of attack"). In-process Vulkan drawing in the pop-sotc runtime (port the presenter to Vulkan rather than GL
+     interop; reuse `tools/native/` renderer + the live capture in `pop_native_live.cpp`), the static draw
+     paths stop building DMA (as `POP_NATIVE_SKIP=static`, keeping the VU1 driver switches), the emulated GS
+     draws the rest on top; behind a switch so the current build stays the default until tested. Validate
+     offline all night: shared drawing code through `pop_state_frame` + `tools/native/score_saves.sh` (scores
+     must not get worse), compile on the PC (builds need no display; `rebuild.ps1 -Fast -Play`, or the full
+     pipeline if runtime headers change). **First boot test in the morning with the user (TV on).**
+  2. **Background: water port for Qwen.** Mac trace replayer = the judge (build `ps2_vu1_core.cpp` x86_64 like
+     `tools/vu1sched/check.sh`; check the MSVC TraceState layout against clang's; restore with `traceRestore`,
+     run the interpreter with a packet sink, write each run's GIF output), stage P6 along its loops
+     (`tools/vu1sched/loops.py`), a VU variant of `tools/llm_port/generic/` (test the runner end to end with a
+     known-good answer first, e.g. vu1_recomp's code for one stage), start the queue (model on the PC via
+     llama-serve, judge on the Mac under caffeinate). Set it up early so it runs while step 1 is worked on.
+  Leave for the user: PC shut down once the overnight jobs finish (user, 19 Oct; wake-on-LAN for the morning), Mac awake.
+- **Rules from the user (19 Oct):** the PC's TV is off unless the user is playing: ask before any job that boots
+  the game (`nvidia-smi --query-gpu=display_active` must be Enabled, else boots run at ~4 fps; `oct19.ps1 -Native`
+  refuses). Survey other projects before fixing a narrowed-down problem (`docs/ps2_projects.md`); general
+  learnings to `docs/lessons.md`; one dated job script per night (today `tools/windows/oct19.ps1`, modes `-Sched`,
+  `-Experiments`, `-Native [-TracesOnly]`); optimise in order of biggest win.
+- **Open items carried over:** first-person X fix built 19 Oct, not yet confirmed by the user; audio bugs for
+  later (a quiet/missing track in one fight, Prince-Farah in-engine dialogue out of sync, sound slows with the
+  frame rate); the PC's play build is the scheduled VU1 build (patch 37) plus `POP_NATIVE_SKIP`.
+- **Known limits:** save-state boots have no sound; runtime screenshots come out as the game in a corner.

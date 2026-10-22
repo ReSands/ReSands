@@ -137,3 +137,13 @@ mode boots the game check for an active display first, so a mistake like this ca
   stage found the judge's issues (rounding mode, `-ffp-contract=off`, pending Q/MAC at stage borders) before
   any model time was spent. Stage borders must be where only harmless writes (vf/vi/ACC) are in flight;
   the replayer reports what is pending at each entry and exit.
+
+## 22 Oct 2026
+- **A quick-save during a freeze is kept only as `quick.state`.** The kept copy (`play_<date>_<time>.state`) is
+  written by the game's next frame, which never comes when the game has hung, and the next session's first
+  quick-save overwrites `quick.state`. Crash 1 of 20 Oct lost its save this way (`docs/saves_1021.md`). Until the
+  copy is made by the runtime right after saving: after a crash, copy `quick.state` before playing again.
+- **Copy many large files over SSH one at a time:** one `scp` with a wildcard for 3.7 GB
+  died on a timeout halfway with nothing to resume from; a per-file loop that skips complete files
+  (`game/analysis/play1021/fetch.sh`) finished on the second try. PowerShell's `-Filter` has no `[01]` classes:
+  use `Where Name -match`.

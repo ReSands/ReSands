@@ -102,3 +102,40 @@ means ...", "lh sign-extends: spell it out", "words 0 and 2 only") and prepends 
 to later specs. This matches our own finding (14 Oct) that precise wording decides success. A lesson
 stays only if it measurably helps: re-run a fixed set of past tasks with and without it and compare
 first-round pass rates. Fully offline; the judge keeps it honest.
+
+## VU1 water program P6 for Qwen, 19-20 Oct 2026 night (unfinished: 13 of 24 stages pass)
+Harness `tools/vu1port/`: `replay.cpp` (vu1replay: the runtime's VU1 interpreter replaying the `PS2X_VU1_TRACE`
+water traces, x86_64; writes per-stage cases and hints), `cases.sh <stage> <entry>:<exits>`, `judge.cpp` (exact
+pc/vi/clip, 4 ULP on floats, ASan, round toward zero, no FMA contraction), `port.py <stage>` (spec = API +
+VU primer + annotated disassembly + the hand-written setup stage as the example; up to N rounds with the
+judge's report), `port.py --chain` (all passing stages in one program behind a pc dispatcher, judged on the
+600 whole runs; not run yet: stages missing). Work files `game/analysis/vu1port/`, results
+`game/analysis/qwen/vu1_<stage>/` (spec.md, attempts/, best.cpp, PASS). Hand ports: `tools/vu1port/known_good/`.
+
+**Passing (re-judged 22 Oct on the current cases):** setup (by hand, 600 cases), a_pre (Qwen round 1),
+a_g1_row (Qwen r5), a_g1_tail / a_g2_tail / b_g1_tail / b_g2_tail (by hand; the four loop tails, Qwen failed
+their delay slots), a_g2_head (r1), tail (r1), b_pre (r2), b_g1_row (r2), b_g1_in2 (r6), b_tail (r1).
+**Not passing** (best attempt, failing / total cases): a_g1_in1 348/2484, a_g1_in2 all, a_check all 174,
+a_g2_in1 all, a_g2_in2 all, a_g2_in3 90/1620, b_g1_in1 810/2484, b_check 60/174, b_g2_head all 666,
+b_g2_in1 all, b_g2_in2 all (its rounds 4-6 were lost: the PC's llama-server went away during the night).
+
+What we learned about the model on this task:
+- **Size limit ~25-35 pairs.** Whole grids (110+ pairs) and inner loops (51-75) used the whole 32k-token
+  budget reasoning and produced no code, twice in a row each; "reason briefly" in the retry rarely helps.
+  Stages were split at loop heads, then inner loops at points where no DIV result is pending and no FMAND is
+  separated from its MAC source (`replay.cpp` reports what is in flight at every candidate border). About a
+  third of all rounds still overran.
+- **Spec fixes that mattered:** the ACC forms spelled out (it read ADDAi as ACC += a * I), broadcast letter vs
+  destination mask with examples (SUBx.z writes only .z), delay slots marked on their lines, and an explicit
+  rule for an exit that is a loop branch's delay slot (taken: run the slot here, not taken: stop before it).
+  After each, the next small stages passed in 1-2 rounds.
+- **Feedback loop is weak:** rounds after a failure often repeat the same mistakes; the stages that passed late
+  (r5, r6) improved slowly. A fresh start with a fixed primer beat continuing the old conversation.
+- **Harness fix found by the hand ports:** cases now record Q as it is once a pending DIV lands (P6's inner
+  loops end with a DIV in flight; nothing reads Q before it lands), else a correct port fails on Q.
+- Throughput: ~68 tokens/s, 3-10 min a round, one request at a time; the 11 unfinished stages are the big
+  arithmetic ones (vertex transform, perspective divide, colour, packet stores).
+
+Next (to decide with the user): hand-port the 11 remaining stages (they are mostly repeats of one vertex
+pattern: the passing a_g1_row / b_g1_in2 show it), or split them further for Qwen; then `port.py --chain` and
+the whole-run judge; then wire P6 into the native renderer (water, renderer step 3).
