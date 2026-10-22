@@ -519,7 +519,7 @@ checks. **Agreed: a data-gathering playthrough on the current build soon** (quic
 room/effect/menu/cutscene, in chunks; each batch is scored/inventoried offline), then the user checks
 milestones, then one verification playthrough at the end.
 
-## Native world in the game window (renderer step 1, built 19-20 Oct night; NOT yet booted)
+## Native world in the game window (renderer step 1, built 19-20 Oct night; first booted 22 Oct)
 Design chosen over porting the presenter: **GS-memory injection**. The emulated GS keeps presenting; the native
 static world is drawn by our Vulkan renderer in-process and written into the GS frame and Z buffers at the
 point of the frame where its 3D starts, so everything the GS draws afterwards (characters, particles, decals,
@@ -564,3 +564,17 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   `tools\windows\boot.ps1 -Play -Out game\recomp-sotc -Seconds 60 -Env 'POP_60FPS=1;POP_NATIVE_WORLD=1;PS2X_STATE_LOAD_AT=120:states/play_20261019_185602.state' -Shots 600,1200,2400`
   then the same without `POP_NATIVE_WORLD=1`. Log lines `[pop:world]` (every 600 frames: frames drawn,
   missing, batches sent/known, wait times).
+- **First boots (22 Oct, user on the TV).** (1) From the fight save: nothing drawn natively ("loaded 0
+  elements ... never loaded"): a save-state boot never runs ReadElement, so nothing is converted. Test from
+  a normal boot (title -> memory card), not from a save. (2) Normal boot (`play.ps1 -Env 'POP_NATIVE_WORLD=1'`):
+  857 elements converted (83k triangles), ~400 native draws per frame, 59.2-59.9 fps, worker 3.4 ms, GS thread
+  waits 3.3 ms; responsiveness like the GS path (user). The world was missing after loading in and in the
+  fixed vault camera: 1,789 frames refused as "unexpected buffers" (ZBUF ZMSK 1). Saves 171143/171355: the
+  last state before the marker is ZBUF ZMSK 1 + ALPHA 0x44 with no VU1 run before it; the game sets ZMSK 0
+  right after the marker. Fixed (bd89bd4: the write mask is not checked); retest: 9,600 frames injected,
+  0 missed, 0 refused, world there at once and through vaults (user). (3) Shadows (lever, save 172041)
+  flicker more than on the GS: the native Z is nearer than VU1's on 26.7% of world pixels (49 saves of
+  19 Oct, 2.9M pixels: p50 -19, p90 +15, p99 +106, p99.9 +442 Z24 units), so GEQUAL second passes fail
+  there. `POP_NATIVE_WORLD_ZBIAS` (default 128) pushes the injected Z back; a cheap fix for the hybrid
+  period only (native shadows come in step 3). Not yet tested in game.
+

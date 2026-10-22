@@ -24,6 +24,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -194,10 +195,19 @@ namespace pop_native_world
             const uint64_t frame = (uint64_t(t.fbp * 32u) << 32) | (uint64_t(t.fbw) << 48);
             gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
             const bool z24 = t.zpsm == 0x31;
+            // Depth bias (POP_NATIVE_WORLD_ZBIAS, Z24 units, default 128): the native Z lies slightly nearer
+            // than the VU1 programs' Z on 27% of the world's pixels (19 Oct saves: p50 19, p99 106, p99.9 442
+            // units), so the GS's coplanar second passes over it (shadows, decals; all GEQUAL) failed there
+            // and flickered (lever shadow, save 172041 of 22 Oct). Pushing the world back covers ~99%.
+            static const uint32_t zBias = [] {
+                const char *e = std::getenv("POP_NATIVE_WORLD_ZBIAS");
+                return e ? uint32_t(std::strtoul(e, nullptr, 0)) : 128u;
+            }();
             std::vector<uint8_t> z(size_t(kWidth) * kHeight * (z24 ? 3 : 4));
             for (size_t i = 0, o = 0; i < pic.gsZ.size(); ++i)
             {
-                const uint32_t v = pic.gsZ[i];
+                const uint32_t raw = pic.gsZ[i];
+                const uint32_t v = raw > zBias ? raw - zBias : (raw ? 1u : 0u); // 0 stays the clear
                 z[o++] = uint8_t(v);
                 z[o++] = uint8_t(v >> 8);
                 z[o++] = uint8_t(v >> 16);

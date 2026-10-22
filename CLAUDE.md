@@ -23,18 +23,17 @@ In parallel, test a much cheaper route: RTX Remix on the existing PC (GOG) versi
 - Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
-## Current status (22 Oct 2026; start here)
+## Current status (22 Oct 2026 evening; start here)
 
 Older status blocks: `docs/history.md` (last one: "19 Oct 2026 night"). The overnight run of 19-20 Oct ended early
 (usage credits ran out on the morning of 20 Oct); the Qwen queue ran on unattended until the PC's llama-server went away.
 
-- **Renderer step 1 (native static world in the game window): built, checked offline, never booted.**
-  `POP_NATIVE_WORLD=1` (off by default): the static draws skip their DMA, a worker draws them with the Vulkan
-  renderer and a GS host hook (runtime patch 38) writes the picture and its Z into the GS buffers where the
-  frame's 3D starts. The PC play build compiles and links with it. Offline: GS Z identical to the viewer's,
-  the world never in front of the full native frame (49 saves), ~3 ms per frame from submit to upload on the PC
-  (PNF7: geometry sent once). Risks and the **first boot command (TV on, user present)**:
-  `docs/native_renderer.md` "Native world in the game window". That test is the next renderer step.
+- **Renderer step 1 (native static world in the game window): works in game (22 Oct).** `POP_NATIVE_WORLD=1`
+  (off by default): static draws skip their DMA, a worker draws them in Vulkan, a GS host hook (runtime patch
+  38) writes picture + Z into the GS buffers where the frame's 3D starts. Normal boot (save-state boots convert
+  nothing): ~60 fps, 3.4 ms per frame, world correct after the ZMSK fix (bd89bd4). Next: in-game check of the
+  shadow-flicker depth bias `POP_NATIVE_WORLD_ZBIAS` (default 128; compare 0) when the user is at the PC, then
+  step 2 (characters + particles). Details: `docs/native_renderer.md` "Native world in the game window".
 - **Water (P6) VU1 port: 13 of 24 stages pass** (8 by Qwen, 5 by hand); the 11 left are the big arithmetic
   stages. Harness `tools/vu1port/`, results and what we learned: `docs/llm_jobs.md` "VU1 water program P6".
   Decide: hand-port the rest or split further for Qwen, then `port.py --chain` (whole-run judge).
