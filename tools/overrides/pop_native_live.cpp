@@ -47,6 +47,7 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 #include <map>
 #include <memory>
 #include <mutex>
+#include <tuple>
 #include <thread>
 #include <string>
 #include <cstdio>
@@ -2435,9 +2436,37 @@ namespace pop_native_live
             }
         }
 
+        // POP_NATIVE_SKIP_CALLERS=1 (debug): mesh/ref Display calls per (path, caller $ra, palette or not), with
+        // one sample element and its matrix translation; finds draws made outside CElementList::Render
+        struct CallerSample
+        {
+            uint64_t count = 0;
+            uint32_t element = 0, matrix = 0;
+            float at[3] = {};
+        };
+        bool g_logCallers = false;
+        std::mutex g_callersMutex;
+        std::map<std::tuple<int, uint32_t, bool>, CallerSample> g_callers;
+        void noteCaller(int n, uint8_t *rdram, R5900Context *ctx)
+        {
+            const uint32_t node = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFF;
+            const uint32_t element = n == 1 ? guest32(rdram, node + 0x20u) : node;
+            std::lock_guard<std::mutex> lock(g_callersMutex);
+            CallerSample &c = g_callers[{n, getRegU32(ctx, 31), guest32(rdram, element + 0x48u) != 0}];
+            if (!c.count++)
+            {
+                c.element = element;
+                c.matrix = index;
+                for (int k = 0; k < 3; ++k)
+                    c.at[k] = guestF(rdram, guestAny(rdram, 0x70000260u) + index * 0x40u + 0x30u + 4u * k);
+            }
+        }
+
         template <int N>
         void skippable(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            if (N <= 1 && g_logCallers)
+                noteCaller(N, rdram, ctx);
             if (skipCall(N, rdram, ctx))
             {
                 ++g_skipCount[N]; // like a stub: leave pc, the dispatcher returns to the caller
@@ -2455,6 +2484,7 @@ namespace pop_native_live
                 if (spec.find(name) != std::string::npos)
                     g_skip |= bit;
             g_skipReplay = std::getenv("POP_NATIVE_SKIP_REPLAY") && *std::getenv("POP_NATIVE_SKIP_REPLAY") == '1';
+            g_logCallers = std::getenv("POP_NATIVE_SKIP_CALLERS") && *std::getenv("POP_NATIVE_SKIP_CALLERS") == '1';
             const PS2Runtime::RecompiledFunction hooks[8] = {skippable<0>, skippable<1>, skippable<2>, skippable<3>,
                                                              skippable<4>, skippable<5>, skippable<6>, skippable<7>};
             for (int n = 0; n < 8; ++n)
@@ -2474,6 +2504,14 @@ namespace pop_native_live
                                  (unsigned long long)g_kept[4], (unsigned long long)g_skipCount[5], (unsigned long long)g_kept[5],
                                  (unsigned long long)g_skipCount[6], (unsigned long long)g_kept[6], (unsigned long long)g_skipCount[7],
                                  (unsigned long long)g_kept[7]);
+                    if (g_logCallers)
+                    {
+                        std::lock_guard<std::mutex> lock(g_callersMutex);
+                        for (const auto &[key, c] : g_callers)
+                            std::fprintf(stderr, "[pop:native] caller %s ra %08x %s: %llu calls, e.g. element %08x matrix %u at (%.2f %.2f %.2f)\n",
+                                         std::get<0>(key) ? "ref " : "mesh", std::get<1>(key), std::get<2>(key) ? "palette" : "static ",
+                                         (unsigned long long)c.count, c.element, c.matrix, double(c.at[0]), double(c.at[1]), double(c.at[2]));
+                    }
                 }
             }).detach();
         }

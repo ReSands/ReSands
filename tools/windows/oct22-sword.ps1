@@ -5,8 +5,9 @@
 # First run (none/gfx/skinned/static/lightmap): the sword stayed in every one, but skinned/static chains that
 # would switch the VU1 driver were kept. -Replay (POP_NATIVE_SKIP_REPLAY=1) skips those too, replaying the switches,
 # and -Build first makes a fast play build (the new sprite/water/list18 groups). Output dir: <group>[_replay].
+# Then: -Groups callers -ExtraEnv POP_NATIVE_SKIP_CALLERS=1 (nothing skipped; Display callers by $ra in the log).
 # Run through start-job.ps1 (the window needs the desktop session); the TV must be on.
-param([string]$State = 'play_20261022_192521', [string]$Groups = 'none,gfx,skinned,static,lightmap', [switch]$Replay, [switch]$Build)
+param([string]$State = 'play_20261022_192521', [string]$Groups = 'none,gfx,skinned,static,lightmap', [switch]$Replay, [switch]$Build, [string]$ExtraEnv = '')
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 if ((nvidia-smi --query-gpu=display_active --format=csv,noheader) -notmatch 'Enabled') { "NO ACTIVE DISPLAY (switch the TV on): FAILED"; exit 1 }
@@ -38,7 +39,7 @@ foreach ($group in $Groups -split ',') {
     Remove-Item "$screens\*", "$dir\*" -ErrorAction SilentlyContinue
     $skip = $(if ($group -eq 'none') { '' } else { ";POP_NATIVE_SKIP=$group;POP_NATIVE_SKIP_REPLAY=$(if ($Replay) { 1 } else { 0 })" })
     & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds 30 -Name "sword" -Shots "$($field + 30),$($field + 240),$($field + 600)" `
-        -Env "PS2X_STATE_LOAD_AT=120:states/$State.state;POP_60FPS=1;POP_NATIVE_WORLD=0;POP_NATIVE_CHARACTERS=0$skip" | Out-Null
+        -Env "PS2X_STATE_LOAD_AT=120:states/$State.state;POP_60FPS=1;POP_NATIVE_WORLD=0;POP_NATIVE_CHARACTERS=0$skip$(if ($ExtraEnv) { ";$ExtraEnv" })" | Out-Null
     Move-Item "$Root\game\recomp-sotc\sword.log" "$dir\boot.log" -Force
     Get-ChildItem "$screens\*" -ErrorAction SilentlyContinue | Move-Item -Destination $dir -Force
     $counts = Select-String -Path "$dir\boot.log" -Pattern 'skipped/kept' | Select-Object -Last 1 | ForEach-Object { $_.Line -replace '.*kept: ', '' }
