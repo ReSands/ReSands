@@ -9,6 +9,10 @@
 #   4. port.py --chain (whole program on the 600 whole runs) when every stage has passed;
 #   5. stops llama-server and shuts the PC down (5 minutes' notice: `shutdown /a` in a console cancels).
 # No new round starts after -Until (default 07:30). -NoShutdown keeps the PC on.
+# Interrupting in the morning (Ctrl+C in the window, or closing it) is safe: every round is on disk as it
+# finishes (at most the round in progress is lost), the next run resumes, and the PC is NOT shut down then
+# (only a run that ends by itself shuts down). After Ctrl+C llama-server is stopped too; after closing the
+# window it keeps running (`tools\windows\llama-serve.ps1 -Stop` frees the GPU).
 param([string]$Until = '07:30', [switch]$NoShutdown, [int]$Rounds = 6)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
@@ -21,6 +25,7 @@ if ($end -lt (Get-Date)) { $end = $end.AddDays(1) }
 $untilUnix = [int64]([DateTimeOffset]$end).ToUnixTimeSeconds()
 Say "== Qwen night: P6 stages until $($end.ToString('ddd HH:mm'))"
 
+$finished = $false
 try {
     $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
     $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -68,12 +73,15 @@ try {
         Say 'all stages pass: whole-program judge (port.py --chain)'
         & $Python -I "$Root\tools\vu1port\port.py" --chain 2>&1 | Select-Object -First 40 | ForEach-Object { "  $_"; Add-Content -Path $Log -Value "  $_" }
     }
+    $finished = $true
 } catch {
     Say "ERROR: $_"
+    $finished = $true
 } finally {
     Say 'stopping llama-server'
     & "$Root\tools\windows\llama-serve.ps1" -Stop | Out-Null
-    if (-not $NoShutdown) {
+    if (-not $finished) { Say 'interrupted: no shutdown' }
+    elseif (-not $NoShutdown) {
         Say 'shutting the PC down in 5 minutes (shutdown /a cancels)'
         shutdown /s /t 300 /c "Qwen night job finished: shutting down in 5 minutes (shutdown /a cancels)."
     }

@@ -365,6 +365,16 @@ def main(argv):
     spec_m.loader.exec_module(md)
     log = open(os.path.join(out, 'port.log'), 'a')
     say = lambda s: (print(s, flush=True), log.write(time.strftime('%H:%M:%S ') + s + '\n'), log.flush())
+    # a round interrupted between its answer and its judge report (job stopped in the morning): judge it again
+    for f in sorted(os.listdir(att)):
+        if f.endswith('.cpp') and not os.path.exists(os.path.join(att, f[:-4] + '.report.txt')):
+            ok, report = judge(name, os.path.join(att, f), out)
+            open(os.path.join(att, f[:-4] + '.report.txt'), 'w').write(report)
+            if ok:
+                open(os.path.join(out, 'best.cpp'), 'w').write(open(os.path.join(att, f)).read())
+                open(os.path.join(out, 'PASS'), 'w').write(f[:-4] + '\n')
+                say('PASS in %s (judged on resume)' % f[:-4])
+                return 0
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     prev_code = open(os.path.join(att, done[-1])).read() if done else None
     prev_report = open(os.path.join(att, done[-1][:-4] + '.report.txt')).read() if done else None
