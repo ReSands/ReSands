@@ -1331,8 +1331,9 @@ namespace pop_native_live
         // Flash detector (native characters, 22 Oct: the user saw the Prince's whole body light up for a
         // fraction of a second, too short to quick-save by hand): a posed draw whose mean lit colour jumps
         // by more than 35% from the frame before is logged with both frames' light sets (set index,
-        // point-light flag, light count, ambient, constant colour, light vectors and colours);
-        // POP_NATIVE_FLASH_SAVE=1 also quick-saves then (at most 5, 10 s apart).
+        // point-light flag, light count, ambient, constant colour, light vectors and colours). On with
+        // POP_NATIVE_FLASHLOG=1 (after the 22 Oct fix it mostly logs real light changes);
+        // POP_NATIVE_FLASH_SAVE=1 (implies it) also quick-saves then (at most 5, 10 s apart).
         struct FlashSeen
         {
             uint32_t frame = 0;
@@ -1503,7 +1504,8 @@ namespace pop_native_live
                                                  double(guestF(rdram, set + 0x14 + 16 * l)), double(guestF(rdram, set + 0x18 + 16 * l)),
                                                  double(guestF(rdram, set + 0x1C + 16 * l)));
                         }
-                        if (g_world && g_worldCharacters)
+                        static const bool flashLog = std::getenv("POP_NATIVE_FLASHLOG") || std::getenv("POP_NATIVE_FLASH_SAVE");
+                        if (g_world && g_worldCharacters && flashLog)
                             flashCheck(rdram, element, index, posed, light);
                         DrawMaterial dm = currentMaterial(rdram);
                         dm.hasUvm = false; // the skin driver has no UV matrix

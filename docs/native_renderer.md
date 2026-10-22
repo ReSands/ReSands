@@ -633,3 +633,7 @@ judged in game. Off reproduces step 1 exactly (all 49 saves of 19 Oct: the same 
   the Prince's mean brightness 68.2 -> 65.3 (GS 73.7 with glow).
 - **Noticed:** the Prince's sword (on his back) is in the GS picture but not in the native frame (save
   192521): another draw path, still drawn by the GS in game.
+- **Third session (after the fix), user: flash fixed, trouser flicker not seen (watch).** 58.5 fps mean, one
+  38 fps one-second sample (unattributed). New: **a full-frame flash right after the loading glyph** when
+  entering a scene (consistent); to check with `play.ps1 -NoNativeWorld` whether the game does it too. Native
+  characters made the default in `play.ps1`; the flash detector is opt-in now (`POP_NATIVE_FLASHLOG=1`).

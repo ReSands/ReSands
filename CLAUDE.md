@@ -42,12 +42,14 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   bias `POP_NATIVE_WORLD_ZBIAS=128` (the default; 0 = off). **Test it from a normal boot (title -> memory card):
   save-state boots never run ReadElement, so nothing is converted.** Details and numbers:
   `docs/native_renderer.md` "Native world in the game window".
-- **Renderer step 2, characters: built and checked offline (22 Oct), not booted yet.** `POP_NATIVE_CHARACTERS=1`
-  (`play.ps1 -NativeCharacters`, off by default): opaque CPU-posed characters join the world frame, their
-  Display calls are skipped with the VU1 driver switches replayed (decompiled leaf functions). Offline over 49
-  saves: posed characters never in front of the game's surfaces, step 1 unchanged with the switch off. **Next: a
-  normal boot with the user (TV on), A/B fps and look**; lighting is the approximation without point lights.
-  Details: `docs/native_renderer.md` "Native characters in the game window".
+- **Renderer step 2, characters: done and in daily use (22 Oct evening).** `POP_NATIVE_CHARACTERS=1`, on by default
+  in `play.ps1` (`-NoNativeCharacters` turns it off): opaque CPU-posed characters join the world frame, their
+  Display calls are skipped with the VU1 driver switches replayed. In game ~59.9 fps, user: fixed after the light-set
+  fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). **Point lights are
+  left out of character lighting** (falloff not decoded: next, from a VU1 trace). Open notes: a full-frame flash
+  right after the loading glyph (not yet checked against the GS-only shortcut), trouser flicker (gone in the last
+  session: watch), the Prince's sword missing from the native frame. Details: `docs/native_renderer.md` "Native
+  characters in the game window".
 - **Then: renderer step 2 (roadmap 0.12): particles native** (characters above), so the GS stops drawing 3D. Start
   point: in game every skinned element stays on the GS ("937 not converted (skinned/instanced/no pass)",
   ~3.6M skinned draws "unknown" per session); offline, skinning (A7) and the particle decoders already work in
