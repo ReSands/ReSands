@@ -654,8 +654,9 @@ namespace pop_native_live
         // v4Positions: V4-32 positions to VU 0x3 (x, y, z, w) count too, as the load converter takes them (objects
         // with their own matrix; the V4-32 x3 header goes to VU 0). Pass-0 packets only: the same layout in pass 1
         // carries normals at 0x83 (isLitStaticPass), and pass 2's V4-8 at 0x43 is not decoded yet.
-        void livePacketBatches(uint8_t *rdram, uint32_t packet, double uvscale, std::vector<pop_assets::Batch> &out,
-                               bool v4Positions = false)
+        // The VIF stream of a pass packet in guest memory: its DMA tags' VIF words and the data they send, in order
+        // (cnt/next/ref/refs; refe and anything else end it after their data).
+        std::vector<uint32_t> packetWords(uint8_t *rdram, uint32_t packet)
         {
             std::vector<uint32_t> words;
             uint32_t pc = packet;
@@ -681,6 +682,13 @@ namespace pop_native_live
                     break;
                 pc = next;
             }
+            return words;
+        }
+
+        void livePacketBatches(uint8_t *rdram, uint32_t packet, double uvscale, std::vector<pop_assets::Batch> &out,
+                               bool v4Positions = false)
+        {
+            const std::vector<uint32_t> words = packetWords(rdram, packet);
             static const uint8_t kElementBytes[16] = {4, 2, 1, 0, 8, 4, 2, 0, 12, 6, 3, 0, 16, 8, 4, 2};
             static int unpackLogs = std::getenv("POP_NATIVE_UNPACKLOG") ? 6 : 0;
             std::string unpackLog;
