@@ -57,12 +57,15 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   User check (memory-card slot 04, the fountain after the mirror room): sword silver, mirror room right, ~60 fps.
   Details: `docs/native_renderer.md` "Static world audit". Memory-card slots: header +4 = play time (s), +0x10 =
   save-point key; copies in `game/analysis/memcard/`.
-- **NEXT: renderer step 2, the rest (roadmap 0.12):** lit statics with the character lighting (the 500 pass-1
-  calls), then translucents + particles (below).
+- **NEXT (user agreed 22 Oct night): renderer step 2, the rest (roadmap 0.12), first the lit statics:** the 500
+  pass-1 static calls now left to the GS (the sword, 40 instanced refs) drawn natively with the character lighting.
+  Plan, element list, open question (which VU1 program/formula lights them: measure first) and judges (saves 192521,
+  204040, 204108; in game memory-card slot 04): `docs/native_renderer.md` "Next: lit statics native". Then the
+  pass-2 second layers of V4-32 objects (mirror reflections), then translucents + particles (below).
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`.
-- **Then: renderer step 2, the rest (roadmap 0.12): translucent draws + particles native.** Measured 22 Oct over 108
+- **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
   saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
   frame; the GS still draws ~136 mesh draws / 3.8k triangles, all translucent (blend 1/4/6 in lists +0x3C, +0x4C,
   +0x88, +0x98, +0xA8) except ~5 opaque in +0x4C, plus ~14 GFX particle and ~6 sprite draws (shadows, halos, shafts

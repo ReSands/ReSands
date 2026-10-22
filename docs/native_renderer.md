@@ -724,3 +724,30 @@ sword back, the mirror room unchanged to the eye, `lit static draws on the GS` i
 **Checked in game 22 Oct 20:39 (memory-card slot 04, the fountain after the mirror room):** sword silver, mirror
 room right (gold pieces, faceted mirrors), 59.8-60 fps (lowest 59.4), 0 missed injections, worker 3.4 ms,
 ~12-15 lit static draws per frame on the GS. Saves `play_20261022_204040` / `204108` (mirror room, new build).
+
+## Next: lit statics native (plan, 22 Oct night; renderer step 2, roadmap 0.12)
+The first part of step 2's rest, before translucents + particles: the static draws of the lit driver, which the world
+mode now leaves to the GS (`isLitStaticPass`; counter "lit static draws on the GS", ~12-15 per frame in the mirror
+room). 500 calls over the 196 saves (`tools/staticcensus.py game/analysis/play10*/states --elements` lists them):
+- **CJMeshElement pass 1, ref-style packet:** the sword (0x00B395B0, one element, in 156 saves). Per batch V3-16 UVs
+  at VU 0x43, then a shared block: V4-8 normals at 0x83 (xyz signed, fourth byte spare 0/1), V4-32 positions at
+  0x3, V4-32 x3 header at 0. In game it is converted at load (`g_elements`), so the fix sits in display()'s
+  `isLitStaticPass` branch: draw the converted geometry lit instead of leaving the call.
+- **CJMeshElementRef pass 1:** 6 elements with the V4-8 normal layout, 34 with inline V3-8 normals at 0x83 + V4-32
+  positions (`refDisplay`; `livePacketBatches` decodes neither, so they go to the GS). FUN_004C7B40 (decompiled in
+  `game/analysis/naming/decomp/004c7b40.c`): a ref whose element has no palette uploads the matrix-pool entry
+  (object matrix) before CALLing the packet.
+- (Palette-less rigid character parts with skinned-style packets are already posed and lit by the character path.)
+
+Approach: decode normals with the positions (a lit variant of `livePacketBatches`, or the converter keeping
+normals for pass-1 elements), then light like the characters: `poseSkinned`'s no-palette path (bones[0] = the
+pool entry) with `readLightEnv` (light set from the list entry, scratchpad 0x88). **Open before coding:** which VU1
+program draws these (VU1 inventory / the trace of save 192521, `game/analysis/vu1trace/`) and whether its lighting is
+the character formula (directional + point lights, `tools/vu1port/lightprobe.cpp`) or a variant; measure, don't
+assume. Judge offline: `pop_state_frame` (`POP_NATIVE_CHARACTERS=1`) against the game's frame on saves
+`play_20261022_192521` (sword, from behind), `204040` / `204108` (mirror room), and the guards' props
+(`--elements` list); then in game: memory-card slot 04 (play time 0:51, the fountain after the mirror room), sword
+silver and lit as on the GS.
+
+Left after that (also 0.12): the pass-2 second layers of V4-32-position objects (544 calls: V4-8 at 0x43, meaning
+not decoded; the mirrors' reflection), then the translucent lists + particles (status block in CLAUDE.md).
