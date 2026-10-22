@@ -34,26 +34,38 @@ STAGES = {
     # instruction whose flags it reads.
     'p6_a_pre': dict(entry=0x268, exits=[0x288, 0x930], ranges=[(0x268, 0x280)]),
     'p6_a_g1_row': dict(entry=0x288, exits=[0x338], ranges=[(0x288, 0x330)]),
-    'p6_a_g1_in1': dict(entry=0x338, exits=[0x448], ranges=[(0x338, 0x440)]),
-    'p6_a_g1_in2': dict(entry=0x448, exits=[0x338, 0x590], ranges=[(0x448, 0x588)]),
+    # 22 Oct: the inner loops that failed as 20-41 pairs, split again at pairs where no DIV is pending and
+    # no FMAND is apart from its MAC source (tools/vu1port cut scan: vu1replay --stage <entry>:<cut>)
+    'p6_a_g1_in1a': dict(entry=0x338, exits=[0x3b0], ranges=[(0x338, 0x3a8)]),
+    'p6_a_g1_in1b': dict(entry=0x3b0, exits=[0x448], ranges=[(0x3b0, 0x440)]),
+    'p6_a_g1_in2a': dict(entry=0x448, exits=[0x4a0], ranges=[(0x448, 0x498)]),
+    'p6_a_g1_in2b': dict(entry=0x4a0, exits=[0x4f8], ranges=[(0x4a0, 0x4f0)]),
+    'p6_a_g1_in2c': dict(entry=0x4f8, exits=[0x338, 0x590], ranges=[(0x4f8, 0x588)]),
     'p6_a_g1_tail': dict(entry=0x590, exits=[0x288, 0x5e0], ranges=[(0x590, 0x5d8)]),
     'p6_a_check': dict(entry=0x5e0, exits=[0xcf0, 0x830, 0x14e8, 0x1528], ranges=[(0x5e0, 0x828), (0x1568, 0x1640)]),
     'p6_a_g2_head': dict(entry=0x930, exits=[0x9e0], ranges=[(0x930, 0x9d8)]),
-    'p6_a_g2_in1': dict(entry=0x9e0, exits=[0xae8], ranges=[(0x9e0, 0xae0)]),
-    'p6_a_g2_in2': dict(entry=0xae8, exits=[0xbd8], ranges=[(0xae8, 0xbd0)]),
-    'p6_a_g2_in3': dict(entry=0xbd8, exits=[0x9e0, 0xc98], ranges=[(0xbd8, 0xc90)]),
+    'p6_a_g2_in1a': dict(entry=0x9e0, exits=[0xa58], ranges=[(0x9e0, 0xa50)]),
+    'p6_a_g2_in1b': dict(entry=0xa58, exits=[0xae8], ranges=[(0xa58, 0xae0)]),
+    'p6_a_g2_in2a': dict(entry=0xae8, exits=[0xb60], ranges=[(0xae8, 0xb58)]),
+    'p6_a_g2_in2b': dict(entry=0xb60, exits=[0xbd8], ranges=[(0xb60, 0xbd0)]),
+    'p6_a_g2_in3a': dict(entry=0xbd8, exits=[0xc30], ranges=[(0xbd8, 0xc28)]),
+    'p6_a_g2_in3b': dict(entry=0xc30, exits=[0x9e0, 0xc98], ranges=[(0xc30, 0xc90)]),
     'p6_a_g2_tail': dict(entry=0xc98, exits=[0x930, 0xcf0], ranges=[(0xc98, 0xce8)]),
     'p6_tail': dict(entry=0xcf0, exits=[0xffffffff], ranges=[(0xcf0, 0xd28)]),
     # variant B: the same shape
     'p6_b_pre': dict(entry=0x1648, exits=[0x1698, 0x1b60], ranges=[(0x1648, 0x1690)]),
     'p6_b_g1_row': dict(entry=0x1698, exits=[0x1770], ranges=[(0x1698, 0x1768)]),
-    'p6_b_g1_in1': dict(entry=0x1770, exits=[0x1840], ranges=[(0x1770, 0x1838)]),
+    'p6_b_g1_in1a': dict(entry=0x1770, exits=[0x17f0], ranges=[(0x1770, 0x17e8)]),
+    'p6_b_g1_in1b': dict(entry=0x17f0, exits=[0x1840], ranges=[(0x17f0, 0x1838)]),
     'p6_b_g1_in2': dict(entry=0x1840, exits=[0x1770, 0x1910], ranges=[(0x1840, 0x1908)]),
     'p6_b_g1_tail': dict(entry=0x1910, exits=[0x1698, 0x1960], ranges=[(0x1910, 0x1958)]),
     'p6_b_check': dict(entry=0x1960, exits=[0x1dd0, 0x14e8, 0x1528, 0x1b28], ranges=[(0x1960, 0x1b20), (0x1568, 0x1640), (0x2550, 0x2628)]),
-    'p6_b_g2_head': dict(entry=0x1b60, exits=[0x1c40], ranges=[(0x1b60, 0x1c38)]),
-    'p6_b_g2_in1': dict(entry=0x1c40, exits=[0x1ce0], ranges=[(0x1c40, 0x1cd8)]),
-    'p6_b_g2_in2': dict(entry=0x1ce0, exits=[0x1c40, 0x1d78], ranges=[(0x1ce0, 0x1d70)]),
+    'p6_b_g2_head_a': dict(entry=0x1b60, exits=[0x1bd0], ranges=[(0x1b60, 0x1bc8)]),
+    'p6_b_g2_head_b': dict(entry=0x1bd0, exits=[0x1c40], ranges=[(0x1bd0, 0x1c38)]),
+    'p6_b_g2_in1a': dict(entry=0x1c40, exits=[0x1c98], ranges=[(0x1c40, 0x1c90)]),
+    'p6_b_g2_in1b': dict(entry=0x1c98, exits=[0x1ce0], ranges=[(0x1c98, 0x1cd8)]),
+    'p6_b_g2_in2a': dict(entry=0x1ce0, exits=[0x1d28], ranges=[(0x1ce0, 0x1d20)]),
+    'p6_b_g2_in2b': dict(entry=0x1d28, exits=[0x1c40, 0x1d78], ranges=[(0x1d28, 0x1d70)]),
     'p6_b_g2_tail': dict(entry=0x1d78, exits=[0x1b60, 0x1dd0], ranges=[(0x1d78, 0x1dc8)]),
     'p6_b_tail': dict(entry=0x1dd0, exits=[0xffffffff], ranges=[(0x1dd0, 0x1e08)]),
 }
@@ -121,7 +133,7 @@ may differ by at most 4 units in the last place; integers must match exactly.
 ```
 
 {primer}
-## Example: the stage before this one, translated (correct: it passes its judge bit-exactly)
+## Example: an earlier stage of this program, translated (correct: it passes its judge bit-exactly)
 Its code:
 ```
 {example_code}
@@ -220,12 +232,20 @@ def same_pair(upper, lower):
 
 
 def build_judge(cpp, exe):
-    r = subprocess.run(['bash', os.path.join(HERE, 'build.sh'), cpp, exe], capture_output=True, text=True)
+    if os.name == 'nt':
+        # the PC (inside the MSVC developer environment, tools/windows/qwen-night.ps1): build.sh's flags in
+        # MSVC terms (no FMA contraction: /fp:precise; AddressSanitizer)
+        obj = os.path.dirname(exe)
+        cmd = ['cl', '/nologo', '/std:c++17', '/EHsc', '/O1', '/Zi', '/fp:precise', '/fsanitize=address', '/I', HERE,
+               '/Fo' + obj + os.sep, '/Fd' + os.path.join(obj, 'judge.pdb'), os.path.join(HERE, 'judge.cpp'), cpp, '/Fe' + exe]
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=obj)
+    else:
+        r = subprocess.run(['bash', os.path.join(HERE, 'build.sh'), cpp, exe], capture_output=True, text=True)
     return r.returncode == 0 and os.path.exists(exe), (r.stdout + r.stderr)
 
 
 def judge(stage, cpp, out_dir):
-    exe = os.path.join(out_dir, 'judge_bin')
+    exe = os.path.join(out_dir, 'judge_bin' + ('.exe' if os.name == 'nt' else ''))
     if os.path.exists(exe):
         os.remove(exe)
     ok, log = build_judge(cpp, exe)
@@ -241,9 +261,29 @@ def judge(stage, cpp, out_dir):
     return r.returncode == 0 and text.startswith('PASS'), text[:6000]
 
 
+def passed_port(name):
+    """The passing port of a stage (hand port first), or None."""
+    for path in (os.path.join(HERE, 'known_good', name + '.cpp'),
+                 os.path.join(ROOT, 'game', 'analysis', 'qwen', 'vu1_' + name, 'best.cpp')):
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def example_for(name):
+    """The example stage: the nearest earlier stage that passed (the same loop's code is the closest
+    pattern: 22 Oct), else the hand-ported setup stage."""
+    names = list(STAGES)
+    for k in range(names.index(name) - 1, -1, -1):
+        if passed_port(names[k]) and os.path.exists(os.path.join(WORK, names[k][3:] + '.hints')):
+            return names[k]
+    return 'p6_setup'
+
+
 def spec(name):
     st = STAGES[name]
-    ex = STAGES['p6_setup']
+    ex_name = example_for(name)
+    ex = STAGES[ex_name]
     hints = os.path.join(WORK, name[3:] + '.hints')
     cases = os.path.join(WORK, name[3:] + '.cases')
     n = 0
@@ -266,8 +306,8 @@ def spec(name):
         cases=n, header=open(os.path.join(HERE, 'vu_task.h')).read(), primer=PRIMER, name=name, entry=st['entry'],
         exits=', '.join('0x%x' % e if e != 0xffffffff else 'the program end' for e in st['exits']), exit_notes=exit_notes,
         code=stage_code([(lo, hi + 8 if hi + 8 in slots else hi) for lo, hi in st['ranges']], hints),
-        example_code=stage_code(ex['ranges'], os.path.join(WORK, 'setup.hints')),
-        example_cpp=open(os.path.join(HERE, 'known_good', 'p6_setup.cpp')).read())
+        example_code=stage_code(ex['ranges'], os.path.join(WORK, ex_name[3:] + '.hints')),
+        example_cpp=open(passed_port(ex_name)).read())
 
 
 def chain():
@@ -281,13 +321,11 @@ def chain():
            'limits', 'type_traits', 'utility', 'vector')]
     table = []
     for name, st in STAGES.items():
-        best = os.path.join(HERE, 'known_good', name + '.cpp')
-        if not os.path.exists(best):
-            best = os.path.join(ROOT, 'game', 'analysis', 'qwen', 'vu1_' + name, 'best.cpp')
-        if not os.path.exists(best):
+        best = passed_port(name)
+        if not best:
             print('%s: no passing port yet' % name)
             return 1
-        src += ['namespace %s {' % name, '#include "%s"' % best, '}']
+        src += ['namespace %s {' % name, '#include "%s"' % best.replace('\\', '/'), '}']
         table.append('        case 0x%x: %s::stage(vu); break;' % (st['entry'], name))
     src += ['void stage(VuState &vu)', '{', '    for (int n = 0; vu.pc != 0xffffffffu && n < 100000; ++n)',
             '        switch (vu.pc)', '        {'] + table + ['        default: return; // no stage starts here', '        }', '}']
@@ -304,6 +342,9 @@ def main(argv):
     name = argv[0]
     opt = lambda k, v: argv[argv.index(k) + 1] if k in argv else v
     url, rounds = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '12'))
+    # --fresh N: every N rounds start a new conversation without the failed answer (a fresh start beat
+    # continuing a failed one on 19-20 Oct); --until T: no new round after unix time T (overnight jobs)
+    fresh, until = int(opt('--fresh', '0')), float(opt('--until', '0'))
     out = os.path.join(ROOT, 'game', 'analysis', 'qwen', 'vu1_' + name)
     att = os.path.join(out, 'attempts')
     os.makedirs(att, exist_ok=True)
@@ -332,6 +373,11 @@ def main(argv):
     kOverrun = ('\n\nYour last answer spent the whole token budget reasoning and contained no code. This time reason '
                 'briefly, then write the complete file.')
     for n in range(last + 1, max(rounds, last) + 1):
+        if until and time.time() > until:
+            say('round%02d: past the deadline; stopping' % n)
+            return 1
+        if fresh and n > 1 and (n - 1) % fresh == 0:
+            prev_code = prev_report = None
         messages = [{'role': 'user', 'content': prompt + (kOverrun if overran and not prev_code else '')}]
         if prev_code:
             messages += [{'role': 'assistant', 'content': '```cpp\n' + prev_code + '```'},

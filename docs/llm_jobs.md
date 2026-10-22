@@ -139,3 +139,12 @@ What we learned about the model on this task:
 Next (to decide with the user): hand-port the 11 remaining stages (they are mostly repeats of one vertex
 pattern: the passing a_g1_row / b_g1_in2 show it), or split them further for Qwen; then `port.py --chain` and
 the whole-run judge; then wire P6 into the native renderer (water, renderer step 3).
+
+**22 Oct: split again and moved to the PC alone.** The nine failing inner-loop stages were cut into 19 pieces
+of 9-20 pairs (`port.py` STAGES `*_in1a` etc.; cut points from scanning `vu1replay --stage <entry>:<cut>`:
+no DIV pending, no FMAND apart from its MAC source); the two clip-check stages stay whole and run last.
+`port.py` now takes as the example the nearest earlier stage that passed (the same loop's code, not the
+setup stage), starts a fresh conversation every N rounds (`--fresh 3`) and stops at a deadline (`--until`);
+the judge builds with MSVC on the PC (`judge.cpp`: watchdog thread instead of `alarm`). Night job
+`tools/windows/oct22.ps1` (desktop shortcut "Qwen overnight (then shuts down)"): two passes of 6 rounds,
+`--chain` when everything passes, then the PC shuts down; log `game\jobs\qwen-night.log`.

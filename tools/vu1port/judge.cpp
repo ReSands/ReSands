@@ -13,15 +13,22 @@
 
 #include <xmmintrin.h>
 
+#include <atomic>
 #include <cstdarg>
-#include <csignal>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <string>
-#include <unistd.h>
+#include <thread>
+
+#if defined(__GNUC__) || defined(__clang__)
+#define JUDGE_PRINTF __attribute__((format(printf, 2, 3)))
+#else
+#define JUDGE_PRINTF
+#endif
 
 namespace
 {
@@ -45,7 +52,7 @@ namespace
     {
         int lines = 0, limit = 12;
         std::string text;
-        void add(const char *fmt, ...) __attribute__((format(printf, 2, 3)))
+        void add(const char *fmt, ...) JUDGE_PRINTF
         {
             if (lines++ >= limit)
                 return;
@@ -111,7 +118,23 @@ namespace
         }
     }
 
-    void onAlarm(int) { std::_Exit(3); }
+    // a stage that runs longer than 20 s is an endless loop: exit 3 (a watchdog thread, so the judge
+    // also builds with MSVC on the PC, which has no alarm())
+    std::atomic<int64_t> g_deadline{0}; // steady-clock milliseconds; 0 = no stage running
+    int64_t nowMs()
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void watchdog()
+    {
+        for (;;)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            const int64_t d = g_deadline.load();
+            if (d && nowMs() > d)
+                std::_Exit(3);
+        }
+    }
 }
 
 void xgkick(VuState &vu, uint32_t qwordAddress) { g_kicks.push_back(vuGifPacket(vu.mem, qwordAddress)); }
@@ -132,7 +155,7 @@ int main(int argc, char **argv)
         else if (!std::strcmp(argv[i], "--report") && i + 1 < argc)
             reportCases = std::atoi(argv[++i]);
     }
-    std::signal(SIGALRM, onAlarm);
+    std::thread(watchdog).detach();
     std::ifstream f(argv[1], std::ios::binary);
     auto in = std::make_unique<VuState>(), want = std::make_unique<VuState>(), got = std::make_unique<VuState>();
     int n = 0, failed = 0, shown = 0;
@@ -158,9 +181,9 @@ int main(int argc, char **argv)
         g_kicks.clear();
         const unsigned csr = _mm_getcsr();
         _mm_setcsr(csr | 0x6000u); // round toward zero, like the VU
-        alarm(20);
+        g_deadline = nowMs() + 20000;
         stage(*got);
-        alarm(0);
+        g_deadline = 0;
         _mm_setcsr(csr);
         Report r;
         compare(*want, *got, kicks, tol, r);
