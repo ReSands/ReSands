@@ -19,6 +19,12 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_memory.h"
+#if __has_include("runtime/ps2_save_state.h") // the SotC runtime's save states (POP_NATIVE_FLASH_SAVE)
+#include "runtime/ps2_save_state.h"
+#define POP_LIVE_QUICKSAVE 1
+#else
+#define POP_LIVE_QUICKSAVE 0
+#endif
 
 // The native sources, by path: this file is copied to <runtime>/ps2xRuntime/src/runner, six levels
 // below the repository root on both the Mac (game/recomp/...) and the PC (game/recomp-sotc/...).
@@ -1316,6 +1322,78 @@ namespace pop_native_live
             }
         }
 
+        // Flash detector (native characters, 22 Oct: the user saw the Prince's whole body light up for a
+        // fraction of a second, too short to quick-save by hand): a posed draw whose mean lit colour jumps
+        // by more than 35% from the frame before is logged with both frames' light sets (set index,
+        // point-light flag, light count, ambient, constant colour, light vectors and colours);
+        // POP_NATIVE_FLASH_SAVE=1 also quick-saves then (at most 5, 10 s apart).
+        struct FlashSeen
+        {
+            uint32_t frame = 0;
+            float level = 0;
+            std::string light; // the light set as logged
+        };
+        std::unordered_map<uint64_t, FlashSeen> g_flashSeen; // (element << 16 | matrix index) -> last frame's level
+        std::string describeLight(uint8_t *rdram, const LightEnv &light)
+        {
+            const uint32_t index = guestAny(rdram, 0x70000088u) & 0xFF, table = guestAny(rdram, 0x700004F0u);
+            const uint32_t set = table + index * 0xF0u;
+            char b[512];
+            int n = std::snprintf(b, sizeof b, "set %u pt %u n %u amb %08x const %u %08x | used amb %.0f %.0f %.0f", index, guest8(rdram, set + 1),
+                                  guest8(rdram, set + 8), guestAny(rdram, set + 4), guest8(rdram, 0x70000039u), guestAny(rdram, 0x7000003Cu),
+                                  double(light.amb[0]), double(light.amb[1]), double(light.amb[2]));
+            for (int l = 0; l < light.count && n < int(sizeof b) - 80; ++l)
+                n += std::snprintf(b + n, sizeof b - n, "; light (%.2f %.2f %.2f) colour %.0f %.0f %.0f", double(light.dir[l][0]),
+                                   double(light.dir[l][1]), double(light.dir[l][2]), double(light.col[l][0]), double(light.col[l][1]),
+                                   double(light.col[l][2]));
+            return b;
+        }
+        void flashCheck(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::Batch> &posed, const LightEnv &light)
+        {
+            double sum = 0;
+            size_t nv = 0;
+            for (const auto &b : posed)
+                for (const auto &v : b.vertices)
+                {
+                    sum += v.colour[0] + v.colour[1] + v.colour[2];
+                    ++nv;
+                }
+            if (!nv)
+                return;
+            const float level = float(sum / (3.0 * nv));
+            FlashSeen &seen = g_flashSeen[(uint64_t(element) << 16) | index];
+            const bool consecutive = seen.frame + 1 == g_worldSeq;
+            if (consecutive && seen.level > 0.05f && level > seen.level * 1.35f)
+            {
+                static int logged = 0;
+                if (logged++ < 200)
+                    std::fprintf(stderr, "[pop:flash] frame %u element %08x idx %u: mean colour %.3f -> %.3f\n[pop:flash]   before: %s\n[pop:flash]   now:    %s\n",
+                                 g_worldSeq, element, index, double(seen.level), double(level), seen.light.c_str(), describeLight(rdram, light).c_str());
+#if POP_LIVE_QUICKSAVE
+                static const bool save = [] {
+                    const char *e = std::getenv("POP_NATIVE_FLASH_SAVE");
+                    return e && *e == '1';
+                }();
+                static int saves = 0;
+                static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(60);
+                const auto now = std::chrono::steady_clock::now();
+                if (save && saves < 5 && now - last > std::chrono::seconds(10))
+                {
+                    ++saves;
+                    last = now;
+                    ps2x::savestate::requestQuickSave();
+                    std::fprintf(stderr, "[pop:flash]   quick-save requested\n");
+                }
+#endif
+            }
+            if (seen.frame != g_worldSeq) // the first draw of the element in a frame
+            {
+                seen.frame = g_worldSeq;
+                seen.level = level;
+                seen.light = describeLight(rdram, light);
+            }
+        }
+
         void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
@@ -1419,6 +1497,8 @@ namespace pop_native_live
                                                  double(guestF(rdram, set + 0x14 + 16 * l)), double(guestF(rdram, set + 0x18 + 16 * l)),
                                                  double(guestF(rdram, set + 0x1C + 16 * l)));
                         }
+                        if (g_world && g_worldCharacters)
+                            flashCheck(rdram, element, index, posed, light);
                         DrawMaterial dm = currentMaterial(rdram);
                         dm.hasUvm = false; // the skin driver has no UV matrix
                         g_framePosed.emplace_back(std::move(posed), dm);
