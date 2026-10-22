@@ -68,7 +68,7 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   Plan, element list, open question (which VU1 program/formula lights them: measure first) and judges (saves 192521,
   204040, 204108; in game memory-card slot 04): `docs/native_renderer.md` "Next: lit statics native". Then the
   pass-2 second layers of V4-32 objects (mirror reflections), then translucents + particles (below).
-- **Open notes:** a full-frame flash right after the loading glyph when entering a scene: ours (the GS-only boot,
+- **Open notes:** a full-frame flash right after the loading glyph when entering a scene (user, 22 Oct ~21:45: probably not a flash but one frame of a random texture drawn full-frame, it looked like a green carpet/curtain, seen loading the mirror-room save): ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`.
 - **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
