@@ -177,8 +177,11 @@ namespace pop_native_world
                     std::fprintf(stderr, "[pop:world] frame %u: no native picture (its static world is missing)\n", seq);
                 return true;
             }
-            // the buffers the frame's 3D draws into: FRAME PSMCT32 640 wide, ZBUF PSMZ24 or PSMZ32
-            if (t.fpsm != 0 || t.fbw != kWidth / 64 || (t.zpsm != 0x30 && t.zpsm != 0x31) || t.zmask)
+            // the buffers the frame's 3D draws into: FRAME PSMCT32 640 wide, ZBUF PSMZ24 or PSMZ32. ZBUF's
+            // write mask is not checked: in some frames (after loading, the fixed vault camera; saves
+            // 171143/171355 of 22 Oct) the last state before the marker has ZMSK 1 with no draw after it, and
+            // the game sets ZMSK 0 right after the marker. Refusing those frames lost their whole static world.
+            if (t.fpsm != 0 || t.fbw != kWidth / 64 || (t.zpsm != 0x30 && t.zpsm != 0x31))
             {
                 if (g_stats.wrongTarget++ < 8)
                     std::fprintf(stderr, "[pop:world] frame %u: unexpected buffers (FRAME fbp %x fbw %u psm %x, ZBUF zbp %x psm %x mask %d)\n", seq,
