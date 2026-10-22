@@ -803,3 +803,14 @@ output words change; `--match <hex word>` picks the runs whose uploads hold a me
   the colours only: `poseSkinned(..., objectSpace)` via `litPose`) and go to g_frameRefs with `poolMatrix(index)`.
   Scores: 214633 8.14 -> 4.85, 204040 11.28 -> 11.21, 204108 4.23 -> 4.22. Left in that save: the centre faceted mirror
   greyer than the game's, one facet of the right hexagon darker.
+
+## Next: translucent draws + particles (plan, 22 Oct ~22:00; rest of renderer step 2, roadmap 0.12)
+Where we are: static world, characters and lit statics (pass 1 lit, pass 2 env map, elements and refs) are native and
+checked in game. What the GS still draws per frame (`pop_state_frame --world`, 108 saves, 22 Oct): ~136 mesh draws /
+3.8k triangles, nearly all translucent (blend 1/4/6 in lists +0x3C, +0x4C, +0x88, +0x98, +0xA8; ~5 opaque in +0x4C),
+~14 GFX particle draws (FUN_00458FC0) and ~6 sprite draws; shadows, halos and shafts are not replayed (0.13).
+Plan: open the world mode (`worldStateOk`) to these lists in the game's draw order, together with the particles
+(particles alone would be drawn over by later GS draws); offline over the saves first (score_saves.sh, A/B with the
+old behaviour), then in game. Check on the way: the angled mirror's missing gold frame (save 204108, top right; not
+a lit static), the load "flash" (one frame of a random texture, user 22 Oct: capture the frames after a load), the
+two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet darker).
