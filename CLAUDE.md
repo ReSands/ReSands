@@ -73,8 +73,12 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   last session (watch). Load-flash candidates in `docs/native_renderer.md`. **Capture ready (23 Oct lunch, 859cff6):** `POP_NATIVE_WORLD_DUMP=<dir>` writes the
   injected pictures around each load (PPM + `index.txt`); launcher `game\jobs\flashplay.ps1` (start-job; dir
   `game\analysis\loadflash`). Play build left building on the PC (`game\jobs\chain.ps1`, log `playbuild.log`, then
-  shuts down). Playtest: slot 04, 3-4 loads; also look at point lights near a fire. Logs of 22 Oct: 0 missed frames,
-  so the flash is in our own picture. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
+  shuts down). **Captured 23 Oct 17:25 (10 loads, `game/analysis/loadflash`):** on every load into gameplay the first 2 injected
+  pictures are drawn from a different, valid in-game camera (close-up wall, top-down view with the characters);
+  frame 3 is right. Menu loads: our picture is clean (the user still saw 2 menu flashes: not ours, or not in the
+  picture). Suspect: the hook ignores FBMSK/display state (patch 38 passes `fbmsk`, unchecked), so frames the game
+  draws masked/unshown become visible. Next: log fbmsk/zmask/fbp/DISPFB per dumped frame, then fix. Torch save
+  `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
 - **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
   saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
   frame; the GS still draws ~136 mesh draws / 3.8k triangles, all translucent (blend 1/4/6 in lists +0x3C, +0x4C,
