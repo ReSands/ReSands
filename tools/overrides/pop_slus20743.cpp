@@ -5,6 +5,9 @@
 
 #include "game_overrides.h"
 #include "ps2_runtime.h"
+#if __has_include("runtime/gs/gs_host_inject.h")
+#include "runtime/gs/gs_host_inject.h"
+#endif
 #include "ps2_runtime_macros.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/gs/ps2_gs_psmct32.h"
@@ -1325,6 +1328,17 @@ namespace
         {
             left = 12;
             ++loads;
+#ifdef GS_HOST_INJECT_START_TRACE
+            // POP_DISPLOG_TRACE=<dir>: a GS trace of the 8 fields from this flip on (the first 4 loads), as
+            // PS2X_GS_TRACE but started here (runtime patch 40): <dir>/load<n>.txt + .vram; decode with tools/gsvram.py
+            static const char *traceDir = std::getenv("POP_DISPLOG_TRACE");
+            if (traceDir && *traceDir && loads <= 4)
+            {
+                const std::string path = std::string(traceDir) + "/load" + std::to_string(loads) + ".txt";
+                const bool started = GSHostInject::startTrace(runtime->memory().gs().vsyncTick.load(), 8, path.c_str());
+                std::fprintf(stderr, "[pop:disp] load %d: GS trace %s\n", loads, started ? path.c_str() : "not started");
+            }
+#endif
         }
         if (left > 0)
         {

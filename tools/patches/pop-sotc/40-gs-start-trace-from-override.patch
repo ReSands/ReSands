@@ -1,0 +1,62 @@
+From 8cd35b8db69c8ff60a84c91612ebf071977d0c0e Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 23 Oct 2026 18:05:10 +0100
+Subject: [PATCH] gs: GSHostInject::startTrace, a GS trace started by a game
+ override at run time
+
+---
+ .../include/runtime/gs/gs_host_inject.h       |  6 +++++
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        | 22 +++++++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_host_inject.h b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+index 1c27ce6..e22e350 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_host_inject.h
++++ b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+@@ -19,4 +19,10 @@ namespace GSHostInject
+     };
+     using Hook = bool (*)(GS &gs, const uint8_t *data, uint32_t sizeBytes, const Targets &targets);
+     void setHook(Hook hook);
++
++    // Starts a GS trace as PS2X_GS_TRACE=<first>:<count>:<path> does (text trace + <path>.vram at the first
++    // traced field), from a game override at run time, e.g. on an event whose field is not known in advance.
++    // False while another trace is open or when the file cannot be created.
++    bool startTrace(uint64_t firstField, uint64_t fieldCount, const char *path);
+ }
++#define GS_HOST_INJECT_START_TRACE 1
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 06ebd77..e7a874e 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -773,6 +773,28 @@ namespace
+     std::atomic<GSHostInject::Hook> s_hostInjectHook{nullptr};
+ }
+ 
++bool GSHostInject::startTrace(uint64_t firstField, uint64_t fieldCount, const char *path)
++{
++    GsTraceConfig &config = g_gsTrace;
++    if (config.file || !path)
++        return false;
++    std::FILE *file = std::fopen(path, "w");
++    if (!file)
++        return false;
++    config.firstTick = firstField;
++    config.endTick = firstField + fieldCount;
++    config.lastTick = UINT64_MAX;
++    config.vramPath = std::string(path) + ".vram";
++    config.seen = false;
++    config.calls = 0;
++    std::fprintf(stderr, "[gs-trace] started by the game: fields %llu..%llu -> %s\n", static_cast<unsigned long long>(firstField),
++                 static_cast<unsigned long long>(firstField + fieldCount), path);
++    // the GS thread checks the file pointer first: set it last
++    std::atomic_thread_fence(std::memory_order_release);
++    config.file = file;
++    return true;
++}
++
+ void GSHostInject::setHook(Hook hook)
+ {
+     s_hostInjectHook.store(hook);
+-- 
+2.55.0.windows.5
+
