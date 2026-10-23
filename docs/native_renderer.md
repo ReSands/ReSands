@@ -834,3 +834,20 @@ two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet da
   clouds are elsewhere or fainter at that moment, so suspect the scroll offset (m[4] = sub +0x14 under 0x40000000) or
   the vertex alpha, not the blend. To settle: the GS-side cloud primitives of the same save (PS2X_GS_TRACE after a state
   load, or the VU1 trace) against ours. Until then `POP_NATIVE_TRANSLUCENT` stays off by default.
+
+## Load flash: what the GS traces show (23 Oct evening; runtime patch 40, POP_DISPLOG_TRACE)
+Traces of the 8 fields after the first save's load, GS only (`loadtrace/gs/load2.txt`) and native
+(`loadtrace/native/load2.txt`; the second save was not traced: trace slowdown made the 300 ms load detector fire
+again). Same scene, the same stale camera on the first 2 frames.
+- **Every normal frame** starts with a clear (20 sprites, black, z=0, ZMSK 0), then the 3D (ZTST GEQUAL), then the post
+  effects. **Frame 1 after a load has no clear**: its 3D (z ~79k) is tested against whatever Z the loading screen
+  left. Likely why it comes out black on the GS (user: "black for exactly the flash's length"); unproven without pixels.
+- **Native frame 1: our picture goes into the wrong buffer.** The marker's FRAME is fbp 0x8C (stale), so the picture and
+  Z are uploaded to 0x8C (`T dst=1180` / `dst=2300` at the top of tick 1942), but the game draws all of frame 1 (rest of
+  the 3D, post effects) into fbp 0, and 0x8C is the buffer on screen (V tick=1942 dispfb1=148c). So the stale-camera
+  picture is written straight into the displayed buffer: the flash. (The "both buffers" test also wrote it into
+  buffer 0, so the flash stayed.)
+- Frame 2 has a clear and draws the full stale-camera world on both paths (GS ~10k primitives).
+- Fix candidates: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
+  buffer index at Display3DElements) instead of the GS state at the marker; (b) honour the frame's missing clear: no
+  injection (or a Z-tested merge) when the Z buffer was not cleared before the marker.
