@@ -63,11 +63,15 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   the mirror room's gold frames, rings and faceted mirrors now drawn; the sword silver-blue with env highlights. In game:
   memory-card slot 04 checked. Small leftovers (save 214633): centre faceted mirror greyer, one hexagon facet darker. Details:
   `docs/native_renderer.md` "Lit statics measured".
-- **NEXT: translucent draws + particles (rest of 0.12; below). Was (22 Oct night, done):** the 500
-  pass-1 static calls now left to the GS (the sword, 40 instanced refs) drawn natively with the character lighting.
-  Plan, element list, open question (which VU1 program/formula lights them: measure first) and judges (saves 192521,
-  204040, 204108; in game memory-card slot 04): `docs/native_renderer.md` "Next: lit statics native". Then the
-  pass-2 second layers of V4-32 objects (mirror reflections), then translucents + particles (below).
+- **NEXT (plan changed 23 Oct evening, user agreed): native shadows, then the lists after them + particles.** Why:
+  the injected picture replaces pixels, so only a prefix of the game's draw order can be native, and the shadows sit
+  between the lightmaps (+0x5C) and +0x88/+0x98/+0xA8, where nearly all GFX particles are (`docs/native_renderer.md`
+  "Translucents before the shadows"). Done first: `POP_NATIVE_TRANSLUCENT=1` (lists before the shadows, any blend;
+  offline 19.48 -> 18.50 over 203 saves), **off by default** until the sky's cloud layer is explained (save 21_202624:
+  ours brighter where the game's clouds are not; suspect the UV scroll offset or vertex alpha; needs the GS-side cloud
+  prims from the PC). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
+  b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
+  0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene (user, 22 Oct ~21:45: probably not a flash but one frame of a random texture drawn full-frame, it looked like a green carpet/curtain, seen loading the mirror-room save): ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`. **Capture ready (23 Oct lunch, 859cff6):** `POP_NATIVE_WORLD_DUMP=<dir>` writes the
@@ -90,14 +94,8 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   runtime patch 40 (GS trace started by an override) is built on the PC; `game\jobs\loadtrace.ps1` = GS-only run then
   native run (2 saves + menu each), traces in `game\analysis\loadtrace\{gs,native}`; compare the 8 fields after each load. Torch save
   `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
-- **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
-  saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
-  frame; the GS still draws ~136 mesh draws / 3.8k triangles, all translucent (blend 1/4/6 in lists +0x3C, +0x4C,
-  +0x88, +0x98, +0xA8) except ~5 opaque in +0x4C, plus ~14 GFX particle and ~6 sprite draws (shadows, halos, shafts
-  not replayed). Plan: open the world mode to these lists in the game's order together with the particles (particles
-  alone would be drawn over by later GS draws), offline over the saves first. Qwen candidate after the water job: the
-  whole character VU1 program (image 31829861, 2,048 lines) to C++, judged on the trace of save 192521
-  (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
+- **Qwen candidate after the water job:** the whole character VU1 program (image 31829861, 2,048 lines) to C++, judged
+  on the trace of save 192521 (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
 - **Qwen night 22-23 Oct: 9 of 21 P6 pieces passed; post-mortem done (23 Oct lunch).** Mostly harness losses: 34% of
   rounds thought for all 32k tokens and wrote no code (now a 16k thinking budget, tested), and `--rounds` was absolute,
   so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Tonight: the user
@@ -132,7 +130,7 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 ## Release roadmap (user, 22 Oct 2026; replaces the 15/16 Oct numbering)
 
 - **0.1 = playable start to finish** with emulated graphics and sound (the two combat freezes of 21 Oct fixed).
-- **0.11 native static world -> 0.12 native characters + particles -> 0.13 native effects** (water P6, sprites P9, shadows, halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.**
+- **0.11 native static world -> 0.12 native characters, translucents, shadows + particles** (shadows moved here 23 Oct: everything after them in the draw order waits for them) **-> 0.13 native effects** (water P6, sprites P9, halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.**
 - **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the emulated GS output of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats differ, so residual differences must be measured and explained).
 - **0.3 = native sound + native PS2 movie decoder:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2 emulation); a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; replaces the 13 Oct plan to adapt ps2-web-recomp's IPU). Reference: GT4Recomp's frame pacing + audio rate control (`docs/reference.md` "GT4Recomp").
 - **0.4 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer (cheap, could come earlier) and SDL3 pad layer (`docs/reference.md` "GT4Recomp").
