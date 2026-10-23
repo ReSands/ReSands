@@ -111,6 +111,45 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
   - **Harold0777/eagle_five_recomp** (Ace Combat 5): VU1 coverage 32% -> 100% of runs (13 programs), GS draw-state cache (hit rate 45 -> 88%), skipping identical GS uploads (~50% of texture bytes), VBlank busy-waits replaced by condition variables (CPU use, pacing).
   - **YYOzcan/Tobiichi-Port** (God of War, SotC base): heaviest scenes ~30 fps, the VU1 thread needs ~20 ms per frame there; nothing on VU0. **Waffle565/God-Of-War-Native-Port**: ~500 VU1 programs AOT, the 8 IRX modules AOT (boot 95 s -> 20 s), DMA packets handed straight to VU1/GS; nothing on VU0. **z3xox/BT3-Recomp** `docs/BOTTLENECK-INVESTIGATION.md`: its fight slowdown = one VU1 program missing from the compiled table (104k interpreted runs/s); renderer, present path, thread count and vsync ruled out by measurement. **SloppyWyn/SRWZ-native**: PCSX2 microVU as the VU1 backend (`PS2X_VU1_KZVU=1`, from KillzoneRecomp): 3 -> 40 fps. **cloudalister/mc3r**: profile only (software GS 64.5 s, VU1 26.6 s, VIF1 23 s of ~400 s), no fixes yet. reo, LightVelox `Docs/PERFORMANCE.md`: nothing measured on the CPU side.
   - Not found anywhere: compiled VU0 with measured gains on a SotC-base runtime, or an EE-dispatch/scheduler speed-up with numbers beyond the above.
+- **GT4Recomp (moesuito/gt4-staticrecomp, MIT; read 23 Oct 2026 at db5c559, release 1.2.3).** Formerly listed as
+  Kaezzey/gt4-staticrecomp (early, 13 Oct). Gran Turismo 4 at a locked 60 fps on Windows. **Base: ps2-web-recomp (MIT),
+  not PS2Recomp**, so its runtime overlays do not carry over to pop-sotc. Graphics stay at the GS level: PCSX2's GS
+  (their fork `moesuito/gt4recomp-gs`, GPL) runs as a separate process fed by a stream so the game executable stays MIT;
+  "CoreGS 2.0" is their own clean-room hardware GS renderer. An engine-level native renderer like ours is only a study
+  (`docs/NATIVE-RENDERER-STUDY.md`, their estimate: over a year). Their installer ships an executable containing the
+  translated game code, which our ground rules forbid (we publish tooling only; users build from their own disc).
+  Everything below is MIT: code may be reused in our GPL-3.0 tree if their copyright notice and licence text are kept
+  with it. Where each item lands in our roadmap (pointers also in CLAUDE.md's roadmap):
+  - **0.3 native sound: frame pacing + audio rate control** (`native/pacing.hpp/.cpp`, `frame_clock.*`,
+    `host_io.cpp`). One wall clock (QueryPerformanceCounter, high-resolution waitable timer, ~0.5 ms spin tail) paces
+    the frames. Audio never blocks the game thread: a linear resampler stretches the produced stream by at most ±0.5%
+    (ratio 0.995-1.005), set by a PI controller from the queued audio (device + ring) against a 60 ms target, ring
+    ~340 ms. Pure logic with a fake clock and device in fixtures (`pacing_fixture.cpp`). Caveat for us: GT4 steps
+    physics at a fixed 1/60 s per VBlank, PoP scales logic by real elapsed time (`TIM_Clock_Update`), so this fixes
+    drift and crackle, not our "sound slows with the frame rate" bug by itself (that one is about where the sound
+    engine's time comes from; measure first).
+  - **0.4 native memory card: crash-safe writes** (`native/memcard_store.hpp/.cpp` + fixture, ~100 lines). Write
+    `<card>.tmp`, flush to stable storage, rename over the card; a crash leaves the old or the new image, never half
+    of each. Its test simulates a crash half-way and before the rename. Cheap; worth taking even before 0.4 given the
+    open combat freezes.
+  - **0.4 pad: SDL3 input layer** (`native/controls.*`, `pad_mapping.*`, `docs/INPUT-SDL3.md`, `docs/CONTROLS.md`).
+    Any controller mapped to the DualShock 2 layout, analog triggers with pressure, remapping, dead zones, fixtures.
+    Reference for our pad work and the SDL rumble plan.
+  - **1.4 widescreen** (`docs/ULTRAWIDE-STUDY.md`, `ULTRAWIDE-NATIVE-STUDY.md`, `native/race_widescreen.*`,
+    `display_aspect.*`). Any aspect ratio (16:10 to 32:9): 3D widened Hor+/Vert+ inside the game's own projection,
+    HUD kept centred at 16:9, menus/movies pillarboxed, internal resolution follows the output. Their list of what
+    breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors, pixel-placed 2D) matches ours. Method worth
+    copying: they checked a PCSX2 widescreen pnach against their ELF word by word before trusting it.
+  - **1.0 publishing**: the Rust launcher (`launcher/`, Tauri: disc-image check, settings, saves, update checks) and
+    `docs/DISTRIBUTION.md` (manifest with SHA-256 per file, licences folder) are a model for packaging, but ours must
+    be a "build it from your own disc" flow since we cannot ship generated code.
+  - **Any time we touch the FPU: `native/fpu_chop.hpp`**, an exact integer model of the EE FPU (round toward zero,
+    denormals flushed, overflow saturated). It catches the one-ulp error of computing div/sqrt in host double and
+    truncating. A second judge for `tools/mmitest/fpuharness.cpp` (note: PCSX2 rounds DIV/SQRT/RSQRT to nearest, which
+    our model follows; check which is right before switching).
+  - Already ours or not needed: MTVU, async GS submission, VU1 ahead of time (pop-sotc has them); VU flag liveness
+    (PCSX2 idea they cite) = step 4 of `docs/vu1_scheduling.md`; wait-loop skipping (our game thread is not the
+    bottleneck); encrypted VU1 microcode, licence-demo cipher (GT4-specific).
 - **To look into later (16 Oct 2026):** theclub654/ProjectCane, a native PC port (Windows/Linux) of Sly Cooper 1 (NTSC), rebuilt by reverse engineering; FFmpeg, shaders embedded at build time, a file extractor that reads the user's ISO. The README does not say how it renders models or handles sound, so read the code before step 5 (live native window) or the native sound mixer. **No licence named: read only, copy nothing.** Not Jade, so no format overlap. Also checked: lombyte-project/Lombyte (Ratchet & Clank matching decomp, GPL-3.0): not useful (matching-decomp route).
 
 ## Texture formats and the PC upgrade (12 Oct 2026)

@@ -26,6 +26,7 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | KIexster/god-of-war-recomp | God of War (SotC base) | `docs/RENDIMIENTO.md`: getenv in hot loops 38%, IOP scheduler 41% (18 Oct) |
 | catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS | Road Trip | VU1 AOT with build-time pipeline scheduling, ~60x (18 Oct) |
 | Harold0777/eagle_five_recomp | Ace Combat 5 perf fork | VU1 100%, GS state cache, VBlank condvars (18 Oct) |
+| moesuito/gt4-staticrecomp (GT4Recomp, MIT) | Gran Turismo 4, release 1.2.3, ps2-web-recomp base | pacing + audio rate control, crash-safe memory card, SDL3 pad, ultrawide, FPU oracle (23 Oct; `docs/reference.md` "GT4Recomp") |
 
 ## From the surveys
 
@@ -68,7 +69,7 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | God of War II HD — native macOS port by static recompilation | andrebrumdev/gow2-recomp |  | unbaked.games (13 Oct) |
 | God of War — Native Port | Waffle565/God-Of-War-Native-Port |  | recomp.fyi (13 Oct) |
 | (god-of-war-recomp) | KIexster/god-of-war-recomp | RSGAM | unbaked.games (13 Oct) |
-| Gran Turismo 4 | Kaezzey/gt4-staticrecomp | R | unbaked.games (13 Oct) |
+| Gran Turismo 4 | Kaezzey/gt4-staticrecomp (now moesuito/gt4-staticrecomp) | own (ps2-web-recomp) GAWTFP | unbaked.games (13 Oct); re-read 23 Oct, see the hand-noted row |
 | Guitar Hero II | noahbaxter/GHClassic | RM2UF | unbaked.games (13 Oct) |
 | Guitar Hero II Recompiled | sp00nznet/gh2 |  | unbaked.games (13 Oct) |
 | Guitar Hero II – Recompiled Files | KrispyKerabs/GuitarHero2recomp |  | unbaked.games (13 Oct) |
