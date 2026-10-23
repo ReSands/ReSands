@@ -148,3 +148,13 @@ setup stage), starts a fresh conversation every N rounds (`--fresh 3`) and stops
 the judge builds with MSVC on the PC (`judge.cpp`: watchdog thread instead of `alarm`). Night job
 `tools/windows/oct22.ps1` (desktop shortcut "Qwen overnight (then shuts down)"): two passes of 6 rounds,
 `--chain` when everything passes, then the PC shuts down; log `game\jobs\qwen-night.log`.
+
+**22-23 Oct night: 9 of 21 pieces passed** (job 21:56 -> 07:30 cut-off, then shut down as designed; the 18:52
+entries at the top of the log are a test start with `-Until 18:56`). Passed: a_g1_in1a, a_g1_in1b, a_g1_in2a,
+a_g1_in2b, a_g2_in1b (pass 2), b_g1_in1a, b_g2_head_a, b_g2_head_b, b_g2_in2b. Not passed: a_g1_in2c,
+a_g2_in1a/in2a/in2b/in3a/in3b, b_g1_in1b, b_g2_in1a/in1b/in2a, a_check, b_check. Pass 2 reached only 4 stages
+before 07:30 (~30-50 min per failing stage); `--chain` did not run. Leads, not yet examined: **b_check
+"not passed" in under a minute** (04:54 -> 04:54: setup or judge failure, not the model); the a_g2 group fails
+almost entirely (5 of 6); my `dir` for `vu1_p6_*PASS*` found nothing (check the actual result file names).
+Next (user, 23 Oct): dig into the per-stage logs/transcripts under `game\analysis\qwen\` for why each failed,
+then improve tonight's run (more time per stage? smaller cuts? better examples? the checks fixed?).
