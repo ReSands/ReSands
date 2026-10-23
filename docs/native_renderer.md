@@ -828,3 +828,9 @@ two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet da
   Worst "regression" 18_202622 (+4.4) is a cutscene: the game's letterbox bars (2D, later) over our now-drawn floor;
   the floor there is a translucent layer over a reflected room (without the switch the reflection's pillars show).
   Real difference: 21_202624 (palace at night): the translucent cloud layers come out brighter/whiter than the game's.
+- **The cloud layer (save 21_202624):** list 200 draw 3, flags `40010307` (blend 1, no Z write, AFAIL, UV scroll from
+  sub +0x14), texture 66001738, vertex colour ~0.93 (0x80 = 1.0), vertex alpha ~0.31. In two cloud regions the game's
+  picture equals our frame *without* the layer (48/68/79 vs 50/70/81) and ours with it is +7..+9 brighter: the game's
+  clouds are elsewhere or fainter at that moment, so suspect the scroll offset (m[4] = sub +0x14 under 0x40000000) or
+  the vertex alpha, not the blend. To settle: the GS-side cloud primitives of the same save (PS2X_GS_TRACE after a state
+  load, or the VU1 trace) against ours. Until then `POP_NATIVE_TRANSLUCENT` stays off by default.
