@@ -48,8 +48,6 @@ namespace pop_native_world
             std::vector<uint8_t> rgba;  // CT32 byte order (R, G, B, A)
             std::vector<uint32_t> gsZ;  // per pixel GS Z (24 bits)
             std::string gs;             // the frame's targets at its marker (load-flash capture only)
-            std::vector<uint8_t> shown; // load-flash capture: the last presented picture at the marker (RGBA)
-            uint32_t shownW = 0, shownH = 0;
         };
 
         std::mutex g_mutex;
@@ -177,21 +175,6 @@ namespace pop_native_world
                     std::fclose(f);
                 }
             }
-            if (pic.shownW && pic.shown.size() >= size_t(pic.shownW) * pic.shownH * 4)
-            {
-                char shownName[64];
-                std::snprintf(shownName, sizeof shownName, "load%02d_%s_%06u_shown.ppm", g_dump.loads, when, pic.seq);
-                if (FILE *f = std::fopen((g_dump.dir + "/" + shownName).c_str(), "wb"))
-                {
-                    std::fprintf(f, "P6\n%u %u\n255\n", pic.shownW, pic.shownH);
-                    std::vector<uint8_t> rgb(size_t(pic.shownW) * pic.shownH * 3);
-                    for (size_t i = 0; i < size_t(pic.shownW) * pic.shownH; ++i)
-                        for (int c = 0; c < 3; ++c)
-                            rgb[i * 3 + c] = pic.shown[i * 4 + c];
-                    std::fwrite(rgb.data(), 1, rgb.size(), f);
-                    std::fclose(f);
-                }
-            }
             if (FILE *f = std::fopen((g_dump.dir + "/index.txt").c_str(), "a"))
             {
                 const double n = double(kWidth) * kHeight;
@@ -278,20 +261,13 @@ namespace pop_native_world
             if (!found)
                 pic.seq = seq;
             {
+                // the buffers at the marker (load-flash capture; the presented picture is not readable here: the
+                // play build presents on the GPU, GSSharedPresent, 23 Oct)
                 static const bool dumping = std::getenv("POP_NATIVE_WORLD_DUMP") != nullptr;
                 if (dumping)
                 {
-                    // what the presenter showed last (display/source FBP; "preferred" = the runtime's display-copy
-                    // shortcut, GS::updatePreferredDisplaySourceForDraw) and its current preferred source
-                    uint32_t displayFbp = 0, sourceFbp = 0, prefDest = 0;
-                    bool usedPreferred = false;
-                    gs.copyLatchedHostPresentationFrame(pic.shown, pic.shownW, pic.shownH, &displayFbp, &sourceFbp, &usedPreferred);
-                    GSFrameReg pref{};
-                    const bool hasPref = gs.getPreferredDisplaySource(pref, prefDest);
-                    char gsText[192];
-                    std::snprintf(gsText, sizeof gsText, "FRAME fbp %x fbmsk %08x, ZBUF zbp %x psm %x zmsk %d; shown display %x source %x preferred %d; "
-                                                         "preferred now %d (source %x -> dest %x)",
-                                  t.fbp, t.fbmsk, t.zbp, t.zpsm, int(t.zmask), displayFbp, sourceFbp, int(usedPreferred), int(hasPref), pref.fbp, prefDest);
+                    char gsText[96];
+                    std::snprintf(gsText, sizeof gsText, "FRAME fbp %x fbmsk %08x, ZBUF zbp %x psm %x zmsk %d", t.fbp, t.fbmsk, t.zbp, t.zpsm, int(t.zmask));
                     pic.gs = gsText;
                 }
             }

@@ -814,3 +814,17 @@ Plan: open the world mode (`worldStateOk`) to these lists in the game's draw ord
 old behaviour), then in game. Check on the way: the angled mirror's missing gold frame (save 204108, top right; not
 a lit static), the load "flash" (one frame of a random texture, user 22 Oct: capture the frames after a load), the
 two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet darker).
+
+## Translucents before the shadows: POP_NATIVE_TRANSLUCENT=1 (23 Oct evening, offline)
+- **Prefix rule.** The injected picture is an image upload that replaces pixels, so only a prefix of the game's draw
+  order can be native. Display3DElements: 200, +0x2C, +0x3C, +0x68, +0x78, +0x4C, lightmaps +0x5C (native), shadows
+  (GS), +0x88, +0x98, +0xA8. So the lists after the shadows, and with them nearly all GFX particles (203 saves: 2,777
+  of 2,854 GFX entries are in +0x88, the rest in +0x2C), wait for native shadows. Frame alpha (glow mask) needs nothing
+  in the prefix: only +0x98 writes it.
+- **Measured (203 saves, per frame):** can go native now (+0x3C, +0x4C; +0x68/+0x78 empty): ~53 GS draws / ~2,250
+  triangles; after the shadows: ~89 draws / ~2,500 triangles + ~13 GFX particle draws.
+- **Switch:** `worldStateOk` takes every draw of the prefix lists, any blend (the writer keeps the game's order by seq).
+  Offline A/B (world frame vs the game's picture, `livecmp score`): mean 19.48 -> 18.50; 117 better, 19 worse, 67 same.
+  Worst "regression" 18_202622 (+4.4) is a cutscene: the game's letterbox bars (2D, later) over our now-drawn floor;
+  the floor there is a translucent layer over a reflected room (without the switch the reflection's pillars show).
+  Real difference: 21_202624 (palace at night): the translucent cloud layers come out brighter/whiter than the game's.

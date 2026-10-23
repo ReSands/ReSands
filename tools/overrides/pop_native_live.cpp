@@ -280,13 +280,28 @@ namespace pop_native_live
             return f;
         }
 
+        // POP_NATIVE_TRANSLUCENT=1 (23 Oct, being judged): every draw of the lists Display3DElements draws before
+        // the shadows (200, +0x2C, +0x3C, +0x68, +0x78, +0x4C; the lightmaps +0x5C are native already), any blend.
+        // The picture is an upload that replaces pixels, so only a prefix of the game's order can be native:
+        // the lists after the shadows (+0x88, +0x98, +0xA8, and nearly all GFX particles, in +0x88) wait for
+        // native shadows. Frame alpha needs nothing here: only +0x98 writes it (EraseAlphaBuffer runs before it).
         bool worldStateOk(uint8_t *rdram)
         {
-            if (!g_worldOpen || (g_currentList != 200u && g_currentList != 0x2Cu && g_currentList != 0x3Cu))
+            static const bool translucent = [] {
+                const char *e = std::getenv("POP_NATIVE_TRANSLUCENT");
+                return e && *e == '1';
+            }();
+            if (!g_worldOpen)
+                return false;
+            const bool opaqueList = g_currentList == 200u || g_currentList == 0x2Cu || g_currentList == 0x3Cu;
+            const bool prefixList = opaqueList || g_currentList == 0x68u || g_currentList == 0x78u || g_currentList == 0x4Cu;
+            if (!(translucent ? prefixList : opaqueList))
                 return false;
             const uint32_t sub = guestAny(rdram, 0x70000034u);
             if (!sub)
                 return false;
+            if (translucent)
+                return true;
             const uint32_t flags = guestAny(rdram, sub + 4);
             if (((flags >> 16) & 0xF) != 0 || (flags & 0x200) || (flags & 0x40) || !guest8(rdram, 0x70000038u) ||
                 guestAny(rdram, 0x70000044u) != 0xFFFFFFFFu)
