@@ -28,6 +28,7 @@ $untilUnix = [int64]([DateTimeOffset]$end).ToUnixTimeSeconds()
 Say "== Qwen night: P6 stages until $($end.ToString('ddd HH:mm'))"
 
 $finished = $false
+$started = Get-Date
 try {
     $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
     $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -43,7 +44,8 @@ try {
     $cmd = Get-Content -Raw $cmdFile
     if ($cmd -match '--reasoning-budget -1 ') {
         $msg = '--reasoning-budget 16000 --reasoning-budget-message "Thinking budget reached: stop reasoning now and write the complete file in one cpp code block." '
-        Set-Content -Encoding ascii -NoNewline $cmdFile ($cmd -replace '--reasoning-budget -1 ', $msg)
+        # .NET, not Set-Content: in this script PS 5.1 rejected Set-Content -Encoding (23 Oct, first start)
+        [IO.File]::WriteAllText($cmdFile, ($cmd -replace '--reasoning-budget -1 ', $msg), [Text.Encoding]::ASCII)
         & "$Root\tools\windows\llama-serve.ps1" -Stop | Out-Null
         Say 'llama-serve.cmd: thinking budget 16000 set'
     }
@@ -86,7 +88,9 @@ try {
     $finished = $true
 } catch {
     Say "ERROR: $_"
-    $finished = $true
+    # an error in the first 15 minutes means the user is probably still at the PC: leave it on
+    $finished = ((Get-Date) - $started).TotalMinutes -gt 15
+    if (-not $finished) { Say 'error soon after the start: no shutdown' }
 } finally {
     Say 'stopping llama-server'
     & "$Root\tools\windows\llama-serve.ps1" -Stop | Out-Null
