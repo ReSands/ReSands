@@ -29,7 +29,7 @@ Decided 22 Oct: keep our own native renderer (the PS2 look, haze and post-proces
 - Provenance: our code (overrides, HLE replacements, tools) comes only from the PoP binary, our own analysis, public hardware documents and open-source projects under compatible licences. Never use leaked Sony SDK source, headers or samples (e.g. ezmpeg), and do not write such code from memory. Precedent: OpenRAC/rac1-decomp reverted its whole movie player for this (its `docs/MOVIE.md`).
 - Be straightforward in status reports: say plainly when something does not work.
 
-## Current status (22 Oct 2026 night; start here)
+## Current status (23 Oct 2026 evening; start here)
 
 Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on 22 Oct 2026 evening").
 
@@ -72,6 +72,12 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   prims from the PC). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
+  **Order for the next session:** (1) cloud layer: fetch the GS-side cloud prims for save 21_202624 (a GS trace or
+  `popstate.py` VRAM), find the UV/alpha difference, then turn `POP_NATIVE_TRANSLUCENT` on by default after an A/B
+  over the saves; (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour
+  (measure from a VU1 trace like the light probe), draw offline over the saves, judge on save 172041; (3) open the
+  world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
+  the GFX particles. Each step offline first, then a user check in game.
 - **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
   runtime patch 40): frame 1 after a load has no clear sprite, so FRAME at our marker was still the loading screen's
   target = the buffer on screen, and the stale-camera picture was uploaded onto the display. Fix: never inject into
