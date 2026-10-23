@@ -44,6 +44,7 @@ namespace pop_native_world
         {
             uint32_t seq = 0;
             bool ok = false;
+            uint32_t draws = 0;
             std::vector<uint8_t> rgba;  // CT32 byte order (R, G, B, A)
             std::vector<uint32_t> gsZ;  // per pixel GS Z (24 bits)
         };
@@ -115,6 +116,7 @@ namespace pop_native_world
                     loader.keptMissing = 0;
                 }
                 const auto t2 = std::chrono::steady_clock::now();
+                pic.draws = uint32_t(draws.size());
                 pic.ok = pic.ok && renderer.renderOffscreen(kWidth, kHeight, clip, draws, pic.rgba, error, nullptr, &pic.gsZ);
                 const auto t3 = std::chrono::steady_clock::now();
                 g_stats.loadMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
@@ -135,6 +137,89 @@ namespace pop_native_world
                     g_done.pop_front(); // frames whose marker never came (or came first)
                 g_ready.notify_all();
             }
+        }
+
+        // Load-flash capture (POP_NATIVE_WORLD_DUMP=<dir>): after a pause of >= 300 ms between two markers
+        // or the first frame with native draws after one without (a load), the 3 frames before it and the 12 after it are written to <dir> as PPM (colour of the
+        // injected picture), with a line each in <dir>/index.txt: frame, pause, draws, coverage (alpha != 0),
+        // mean colour, or "MISSED" (no picture: the frame keeps whatever was in its buffers). For the
+        // full-frame flash after the loading glyph (docs/native_renderer.md "Load flash is ours").
+        struct Dump
+        {
+            std::string dir;
+            int loads = 0, left = 0;
+            uint32_t lastDraws = 0;
+            std::chrono::steady_clock::time_point last{};
+            std::deque<Picture> before; // the last 3 frames, written when a pause is seen
+        } g_dump;
+
+        void dumpPicture(const Picture &pic, bool found, double gapMs, const char *when)
+        {
+            char name[64];
+            std::snprintf(name, sizeof name, "load%02d_%s_%06u.ppm", g_dump.loads, when, pic.seq);
+            uint64_t covered = 0, sum[3] = {0, 0, 0};
+            if (found && pic.ok && pic.rgba.size() == size_t(kWidth) * kHeight * 4)
+            {
+                if (FILE *f = std::fopen((g_dump.dir + "/" + name).c_str(), "wb"))
+                {
+                    std::fprintf(f, "P6\n%u %u\n255\n", kWidth, kHeight);
+                    std::vector<uint8_t> rgb(size_t(kWidth) * kHeight * 3);
+                    for (size_t i = 0; i < size_t(kWidth) * kHeight; ++i)
+                    {
+                        for (int c = 0; c < 3; ++c)
+                            sum[c] += rgb[i * 3 + c] = pic.rgba[i * 4 + c];
+                        covered += pic.rgba[i * 4 + 3] != 0;
+                    }
+                    std::fwrite(rgb.data(), 1, rgb.size(), f);
+                    std::fclose(f);
+                }
+            }
+            if (FILE *f = std::fopen((g_dump.dir + "/index.txt").c_str(), "a"))
+            {
+                const double n = double(kWidth) * kHeight;
+                if (found && pic.ok)
+                    std::fprintf(f, "load %02d %-6s frame %u pause %.0f ms: %u draws, coverage %.1f%%, mean %.1f %.1f %.1f  %s\n", g_dump.loads, when,
+                                 pic.seq, gapMs, pic.draws, 100.0 * covered / n, sum[0] / n, sum[1] / n, sum[2] / n, name);
+                else
+                    std::fprintf(f, "load %02d %-6s frame %u pause %.0f ms: MISSED (%s)\n", g_dump.loads, when, pic.seq, gapMs,
+                                 found ? "not drawn" : "no picture");
+                std::fclose(f);
+            }
+        }
+
+        // called for every marker; `pic` is kept for the next frames' "before" list
+        void dumpFrame(Picture &pic, bool found)
+        {
+            static const char *dir = std::getenv("POP_NATIVE_WORLD_DUMP");
+            if (!dir || !*dir)
+                return;
+            if (g_dump.dir.empty())
+                g_dump.dir = dir;
+            const auto now = std::chrono::steady_clock::now();
+            const double gapMs = g_dump.last.time_since_epoch().count() ? std::chrono::duration<double, std::milli>(now - g_dump.last).count() : 0.0;
+            g_dump.last = now;
+            const uint32_t draws = found && pic.ok ? pic.draws : 0;
+            const bool worldBack = draws > 0 && g_dump.lastDraws == 0;
+            g_dump.lastDraws = draws;
+            if ((gapMs >= 300.0 || worldBack) && g_dump.left == 0 && g_dump.loads < 30)
+            {
+                ++g_dump.loads;
+                g_dump.left = 12;
+                for (const Picture &b : g_dump.before)
+                    dumpPicture(b, true, 0.0, "before");
+                std::fprintf(stderr, "[pop:world] load %d (pause %.0f ms, world back %d): dumping frames to %s\n", g_dump.loads, gapMs, int(worldBack), dir);
+            }
+            if (g_dump.left > 0)
+            {
+                --g_dump.left;
+                dumpPicture(pic, found, gapMs, "after");
+            }
+            pic.gsZ.clear();
+            g_dump.before.push_back(found ? std::move(pic) : Picture{});
+            if (!found)
+                g_dump.before.back().seq = pic.seq;
+            while (g_dump.before.size() > 3)
+                g_dump.before.pop_front();
         }
 
         // The GS hook: the marker is a 2-qword PACKED GIF packet (NLOOP 1, EOP, NREG 1, A+D) writing
@@ -172,8 +257,11 @@ namespace pop_native_world
                     }
                 g_stats.waitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             }
+            if (!found)
+                pic.seq = seq;
             if (!found || !pic.ok)
             {
+                dumpFrame(pic, found);
                 if (g_stats.missed++ < 8)
                     std::fprintf(stderr, "[pop:world] frame %u: no native picture (its static world is missing)\n", seq);
                 return true;
@@ -216,6 +304,7 @@ namespace pop_native_world
             }
             const uint64_t zbuf = (uint64_t(t.zbp * 32u) << 32) | (uint64_t(kWidth / 64) << 48) | (uint64_t(t.zpsm) << 56);
             gs.uploadImageNative(zbuf, 0, trxreg, 0, z.data(), uint32_t(z.size()));
+            dumpFrame(pic, true);
             if (++g_stats.injected % 600 == 0)
             {
                 std::lock_guard<std::mutex> lock(g_mutex);
