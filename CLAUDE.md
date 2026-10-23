@@ -67,14 +67,14 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   the injected picture replaces pixels, so only a prefix of the game's draw order can be native, and the shadows sit
   between the lightmaps (+0x5C) and +0x88/+0x98/+0xA8, where nearly all GFX particles are (`docs/native_renderer.md`
   "Translucents before the shadows"). Done first: `POP_NATIVE_TRANSLUCENT=1` (lists before the shadows, any blend;
-  offline 19.48 -> 18.50 over 203 saves), **off by default** until the sky's cloud layer is explained (save 21_202624:
-  ours brighter where the game's clouds are not; suspect the UV scroll offset or vertex alpha; needs the GS-side cloud
-  prims from the PC). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
+  now **on by default in `play.ps1`** (`-NoNativeTranslucent` = off; 23 Oct night). The cloud "bug" of save 21_202624 was
+  the offline judge: `pop_native_view --frame` drew PNF7 frames opaque-first, so the clouds landed on the opaque horizon
+  band the game draws after them; the game window was always in game order. Viewer fixed; A/B over 201 saves 19.24 ->
+  18.23 (108 better, 14 worse = letterboxed cutscenes). **User check in game pending** (needs the PC to pull this
+  commit; no rebuild). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
-  **Order for the next session:** (1) cloud layer: fetch the GS-side cloud prims for save 21_202624 (a GS trace or
-  `popstate.py` VRAM), find the UV/alpha difference, then turn `POP_NATIVE_TRANSLUCENT` on by default after an A/B
-  over the saves; (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour
+  **Order for the next session:** (1) done (above; user check in game); (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour
   (measure from a VU1 trace like the light probe), draw offline over the saves, judge on save 172041; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.

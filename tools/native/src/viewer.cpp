@@ -174,11 +174,13 @@ int main(int argc, char **argv)
         options.gameOrder = true; // live frames are PNF5
     else if (framePath)
     {
-        // PNF4 frames list the draws in the game's own order: draw them in one pass in that order
+        // PNF4 onwards list the draws in the game's own order: draw them in one pass in that order (as the
+        // game window does; two passes put translucents over later opaque draws, e.g. the sky's cloud layer
+        // over the horizon band drawn after it, save 21_202624)
         std::ifstream peek(argv[1], std::ios::binary);
         char magic[4] = {};
         peek.read(magic, 4);
-        options.gameOrder = std::memcmp(magic, "PNF4", 4) == 0 || std::memcmp(magic, "PNF5", 4) == 0;
+        options.gameOrder = std::memcmp(magic, "PNF", 3) == 0 && magic[3] >= '4' && magic[3] <= '9';
     }
     cgltf_options opt{};
     cgltf_data *data = nullptr;

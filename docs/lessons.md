@@ -164,3 +164,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   buffer on screen. Getting there took 6 playtests: a GS trace of the frames in question (runtime patch 40, started from
   an override at the moment of interest) settled what dumps of our own picture could not.
 - **Put seconds in log names** when two boots can start within a minute (one GS-only log was overwritten).
+- **Check the judge before the thing judged (23 Oct, cloud layer).** A "native renders the clouds wrong" lead was the
+  offline viewer drawing a newer frame format opaque-first while the game window drew in game order. Every input the
+  draw had (texture, UV matrix, vertex alpha, GS state) matched the game's DMA chain; the order of the draws did not. When
+  a difference only shows offline, diff the offline path's settings against the in-game path first.

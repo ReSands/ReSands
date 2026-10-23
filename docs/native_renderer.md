@@ -834,6 +834,29 @@ two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet da
   clouds are elsewhere or fainter at that moment, so suspect the scroll offset (m[4] = sub +0x14 under 0x40000000) or
   the vertex alpha, not the blend. To settle: the GS-side cloud primitives of the same save (PS2X_GS_TRACE after a state
   load, or the VU1 trace) against ours. Until then `POP_NATIVE_TRANSLUCENT` stays off by default.
+- **Settled offline (23 Oct night): the offline judge, not the native draws.** `pop_native_view --frame` used the game's
+  draw order only for PNF4/PNF5; `pop_state_frame` writes PNF7, so offline frames drew all opaque draws first and all
+  blended ones after. The cloud layer (draw 3) then landed on top of draw 4, the opaque horizon band drawn right after
+  it (same UV scroll; ALPHA 0x29 with FIX 0 = Cs, ZMSK 0, constant colour by STROW 0x16/0x20/0x2A = its material's +8
+  0x2A2016). The game window always used game order (`pop_native_world.cpp` sets `gameOrder`). Fixed in the viewer (PNF4
+  and later = one pass in order). 21_202624: 6.16 -> 5.03 (translucents off 5.05).
+  Checked against the save's DMA chain (scratch walkers over `statechain.chain_words`): the cloud's UV matrix (VU 0x15-0x17,
+  scroll 0.792 vs ours 0.793 one frame later), texture (PSMT8 128x128 + CT32 palette uploaded in the chain: byte-identical
+  to `jadetex` decode), vertex colour/alpha (alpha 0 or 60 per vertex, mean 0.31), GS state (ALPHA 0x44, ZTST GEQUAL, no
+  alpha test, ZMSK 1, CLAMP REPEAT, FOGCOL 0xD1CB98), all as ours.
+- **Static driver (image 9d41512c = e10ba587 = eea60abc for the first 1,424 dwords), read along the way.** MSCALF 0x196
+  (byte 0xCB0) is the setup; each batch: header qw 0/1 = box centre/extent, culled whole if all 8 corners are outside one
+  plane (0x530); qw 2 = the GIF tag sent; VU 17.w (the GIF tag template's last word) = mode: 1 = plain (0xEC8, or clip
+  path 0x1090), 2 = UV matrix (0x18A8: u' = m0 u + m2 v + m4, v' = m1 u + m3 v + m5, uv = raw / 512), 3/4 other paths, 0 =
+  a layout with positions at +0x43. VU 8-11 = screen matrix, 12-15 = clip matrix (both times the model matrix at VU 0-3),
+  16 = fog (255, 0, a, b), F = a + b w. Per triangle (clip path): any vertex beyond +z (the far plane, w ~3,470 in this
+  save) -> dropped; all three outside one of -z/+-x/+-y -> dropped; any vertex behind -z or outside the 0..4095 guard band
+  -> Sutherland-Hodgman clipper (0xA88/0x840, colours and UVs carried); else drawn. So a native far-plane cull would only
+  matter for geometry beyond ~3,500 units.
+- **A/B with the fixed judge (23 Oct night, 201 saves, characters on):** mean 19.24 -> 18.23; 108 better, 14 worse, 79
+  same. The worst three are cutscenes: letterbox bars (2D, 0.14) over our now-drawn floor (18_202622 +4.4, 20_213411
+  +1.7) and 19_192022 (+1.8, a cutscene camera unrelated to the save). **On by default in `play.ps1`** (`-NoNativeTranslucent`
+  turns it off); waiting for the user's check in game.
 
 ## Load flash: what the GS traces show (23 Oct evening; runtime patch 40, POP_DISPLOG_TRACE)
 Traces of the 8 fields after the first save's load, GS only (`loadtrace/gs/load2.txt`) and native
