@@ -192,6 +192,9 @@ namespace pop_native_live
             return e && *e == '1';
         }();
         bool g_worldMarked = false; // this frame has a marker (Display3DElements ran since the kick)
+        // Load-flash capture (POP_NATIVE_WORLD_DUMP): Display3DElements calls this frame, and the world -> clip
+        // matrix at each later call and at the kick when it differs from the one the frame was captured with
+        uint32_t g_worldViews = 0;
         bool g_worldOpen = false; // draws may go native: the frame's first Display3DElements call
         uint32_t g_worldSeq = 0;
         std::unordered_set<uint64_t> g_worldBase; // (element << 16 | matrix index) drawn natively this frame
@@ -2539,6 +2542,26 @@ namespace pop_native_live
             g_haloAddsInWindow = 0;
         }
 
+        void logClipChange(uint8_t *rdram, const char *when)
+        {
+            static const bool on = std::getenv("POP_NATIVE_WORLD_DUMP") != nullptr;
+            static int logged = 0;
+            const uint32_t gs = guestAny(rdram, 0x00675148u);
+            if (!on || !gs || logged >= 400)
+                return;
+            float now[16], diff = 0.0f;
+            for (int k = 0; k < 16; ++k)
+            {
+                now[k] = guestF(rdram, gs + 0x240u + 4u * k);
+                diff = std::max(diff, std::fabs(now[k] - g_frameClip[k]));
+            }
+            if (diff < 1e-4f && std::strcmp(when, "kick") == 0)
+                return;
+            ++logged;
+            std::fprintf(stderr, "[pop:world] frame %u: %s (views %u), clip changed by %.4g; row 3 captured %.3f %.3f %.3f %.3f, now %.3f %.3f %.3f %.3f\n",
+                         g_worldSeq, when, g_worldViews, diff, g_frameClip[12], g_frameClip[13], g_frameClip[14], g_frameClip[15], now[12], now[13], now[14], now[15]);
+        }
+
         // POP_NATIVE_WORLD: the frame's first Display3DElements starts its capture and puts the marker
         // in the DMA list; a later one in the same frame (another view) leaves its draws to the GS
         void worldDisplay3D(uint8_t *rdram)
@@ -2546,8 +2569,11 @@ namespace pop_native_live
             if (g_worldMarked)
             {
                 g_worldOpen = false;
+                ++g_worldViews;
+                logClipChange(rdram, "Display3DElements again");
                 return;
             }
+            g_worldViews = 1;
             resetFrameCapture();
             g_worldBase.clear();
             g_worldMissing.clear();
@@ -2582,6 +2608,7 @@ namespace pop_native_live
             const uint32_t ra = getRegU32(ctx, 31);
             if (g_worldMarked && ra >= 0x004A20C0u && ra < 0x004A2200u)
             {
+                logClipChange(rdram, "kick");
                 std::vector<uint8_t> f;
                 writeFrame(true, &f);
                 pop_native_world::submitFrame(g_worldSeq, std::move(f));

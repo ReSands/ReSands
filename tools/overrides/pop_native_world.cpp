@@ -287,14 +287,7 @@ namespace pop_native_world
             // at bit 32; TRXPOS 0 (destination 0, 0), TRXDIR 0 (host -> local)
             const uint64_t trxreg = uint64_t(kWidth) | (uint64_t(kHeight) << 32);
             const uint64_t frame = (uint64_t(t.fbp * 32u) << 32) | (uint64_t(t.fbw) << 48);
-            // A frame whose 3D draws with every colour bit masked (FBMSK all ones) shows none of it on the GS, so
-            // its picture is not written; its Z still is. Suspect for the load flash: the first 2 frames after a
-            // load draw from a stale camera (capture of 23 Oct); if so they are drawn masked.
-            const bool colourMasked = t.fbmsk == 0xFFFFFFFFu;
-            if (colourMasked)
-                pic.gs += " (colour not written)";
-            else
-                gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
+            gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
             const bool z24 = t.zpsm == 0x31;
             // Depth bias (POP_NATIVE_WORLD_ZBIAS, Z24 units, default 128): the native Z lies slightly nearer
             // than the VU1 programs' Z on 27% of the world's pixels (19 Oct saves: p50 19, p99 106, p99.9 442
