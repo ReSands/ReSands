@@ -72,6 +72,7 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   prims from the PC). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
+- **Load flash: cause found, fix built, not yet checked in game (23 Oct evening, 85587ef).** GS traces: frame 1 after a load has no clear sprite, so FRAME at our marker is still the loading screen's target = the buffer on screen, and our stale-camera picture was uploaded straight onto the display. Fix: never inject into the displayed buffer (DISPFB1), take the other one of the pair (logs `[pop:world] frame N: FRAME fbp .. is on screen`). User check: 2 saves with the menu between. Details: `docs/native_renderer.md` "Load flash: what the GS traces show".
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene (user, 22 Oct ~21:45: probably not a flash but one frame of a random texture drawn full-frame, it looked like a green carpet/curtain, seen loading the mirror-room save): ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
   last session (watch). Load-flash candidates in `docs/native_renderer.md`. **Capture ready (23 Oct lunch, 859cff6):** `POP_NATIVE_WORLD_DUMP=<dir>` writes the
