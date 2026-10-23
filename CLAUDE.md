@@ -70,7 +70,11 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   pass-2 second layers of V4-32 objects (mirror reflections), then translucents + particles (below).
 - **Open notes:** a full-frame flash right after the loading glyph when entering a scene (user, 22 Oct ~21:45: probably not a flash but one frame of a random texture drawn full-frame, it looked like a green carpet/curtain, seen loading the mirror-room save): ours (the GS-only boot,
   `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
-  last session (watch). Load-flash candidates in `docs/native_renderer.md`.
+  last session (watch). Load-flash candidates in `docs/native_renderer.md`. **Capture ready (23 Oct lunch, 859cff6):** `POP_NATIVE_WORLD_DUMP=<dir>` writes the
+  injected pictures around each load (PPM + `index.txt`); launcher `game\jobs\flashplay.ps1` (start-job; dir
+  `game\analysis\loadflash`). Play build left building on the PC (`game\jobs\chain.ps1`, log `playbuild.log`, then
+  shuts down). Playtest: slot 04, 3-4 loads; also look at point lights near a fire. Logs of 22 Oct: 0 missed frames,
+  so the flash is in our own picture. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
 - **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
   saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
   frame; the GS still draws ~136 mesh draws / 3.8k triangles, all translucent (blend 1/4/6 in lists +0x3C, +0x4C,
