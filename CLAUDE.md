@@ -82,7 +82,13 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   shortcut (never set). Seen: the game double-buffers fbp 0/8c, but on every load (menu too) the first 2 markers
   report the same FRAME fbp. Leading theory: on frame 1 the FRAME at the marker is still the loading screen's (the
   same lag as the ZMSK note in `pop_native_world.cpp`), so our picture lands in the wrong buffer and the shown frame
-  lacks its world. Unproven: the presented picture could not be captured (GSSharedPresent: no CPU pixels). Torch save
+  lacks its world. Unproven: the presented picture could not be captured (GSSharedPresent: no CPU pixels). **Then ruled out too:** wrong
+  buffer (picture into both buffers for 2 frames: flash unchanged). **Established:** GS-only has no flash, the screen
+  is briefly black there instead (user); the game's world->clip (+0x240) is stale for exactly the first 2 flips after a
+  gameplay load (POP_DISPLOG); PMODE/BGCOLOR constant, DISPFB alternates normally: the black is something the GS draws
+  that our picture gets past. **PARKED, ready to run (user chose the real cause over a black-frames heuristic):**
+  runtime patch 40 (GS trace started by an override) is built on the PC; `game\jobs\loadtrace.ps1` = GS-only run then
+  native run (2 saves + menu each), traces in `game\analysis\loadtrace\{gs,native}`; compare the 8 fields after each load. Torch save
   `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
 - **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
   saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
