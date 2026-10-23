@@ -1308,6 +1308,40 @@ namespace
         }
         g_capProbeOrig[I](rdram, ctx, runtime);
     }
+    // POP_DISPLOG=1 (load flash, 23 Oct): at PS2_Flip (0x4A20C0) for the 12 frames after a pause of >= 300 ms
+    // (a load), the display registers and the world -> clip translation: how the game hides its first frames
+    // after a load on the GS path (they come out black there; with the native world they flash).
+    PS2Runtime::RecompiledFunction g_origFlipDisp = nullptr;
+    void flipDisplayLog(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static std::chrono::steady_clock::time_point last{};
+        static int left = 0, loads = 0;
+        static uint64_t flips = 0;
+        const auto now = std::chrono::steady_clock::now();
+        const double gapMs = last.time_since_epoch().count() ? std::chrono::duration<double, std::milli>(now - last).count() : 0.0;
+        last = now;
+        ++flips;
+        if (gapMs >= 300.0 && loads < 30)
+        {
+            left = 12;
+            ++loads;
+        }
+        if (left > 0)
+        {
+            --left;
+            const GSRegisters &r = runtime->memory().gs();
+            float t[4] = {};
+            if (const uint32_t gs = *reinterpret_cast<const uint32_t *>(getMemPtr(rdram, 0x00675148u)))
+                std::memcpy(t, getMemPtr(rdram, gs + 0x240u + 48u), sizeof t);
+            std::fprintf(stderr, "[pop:disp] load %d flip %llu tick %llu gap %.0f ms: PMODE %llx DISPFB1 %llx DISPFB2 %llx DISPLAY1 %llx BGCOLOR %llx; "
+                                 "clip row 3 %.3f %.3f %.3f %.3f\n",
+                         loads, (unsigned long long)flips, (unsigned long long)r.vsyncTick.load(), gapMs, (unsigned long long)r.pmode,
+                         (unsigned long long)r.dispfb1, (unsigned long long)r.dispfb2, (unsigned long long)r.display1, (unsigned long long)r.bgcolor,
+                         t[0], t[1], t[2], t[3]);
+        }
+        g_origFlipDisp(rdram, ctx, runtime);
+    }
+
     template <size_t... I>
     void installCapProbes(PS2Runtime &runtime, std::index_sequence<I...>)
     {
@@ -2525,6 +2559,8 @@ namespace
             }
             std::fprintf(stderr, "[pop:framecap] hooks: Display %s, Ref Display %s\n", g_origMeshDisplayCap ? "yes" : "no", g_origMeshRefDisplayCap ? "yes" : "no");
         }
+        if (const char *v = std::getenv("POP_DISPLOG"); v && *v == '1' && (g_origFlipDisp = runtime.lookupFunction(0x004A20C0u)))
+            runtime.replaceFunction(0x004A20C0u, flipDisplayLog);
         if (const char *v = std::getenv("POP_CAMLOG"); v && *v && (g_camLog = std::fopen(v, "w")) != nullptr)
         {
             g_origDisplay3DCam = runtime.lookupFunction(0x004BC000u);
