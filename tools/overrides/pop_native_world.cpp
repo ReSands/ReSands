@@ -223,6 +223,30 @@ namespace pop_native_world
                 g_dump.before.pop_front();
         }
 
+        // The buffer the frame draws into. The marker takes FRAME from the GS state, but the first frame after a
+        // load has no clear sprite before its 3D, so FRAME is still the loading screen's last target, which is
+        // the buffer on screen: the picture went straight onto the display for one frame (the load flash; GS
+        // traces of 23 Oct, docs/native_renderer.md "Load flash: what the GS traces show"). The game never draws
+        // into the displayed buffer, so then the target is the other buffer of the pair seen in play.
+        const GSRegisters *g_display = nullptr;
+        uint32_t targetFbp(uint32_t fbp, uint32_t seq)
+        {
+            static uint32_t pair[2] = {~0u, ~0u};
+            if (pair[0] != fbp && pair[1] != fbp)
+            {
+                pair[1] = pair[0];
+                pair[0] = fbp;
+            }
+            const uint32_t shown = g_display ? uint32_t(g_display->dispfb1) & 0x1FFu : ~0u;
+            const uint32_t other = pair[0] == fbp ? pair[1] : pair[0];
+            if (fbp != shown || other == ~0u)
+                return fbp;
+            static uint32_t logged = 0;
+            if (logged++ < 16)
+                std::fprintf(stderr, "[pop:world] frame %u: FRAME fbp %x is on screen, picture into fbp %x\n", seq, fbp, other);
+            return other;
+        }
+
         // The GS hook: the marker is a 2-qword PACKED GIF packet (NLOOP 1, EOP, NREG 1, A+D) writing
         // register 0x7F with "PNWD" and the frame number.
         bool hook(GS &gs, const uint8_t *data, uint32_t sizeBytes, const GSHostInject::Targets &t)
@@ -292,43 +316,8 @@ namespace pop_native_world
             // BITBLTBUF: DBP (64-word blocks) bits 32-45, DBW bits 48-53, DPSM bits 56-61; TRXREG: RRW, RRH
             // at bit 32; TRXPOS 0 (destination 0, 0), TRXDIR 0 (host -> local)
             const uint64_t trxreg = uint64_t(kWidth) | (uint64_t(kHeight) << 32);
-            const uint64_t frame = (uint64_t(t.fbp * 32u) << 32) | (uint64_t(t.fbw) << 48);
+            const uint64_t frame = (uint64_t(targetFbp(t.fbp, seq) * 32u) << 32) | (uint64_t(t.fbw) << 48);
             gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
-            // Load-flash test (23 Oct): the game double-buffers (FRAME fbp 0 / 0x8C), but the first 2 markers after a
-            // load report the same fbp; theory: on one of them FRAME is still the loading screen's and is set right
-            // after the marker, so the picture lands in the wrong buffer. For the 2 frames after a pause of >= 300 ms
-            // the picture also goes into the other buffer seen in play. POP_NATIVE_WORLD_BOTH=0 turns it off.
-            {
-                static const bool both = [] {
-                    const char *e = std::getenv("POP_NATIVE_WORLD_BOTH");
-                    return !e || std::strcmp(e, "0") != 0;
-                }();
-                static uint32_t fbps[2] = {~0u, ~0u}, afterLoad = 0;
-                static std::chrono::steady_clock::time_point last{};
-                const auto now = std::chrono::steady_clock::now();
-                if (last.time_since_epoch().count() && now - last >= std::chrono::milliseconds(300))
-                    afterLoad = 2;
-                last = now;
-                if (fbps[0] != t.fbp && fbps[1] != t.fbp)
-                {
-                    fbps[1] = fbps[0];
-                    fbps[0] = t.fbp;
-                }
-                if (afterLoad > 0)
-                {
-                    --afterLoad;
-                    const uint32_t other = fbps[0] == t.fbp ? fbps[1] : fbps[0];
-                    if (both && other != ~0u)
-                    {
-                        const uint64_t otherFrame = (uint64_t(other * 32u) << 32) | (uint64_t(t.fbw) << 48);
-                        gs.uploadImageNative(otherFrame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
-                        char note[48];
-                        std::snprintf(note, sizeof note, " (also into fbp %x)", other);
-                        pic.gs += note;
-                        std::fprintf(stderr, "[pop:world] frame %u after a load: picture into fbp %x and %x\n", seq, t.fbp, other);
-                    }
-                }
-            }
             const bool z24 = t.zpsm == 0x31;
             // Depth bias (POP_NATIVE_WORLD_ZBIAS, Z24 units, default 128): the native Z lies slightly nearer
             // than the VU1 programs' Z on 27% of the world's pixels (19 Oct saves: p50 19, p99 106, p99.9 442
@@ -368,8 +357,9 @@ namespace pop_native_world
     }
 
     // starts the worker and waits for its renderer: the game skips draws only if they can be drawn
-    bool active()
+    bool active(const GSRegisters *display)
     {
+        g_display = display;
         std::unique_lock<std::mutex> lock(g_mutex);
         if (!g_started)
         {
@@ -405,7 +395,7 @@ namespace pop_native_world
 
 namespace pop_native_world
 {
-    bool active() { return false; }
+    bool active(const GSRegisters *) { return false; }
     void submitFrame(uint32_t, std::vector<uint8_t> &&) {}
     bool meshSent(uint64_t) { return false; }
 }

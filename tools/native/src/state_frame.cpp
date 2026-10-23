@@ -277,7 +277,7 @@ namespace
 }
 namespace pop_native_world
 {
-    bool active() { return true; }
+    bool active(const GSRegisters *) { return true; }
     void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf)
     {
         g_worldFrameSeq = seq;

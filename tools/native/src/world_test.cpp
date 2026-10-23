@@ -40,7 +40,7 @@ int main(int argc, char **argv)
     std::ifstream f(argv[1], std::ios::binary);
     std::vector<uint8_t> pnf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     const int frames = argc > 3 ? std::atoi(argv[3]) : 3;
-    if (!pop_native_world::active() || !g_hook)
+    if (!pop_native_world::active(nullptr) || !g_hook)
     {
         std::fprintf(stderr, "not active\n");
         return 1;

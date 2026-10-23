@@ -61,7 +61,7 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> bigfile key
 namespace pop_native_world // pop_native_world.cpp: draws the native world frames into the GS memory
 {
-    bool active();                                            // the runtime can inject (GS host hook + renderer)
+    bool active(const GSRegisters *display);                  // the runtime can inject (GS host hook + renderer); display: DISPFB
     void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF7)
     bool meshSent(uint64_t key); // true if the renderer keeps this batch already; false: noted as sent now
 }
@@ -2910,7 +2910,7 @@ namespace pop_native_live
         if (const char *world = std::getenv("POP_NATIVE_WORLD"); world && *world == '1')
         {
             // renderer step 1: the static world drawn natively into the GS buffers (see g_world)
-            if (!pop_native_world::active())
+            if (!pop_native_world::active(&runtime.memory().gs()))
             {
                 std::fprintf(stderr, "[pop:world] POP_NATIVE_WORLD=1 but this runtime cannot inject (no GS host hook or no Vulkan renderer)\n");
                 return;
