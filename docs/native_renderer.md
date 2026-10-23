@@ -848,6 +848,6 @@ again). Same scene, the same stale camera on the first 2 frames.
   picture is written straight into the displayed buffer: the flash. (The "both buffers" test also wrote it into
   buffer 0, so the flash stayed.)
 - Frame 2 has a clear and draws the full stale-camera world on both paths (GS ~10k primitives).
-- Fix candidates: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
+- **Fixed with (a) (85587ef), checked in game 23 Oct ~19:15.** Fix candidates were: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
   buffer index at Display3DElements) instead of the GS state at the marker; (b) honour the frame's missing clear: no
   injection (or a Z-tested merge) when the Z buffer was not cleared before the marker.

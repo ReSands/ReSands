@@ -157,3 +157,10 @@ mode boots the game check for an active display first, so a mistake like this ca
 - **A dedupe key without the pass hides a bug until a decoder improves.** Instanced pass 0 and pass 2 shared one
   key: harmless while pass 0 never decoded, a lost second layer once it did. Give every key every field that makes
   two draws different.
+
+- **Don't take the render target from GS state at an arbitrary point in the stream** (23 Oct, load flash). The GS registers
+  at our marker were whatever the last draw left; on the first frame after a load the game had sent no clear yet, so
+  FRAME still named the displayed buffer. A cheap invariant caught it: a double-buffered game never draws into the
+  buffer on screen. Getting there took 6 playtests: a GS trace of the frames in question (runtime patch 40, started from
+  an override at the moment of interest) settled what dumps of our own picture could not.
+- **Put seconds in log names** when two boots can start within a minute (one GS-only log was overwritten).

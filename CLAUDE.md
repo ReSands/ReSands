@@ -72,29 +72,15 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   prims from the PC). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
-- **Load flash: cause found, fix built, not yet checked in game (23 Oct evening, 85587ef).** GS traces: frame 1 after a load has no clear sprite, so FRAME at our marker is still the loading screen's target = the buffer on screen, and our stale-camera picture was uploaded straight onto the display. Fix: never inject into the displayed buffer (DISPFB1), take the other one of the pair (logs `[pop:world] frame N: FRAME fbp .. is on screen`). User check: 2 saves with the menu between. Details: `docs/native_renderer.md` "Load flash: what the GS traces show".
-- **Open notes:** a full-frame flash right after the loading glyph when entering a scene (user, 22 Oct ~21:45: probably not a flash but one frame of a random texture drawn full-frame, it looked like a green carpet/curtain, seen loading the mirror-room save): ours (the GS-only boot,
-  `play.ps1 -NoNativeWorld`, does not flash); to capture the frames after a load. Trouser flicker: not seen in the
-  last session (watch). Load-flash candidates in `docs/native_renderer.md`. **Capture ready (23 Oct lunch, 859cff6):** `POP_NATIVE_WORLD_DUMP=<dir>` writes the
-  injected pictures around each load (PPM + `index.txt`); launcher `game\jobs\flashplay.ps1` (start-job; dir
-  `game\analysis\loadflash`). Play build left building on the PC (`game\jobs\chain.ps1`, log `playbuild.log`, then
-  shuts down). **Captured 23 Oct 17:25 (10 loads, `game/analysis/loadflash`):** on every load into gameplay the first 2 injected
-  pictures are drawn from a different, valid in-game camera (close-up wall, top-down view with the characters);
-  frame 3 is right. Menu loads: our picture is clean (the user still saw 2 menu flashes: not ours, or not in the
-  picture). Suspect: the hook ignores FBMSK/display state (patch 38 passes `fbmsk`, unchecked), so frames the game
-  draws masked/unshown become visible. Ruled out the same evening (3 more runs, `game/analysis/loadflash2`, `loadflash3`): FBMSK (0 in all frames), a
-  second Display3DElements or a camera change before the kick (none), the runtime's preferred-display-source
-  shortcut (never set). Seen: the game double-buffers fbp 0/8c, but on every load (menu too) the first 2 markers
-  report the same FRAME fbp. Leading theory: on frame 1 the FRAME at the marker is still the loading screen's (the
-  same lag as the ZMSK note in `pop_native_world.cpp`), so our picture lands in the wrong buffer and the shown frame
-  lacks its world. Unproven: the presented picture could not be captured (GSSharedPresent: no CPU pixels). **Then ruled out too:** wrong
-  buffer (picture into both buffers for 2 frames: flash unchanged). **Established:** GS-only has no flash, the screen
-  is briefly black there instead (user); the game's world->clip (+0x240) is stale for exactly the first 2 flips after a
-  gameplay load (POP_DISPLOG); PMODE/BGCOLOR constant, DISPFB alternates normally: the black is something the GS draws
-  that our picture gets past. **PARKED, ready to run (user chose the real cause over a black-frames heuristic):**
-  runtime patch 40 (GS trace started by an override) is built on the PC; `game\jobs\loadtrace.ps1` = GS-only run then
-  native run (2 saves + menu each), traces in `game\analysis\loadtrace\{gs,native}`; compare the 8 fields after each load. Torch save
-  `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
+- **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
+  runtime patch 40): frame 1 after a load has no clear sprite, so FRAME at our marker was still the loading screen's
+  target = the buffer on screen, and the stale-camera picture was uploaded onto the display. Fix: never inject into
+  the displayed buffer (DISPFB1); use the other of the pair. In the log it fires once per load (+5 frames during the
+  boot logos), `[pop:world] frame N: FRAME fbp .. is on screen`. Debug aids kept: `POP_DISPLOG=1`,
+  `POP_DISPLOG_TRACE=<dir>`, `POP_NATIVE_WORLD_DUMP=<dir>`. Full hunt: `docs/history.md` "Load flash (23 Oct)".
+- **Open notes:** trouser flicker not seen lately (watch). Torch save `game/analysis/saves1023/st/` (point lights in
+  sets 0/1): offline native vs game 4.73, the Prince matches; point lights near a fire still to be looked at in game.
+  The -Fast rebuild once recompiled the whole runtime (~2,200 objects): find why.
 - **Qwen candidate after the water job:** the whole character VU1 program (image 31829861, 2,048 lines) to C++, judged
   on the trace of save 192521 (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
 - **Qwen night 22-23 Oct: 9 of 21 P6 pieces passed; post-mortem done (23 Oct lunch).** Mostly harness losses: 34% of
