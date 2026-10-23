@@ -77,7 +77,12 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   pictures are drawn from a different, valid in-game camera (close-up wall, top-down view with the characters);
   frame 3 is right. Menu loads: our picture is clean (the user still saw 2 menu flashes: not ours, or not in the
   picture). Suspect: the hook ignores FBMSK/display state (patch 38 passes `fbmsk`, unchecked), so frames the game
-  draws masked/unshown become visible. Next: log fbmsk/zmask/fbp/DISPFB per dumped frame, then fix. Torch save
+  draws masked/unshown become visible. Ruled out the same evening (3 more runs, `game/analysis/loadflash2`, `loadflash3`): FBMSK (0 in all frames), a
+  second Display3DElements or a camera change before the kick (none), the runtime's preferred-display-source
+  shortcut (never set). Seen: the game double-buffers fbp 0/8c, but on every load (menu too) the first 2 markers
+  report the same FRAME fbp. Leading theory: on frame 1 the FRAME at the marker is still the loading screen's (the
+  same lag as the ZMSK note in `pop_native_world.cpp`), so our picture lands in the wrong buffer and the shown frame
+  lacks its world. Unproven: the presented picture could not be captured (GSSharedPresent: no CPU pixels). Torch save
   `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
 - **After the lit statics (0.12): translucent draws + particles native.** Measured 22 Oct over 108
   saves (`pop_state_frame --world` prints what is left per kind/list/blend): native 392 draws / 33k triangles per
