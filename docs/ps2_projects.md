@@ -26,6 +26,9 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | KIexster/god-of-war-recomp | God of War (SotC base) | `docs/RENDIMIENTO.md`: getenv in hot loops 38%, IOP scheduler 41% (18 Oct) |
 | catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS | Road Trip | VU1 AOT with build-time pipeline scheduling, ~60x (18 Oct) |
 | Harold0777/eagle_five_recomp | Ace Combat 5 perf fork | VU1 100%, GS state cache, VBlank condvars (18 Oct) |
+| kris-c-anderson/godhand-rearmed (GPL-3.0; fork of LasVola/godhand-recomp) | God Hand, PCSX2 GS, 60 fps, any aspect | same runtime family as ours via thiagordsfx/urban-reign-recomp; callback-stack leak fix, hang dump, switchable instruction patches, HUD anchoring, counter finder (23 Oct; `docs/reference.md` "God Hand") |
+| LucasPicoli/god-hand-decomp (MIT) | God Hand matching decomp | names/boundaries for the recomp only; not our route (23 Oct) |
+| thiagordsfx/urban-reign-recomp | Urban Reign; root of the God Hand runtime | not read yet: runtime, VU1 compiler, sound, PCSX2 GS bridge, hang dump |
 | moesuito/gt4-staticrecomp (GT4Recomp, MIT) | Gran Turismo 4, release 1.2.3, ps2-web-recomp base | pacing + audio rate control, crash-safe memory card, SDL3 pad, ultrawide, FPU oracle (23 Oct; `docs/reference.md` "GT4Recomp") |
 
 ## From the surveys

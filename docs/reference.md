@@ -150,6 +150,57 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
   - Already ours or not needed: MTVU, async GS submission, VU1 ahead of time (pop-sotc has them); VU flag liveness
     (PCSX2 idea they cite) = step 4 of `docs/vu1_scheduling.md`; wait-loop skipping (our game thread is not the
     bottleneck); encrypted VU1 microcode, licence-demo cipher (GT4-specific).
+- **God Hand, three projects (read 23 Oct 2026).** (a) **LucasPicoli/god-hand-decomp** (MIT, 5b22d27): a matching
+  decomp (splat + ee-gcc 2.96 + objdiff, byte-identical ELF ratchet). Not our route; its only use downstream is
+  function names and boundaries for the recomp's crash logs and profiler. (b) **LasVola/godhand-recomp** (GPL-3.0,
+  14e956a): the recomp that got the game running. (c) **kris-c-anderson/godhand-rearmed** (GPL-3.0, 4e63668), a fork
+  of (b) and the one to read: 60 fps, any aspect ratio, launcher, PCSX2 GS (D3D11) as the renderer, so nothing there
+  for our native renderer. **Its runtime belongs to our family:** PS2Recomp + LightVelox's sotc-port runtime, by way of
+  **thiagordsfx/urban-reign-recomp** (Urban Reign; runtime, VU1 compiler, sound, PCSX2 GS bridge, hang dump, thread
+  policy). That repo is not in our survey yet. Its fixes therefore map onto ours almost line for line:
+  - **0.1, a likely long-session crash in our runtime (checked: present).** `EeScheduler::invocationStackTop` takes a
+    callback stack from a fixed pool (22 stacks of `kCallbackStackSize`) for every new (thread id, depth) and never
+    gives it back, and thread ids only grow. God Hand exited after ~30 min with "EE invocation stack space exhausted"
+    (on opening the save menu). Their fix (`EeScheduler.cpp` ~1754, `reclaimInvocationStacks`): a free list, then new
+    space, then a reclaim pass over deleted threads and finished depths. Our copy
+    (`game/recomp-sotc/runtime-src/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp:1333`) is the old code. Whether PoP hits
+    it depends on how many short-lived threads/handlers it creates. Grep a long play log for that message, or count
+    `m_invocationStackTops` growth. GPL-3.0, so we can port it as a runtime patch.
+  - **0.1 freezes, diagnostics:** `src/godhand/hang_dump.cpp` (from Urban Reign): after N s, or on a stall
+    (`GODHAND_STALL_DUMP=<ms>`), it prints the native stack of every host thread plus the guest kernel state (threads,
+    PCs, wait reasons, semaphores, DMA, timers) and can dump RAM/VRAM. That is what we lacked for combat crash 2. Their
+    freezes were: a "stop sound" request interrupting the IOP sound mixer (now waits for the driver, as on a PS2), the
+    ISO reopened on every read (now kept open and preloaded), and a movie wait loop without a timeout
+    (`movie_watchdog.cpp`, 20 s without a decoded macroblock = finished).
+  - **Sound:** their gaps came from `sceSifDmaStat` saying "busy" for a frame too long (CRI ADX polls once per vblank).
+    Ours says "done" at once (`SIF.cpp:327`, returns -1), the other extreme. It is not obviously our bug, but
+    keep it in mind for DARE's `fn_vWaitForLastIOPTransfers` (0x16BA80) if the streamed-audio issues return.
+  - **Recompiler: switchable patches** (`ps2xRecomp/src/lib/config_manager.cpp` ~164). `[[patches.conditional]]`
+    (an instruction word compiled in both forms, chosen by a run-time flag) and `[[patches.hooks]]` (a host function
+    run before or instead of one instruction, also flag-gated). Our overrides only work per function. This gives
+    mid-function patching for 1.1 (60 fps fixes as toggles) and 1.4 (projection/culling words from the PCSX2 pnach,
+    HUD vertex hooks). `direct_tail_calls = false` sends tail jumps through the dispatch table so an override reaches
+    every caller (cf. our "self tail calls are internal jumps" rule).
+  - **1.1 60 fps method:** the PCSX2 "60 Fps" pnach became flag-gated patches, and every timer that ran double was
+    hunted down (roulette timer, HUD/menu animation, prompts). Tool: `counter_finder.cpp`
+    (`GODHAND_FIND_COUNTERS=<fn>` takes three RAM snapshots 10 frames apart and lists every word that changed by the
+    same step = the counter behind an on-screen animation). Cheap and useful for our 30 fps-assumption hunt.
+  - **1.4 widescreen HUD:** `hud_layout.cpp` hooks the 2D drawers after their GS-coordinate conversion. HUD widget
+    groups (found by caller return address) get an anchor from their x extent in the previous frame (a group narrower
+    than 12% keeps its own centre; otherwise left/centre/right third). All other 2D (menus, text windows) is narrowed
+    to the middle 4:3. F6 logs every 2D primitive of one frame. Good model for PoP's HUD at 1.4.
+  - **1.2 post effects at higher resolution:** a blur/heat-haze option (PS2 resolution vs upscaled), and 1:1 copies
+    sampled exactly like the PS2 (else grid lines or edge bleed at 3x). The same traps await our haze/glow at 1.2.
+  - **Button prompts** (`button_prompts.cpp`): the icon sheet is found by sha256 of the disc payload and redrawn with
+    the bound key or Xbox letters, switching live between keyboard and pad. That covers the user's OpenJade complaint
+    (console icons, hard-coded WASD) for when we do input (0.4).
+  - **Mods at disc level** (`character_mods.cpp`): replacement files are written over the game's as the disc is read,
+    with the file table left unchanged (a changed size broke later files). Relevant to 1.5 if we ever swap whole files
+    rather than assets by key.
+  - Also: `thread_policy.cpp` (host thread affinity/ideal cores by name; NVIDIA threaded-optimisation worker),
+    `pc_sampler.cpp` (reads the guest pc without the scheduler's map: it once corrupted that map), a crash log with
+    guest pc + function name, `logs/play_last.log` kept per session, an IPU emulator from the AC5 recomp (Apache-2.0,
+    `ps2xRuntime/src/lib/ipu/`; IPU emulation, so not our 0.3 route, though possibly a bitstream reference).
 - **To look into later (16 Oct 2026):** theclub654/ProjectCane, a native PC port (Windows/Linux) of Sly Cooper 1 (NTSC), rebuilt by reverse engineering; FFmpeg, shaders embedded at build time, a file extractor that reads the user's ISO. The README does not say how it renders models or handles sound, so read the code before step 5 (live native window) or the native sound mixer. **No licence named: read only, copy nothing.** Not Jade, so no format overlap. Also checked: lombyte-project/Lombyte (Ratchet & Clank matching decomp, GPL-3.0): not useful (matching-decomp route).
 
 ## Texture formats and the PC upgrade (12 Oct 2026)
