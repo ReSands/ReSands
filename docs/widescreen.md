@@ -1,6 +1,6 @@
-# Widescreen (roadmap 1.4): plan notes
+# Widescreen (roadmap 1.1; was 1.4 until 23 Oct): plan notes
 
-Collected 23 Oct 2026 so the work can start from here when 1.4 comes up. Sources: our own attempt (16 Oct,
+Collected 23 Oct 2026 so the work can start from here when 1.1 comes up. Sources: our own attempt (16 Oct,
 `docs/history.md`), the PCSX2 widescreen patch for our disc, God Hand: Rearmed's any-aspect-ratio code (GPL-3.0,
 read at 4e63668; the user likes this approach), GT4Recomp (`docs/reference.md` "GT4Recomp"), rePOP's Xbox hooks.
 Nothing here has been built yet unless it says so.
@@ -36,7 +36,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
    replace=true` runs a host function instead of the `lui`/`ori` that loads the constant, and it sets `$at` to the computed
    float. The flag is read at run time, so 4:3 and wide are the same build (`ps2xSetPatchFlag("widescreen", wide)`).
    Their recompiler change: `ps2xRecomp/src/lib/config_manager.cpp` ~164 (+ the code generator). Porting this into
-   our PS2Recomp-sotc is the first job of 1.4; it also serves 1.1 (60 fps fixes as toggles).
+   our PS2Recomp-sotc is the first job of 1.1; it also serves 1.2 (frame-rate fixes as toggles).
 3. **HUD anchoring** (`hud_layout.cpp`): hooks sit in every 2D drawer (God Hand: `Gp_draw_line/poly3/poly4/...`
    + sprite drawers + the glyph drawer), right after the vertices are converted to GS coordinates; the hook narrows the
    x of those vertices. Each HUD widget (player bar, radar, roulette, identified by the caller's return address or
@@ -63,7 +63,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
   "reSOT"); GT4Recomp's list of what breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors,
   pixel-placed 2D).
 - **The native renderer changes step 1:** once the world is native (0.2), it can draw the wider frame directly
-  instead of anamorphic 4:3, at the output resolution (1.2). Until then, with the emulated GS on, it is the same
+  instead of anamorphic 4:3, at the output resolution (1.3). Until then, with the emulated GS on, it is the same
   as God Hand: a 4:3 frame shown wide. The camera constant and the culling change are needed either way.
 - **PoP's 2D path still has to be found:** which functions draw the HUD (health/sand tanks, sword prompts), menus,
   subtitles and the loading-screen medallion, and where each converts to GS coordinates. A PoP version of their F6
@@ -71,9 +71,9 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
 - **GT4Recomp's check applies:** verify every pnach word against our ELF before trusting it (done above for the
   original words; the meanings still need checking in Ghidra).
 
-## Order when 1.4 starts (proposal)
-1. Port switchable instruction hooks into PS2Recomp-sotc (shared with 1.1).
+## Order when 1.1 starts (proposal)
+1. Port switchable instruction hooks into PS2Recomp-sotc (shared with 1.2, uncapped frame rate).
 2. The pnach's gameplay + rfix constants as hooks computed from A; check the camera at 16:9 and 21:9.
 3. Culling: find what 0x24D040 tests, widen it with A; play through to find edge pop-in.
 4. 2D primitive log -> HUD groups and anchors; menus and loading screen latched to 4:3; movies pillarboxed.
-5. Cutscene framing check (CLAUDE.md roadmap 1.4).
+5. Cutscene framing check (CLAUDE.md roadmap 1.1).
