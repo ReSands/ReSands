@@ -37,7 +37,7 @@ if ($Shortcuts) {
 }
 
 $fps = $(if ($Fps30) { '0' } else { '1' })
-$name = "play_$(Get-Date -Format 'yyyyMMdd_HHmm')"
+$name = "play_$(Get-Date -Format 'yyyyMMdd_HHmmss')" # seconds: two boots in one minute overwrote a log (23 Oct)
 & "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });POP_NATIVE_CHARACTERS=$(if ($NoNativeCharacters) { '0' } else { '1' });$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
 
 $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"
