@@ -84,6 +84,8 @@ The save was taken after the freeze began, so loading it may freeze at once (a r
 depended on something not in the save). Next steps (not done): load it on the PC (`PS2X_STATE_LOAD_AT`), read the
 guest threads' state from its ESCH section (which thread was running or blocked, at which pc), and check whether
 it is the same split-function problem as crash 1.
+Ruled out (23 Oct): exhaustion of the runtime's callback-stack pool (the God Hand 30-minute crash, `docs/reference.md`
+"God Hand"): the crash save uses 3 of its 22 stacks.
 
 ## Native-vs-game scores of the new saves (22 Oct)
 `tools/native/score_saves.sh` (offline, Mac; full native frame vs the game's own picture; lower is closer): all 78

@@ -166,6 +166,11 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
     (`game/recomp-sotc/runtime-src/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp:1333`) is the old code. Whether PoP hits
     it depends on how many short-lived threads/handlers it creates. Grep a long play log for that message, or count
     `m_invocationStackTops` growth. GPL-3.0, so we can port it as a runtime patch.
+    **Measured 23 Oct (saves): not the cause of our combat freezes.** The pool pointer (`m_asyncCallbackStackTop`,
+    section ERT) in all 78 saves of 20-21 Oct: 2 of 22 stacks after boot, 3 after 10-90 min of play, never more; crash 2's
+    save shows 3, and the 21:42 session on 20 Oct ran 15+ min with 3 without trouble. Running out would also log
+    "EE invocation stack space exhausted". So it is a long-run risk (hours of play), cheap to take before 0.1's full
+    play-through, not urgent.
   - **0.1 freezes, diagnostics:** `src/godhand/hang_dump.cpp` (from Urban Reign): after N s, or on a stall
     (`GODHAND_STALL_DUMP=<ms>`), it prints the native stack of every host thread plus the guest kernel state (threads,
     PCs, wait reasons, semaphores, DMA, timers) and can dump RAM/VRAM. That is what we lacked for combat crash 2. Their
@@ -185,7 +190,7 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
     hunted down (roulette timer, HUD/menu animation, prompts). Tool: `counter_finder.cpp`
     (`GODHAND_FIND_COUNTERS=<fn>` takes three RAM snapshots 10 frames apart and lists every word that changed by the
     same step = the counter behind an on-screen animation). Cheap and useful for our 30 fps-assumption hunt.
-  - **1.4 widescreen HUD:** `hud_layout.cpp` hooks the 2D drawers after their GS-coordinate conversion. HUD widget
+  - **1.4 widescreen HUD** (full plan, with the PCSX2 patch decoded against our ELF: `docs/widescreen.md`): `hud_layout.cpp` hooks the 2D drawers after their GS-coordinate conversion. HUD widget
     groups (found by caller return address) get an anchor from their x extent in the previous frame (a group narrower
     than 12% keeps its own centre; otherwise left/centre/right third). All other 2D (menus, text windows) is narrowed
     to the middle 4:3. F6 logs every 2D primitive of one frame. Good model for PoP's HUD at 1.4.
