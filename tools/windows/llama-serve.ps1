@@ -9,7 +9,7 @@ $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 $cmdFile = "$Root\game\jobs\llama-serve.cmd"
 @"
 @echo off
-"$Exe" -m "$Model" --fit on --fit-ctx 128000 --fit-target 256 -np 1 -fa on --load-mode mlock -b 2048 -ub 2048 -ctk q8_0 -ctv q8_0 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 --reasoning-budget -1 --chat-template-kwargs "{\"preserve_thinking\": true}" --host 127.0.0.1 --port 8033 > "$Root\game\jobs\llama.log" 2>&1
+"$Exe" -m "$Model" --fit on --fit-ctx 128000 --fit-target 256 -np 1 -fa on --load-mode mlock -b 2048 -ub 2048 -ctk q8_0 -ctv q8_0 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 0.0 --repeat-penalty 1.0 --reasoning-budget 16000 --reasoning-budget-message "Thinking budget reached: stop reasoning now and write the complete file in one cpp code block." --chat-template-kwargs "{\"preserve_thinking\": true}" --host 127.0.0.1 --port 8033 > "$Root\game\jobs\llama.log" 2>&1
 "@ | Set-Content -Encoding ascii $cmdFile
 $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$cmdFile`""
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive

@@ -341,6 +341,8 @@ def main(argv):
         return chain()
     name = argv[0]
     opt = lambda k, v: argv[argv.index(k) + 1] if k in argv else v
+    # --rounds N: N more rounds on top of those already on disk (until 23 Oct it was the round number to
+    # stop at, so a stage with old rounds got none: b_check ran no round on the night of 22-23 Oct)
     url, rounds = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '12'))
     # --fresh N: every N rounds start a new conversation without the failed answer (a fresh start beat
     # continuing a failed one on 19-20 Oct); --until T: no new round after unix time T (overnight jobs)
@@ -378,11 +380,13 @@ def main(argv):
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     prev_code = open(os.path.join(att, done[-1])).read() if done else None
     prev_report = open(os.path.join(att, done[-1][:-4] + '.report.txt')).read() if done else None
-    last = max((int(f[5:7]) for f in done), default=0)
+    # a round without code leaves roundNN.nocode.txt (the end of its reasoning), so it counts too
+    last = max((int(f[5:7]) for f in os.listdir(att) if f.startswith('round') and f.endswith(('.cpp', '.nocode.txt'))),
+               default=0)
     overran = False
     kOverrun = ('\n\nYour last answer spent the whole token budget reasoning and contained no code. This time reason '
                 'briefly, then write the complete file.')
-    for n in range(last + 1, max(rounds, last) + 1):
+    for n in range(last + 1, last + rounds + 1):
         if until and time.time() > until:
             say('round%02d: past the deadline; stopping' % n)
             return 1
@@ -396,7 +400,7 @@ def main(argv):
                           'registers or memory against the code and the rules above, fix it, and reply with the complete '
                           'corrected file in one ```cpp block. Keep your reasoning short.' + (kOverrun if overran else '')}]
         try:
-            content, _r, usage, secs = md.ask(url, messages)
+            content, reasoning, usage, secs = md.ask(url, messages)
         except Exception as e:  # server hiccup: try the round again later
             say('round%02d: request failed (%s); waiting 60 s' % (n, str(e)[:100]))
             time.sleep(60)
@@ -404,7 +408,15 @@ def main(argv):
         code = md.extract(content)
         rname = 'round%02d' % n
         if code is None:
+            # 34% of the rounds up to 23 Oct hit the token cap while reasoning; a file drafted there is still
+            # worth judging (the judge decides, so a partial draft only costs a compile)
+            draft = md.extract(reasoning)
+            if draft and 'stage(' in draft:
+                code = draft
+                say('%s: no code block in the answer; judging the file drafted in the reasoning' % rname)
+        if code is None:
             say('%s: no code block (%.0f s, %s tokens)' % (rname, secs, usage.get('completion_tokens')))
+            open(os.path.join(att, rname + '.nocode.txt'), 'w').write(reasoning[-6000:])
             overran = True
             continue
         overran = False
@@ -419,7 +431,7 @@ def main(argv):
             open(os.path.join(out, 'PASS'), 'w').write(rname + '\n')
             say('PASS in %s' % rname)
             return 0
-    say('stopped after %d rounds' % rounds)
+    say('stopped after %d more rounds' % rounds)
     return 1
 
 

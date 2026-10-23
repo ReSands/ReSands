@@ -158,3 +158,24 @@ before 07:30 (~30-50 min per failing stage); `--chain` did not run. Leads, not y
 almost entirely (5 of 6); my `dir` for `vu1_p6_*PASS*` found nothing (check the actual result file names).
 Next (user, 23 Oct): dig into the per-stage logs/transcripts under `game\analysis\qwen\` for why each failed,
 then improve tonight's run (more time per stage? smaller cuts? better examples? the checks fixed?).
+
+**Post-mortem (23 Oct lunch).** Most of the night was lost to the harness, not to hard stages:
+- **71 of 208 rounds so far (34%) wrote no code**: all 32,768 tokens went on thinking (~8 min each, the
+  longest rounds; llama-server ran with `--reasoning-budget -1`). Fix: this llama.cpp build (b11643) has a real
+  budget, `--reasoning-budget N` + `--reasoning-budget-message`; tested at N = 300: thinking is cut, the
+  message injected, the answer follows. Now 16000 (`llama-serve.ps1`; `oct23.ps1` rewrites
+  `game\jobs\llama-serve.cmd`, which the LlamaServe task runs, so no re-registering). port.py also judges a
+  file drafted inside the reasoning when the answer has none, and saves `roundNN.nocode.txt` (end of the
+  reasoning) for later post-mortems.
+- **`--rounds` was the round number to stop at, not a count**: b_check already had rounds 1-6 from an earlier
+  night, so it got none ("not passed" in under a minute: not a setup failure); a_check got one. No-code rounds
+  were not counted either (resume looked at `.cpp` files only), so a no-code round06 was redone each run. Now
+  `--rounds N` = N more rounds; `oct23.ps1` passes 6 per pass.
+- **The PASS marker** is a file `PASS` inside `vu1_p6_<stage>\` (holds the round name), not a file name.
+- **Example code with a MAC bug, labelled bit-exact**: a_g2_head and a_g2_in1b (the example for every later
+  a_g2 stage) set sign bits with `0x80 >> (3 - c)` (x -> 0x10, w's bit). The judge does not compare MAC
+  (`judge.cpp`), so it passed. a_g2_in2a reads MAC (`FMAND` at 0xb38). Fixed in both `best.cpp` (`0x80 >> c`).
+- **Still open, a_g2**: in1a/in2b/in3a/in3b read no MAC and fail all 1620 cases with the same shape (a_g2_in1a
+  round10: vf11 expected 0x00000080 in all four lanes (an integer), got floats; vf16, Q and one data qword wrong),
+  so something they share (the vf11 input/conversion, or the loop's start) is mistranslated. Not examined
+  further; first thing to look at if a_g2 fails again tonight.

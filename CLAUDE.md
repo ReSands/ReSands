@@ -79,10 +79,12 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   alone would be drawn over by later GS draws), offline over the saves first. Qwen candidate after the water job: the
   whole character VU1 program (image 31829861, 2,048 lines) to C++, judged on the trace of save 192521
   (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
-- **NEXT (23 Oct, user): post-mortem of the 22-23 Oct Qwen night, then a better run tonight.** It ran 21:56 -> 07:30
-  and shut the PC down as designed: **9 of 21 P6 pieces passed**, no `--chain`; `b_check` failed in under a minute
-  (setup/judge, not the model); a_g2 failed 5 of 6. Per-stage list and leads: `docs/llm_jobs.md` "22-23 Oct night".
-  The translucents + particles work (above) waits until after this.
+- **Qwen night 22-23 Oct: 9 of 21 P6 pieces passed; post-mortem done (23 Oct lunch).** Mostly harness losses: 34% of
+  rounds thought for all 32k tokens and wrote no code (now a 16k thinking budget, tested), and `--rounds` was absolute,
+  so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Tonight: the user
+  starts "Qwen overnight (then shuts down)" (now `tools/windows/oct23.ps1`, 12 stages left).** a_g2 (4 stages,
+  same failure shape) still unexplained. Details: `docs/llm_jobs.md` "Post-mortem (23 Oct lunch)". The translucents +
+  particles work (above) waits until after this.
 - **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
   (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
   llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
