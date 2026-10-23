@@ -82,7 +82,7 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 - **NEXT (23 Oct, user): post-mortem of the 22-23 Oct Qwen night, then a better run tonight.** It ran 21:56 -> 07:30
   and shut the PC down as designed: **9 of 21 P6 pieces passed**, no `--chain`; `b_check` failed in under a minute
   (setup/judge, not the model); a_g2 failed 5 of 6. Per-stage list and leads: `docs/llm_jobs.md` "22-23 Oct night".
-  The translucents + particles work (below) waits until after this.
+  The translucents + particles work (above) waits until after this.
 - **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
   (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
   llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
