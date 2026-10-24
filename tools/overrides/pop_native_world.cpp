@@ -13,6 +13,7 @@
 #include "ps2_runtime.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #if __has_include("runtime/gs/gs_host_inject.h")
@@ -223,12 +224,73 @@ namespace pop_native_world
                 g_dump.before.pop_front();
         }
 
+        // Glitch capture (24 Oct; docs/native_bugs.md "Tooling"): the last kGlitchFrames frames, each with its
+        // injected picture at half size (RGB) and what the game side noted at its DMA kick (noteFrame), written
+        // by dumpRecent at every kept quick-save as <save>.glitch (read with tools/glitchview.py). The picture is
+        // the native world only: the GS draws characters, effects and 2D on top after the marker.
+        // 600 frames = 10 s at 60 fps (~130 MB): the kept copy of a quick-save is made 1-2 s after the press
+        // (keepQuickSaves checks once a second), so this leaves ~8 s before it
+        constexpr uint32_t kGlitchFrames = 600, kGlitchW = kWidth / 2, kGlitchH = kHeight / 2;
+        const GSRegisters *g_display = nullptr; // DISPFB1: the buffer on screen
+        struct FrameNote
+        {
+            uint32_t seq = 0;
+            std::string text; // one line from pop_native_live.cpp (camera, fog zones, purity)
+        };
+        struct GlitchFrame
+        {
+            uint32_t seq = 0;
+            int state = 0; // 0 injected, 1 no picture, 2 not drawn, 3 unexpected buffers
+            uint32_t draws = 0, fbp = 0, target = 0, shown = 0;
+            double atMs = 0;           // marker time since the first frame
+            FrameNote note;            // the game side's record of this frame (seq 0: none came)
+            std::vector<uint8_t> rgb;  // kGlitchW x kGlitchH, empty without a picture
+        };
+        std::mutex g_glitchMutex;
+        std::deque<GlitchFrame> g_glitch;
+        std::deque<FrameNote> g_notes; // noted at the kick, not yet matched with their marker
+        const auto g_glitchStart = std::chrono::steady_clock::now();
+
+        void glitchRecord(const Picture &pic, int state, uint32_t fbp, uint32_t target)
+        {
+            GlitchFrame g;
+            g.seq = pic.seq;
+            g.state = state;
+            g.draws = pic.draws;
+            g.fbp = fbp;
+            g.target = target;
+            g.shown = g_display ? uint32_t(g_display->dispfb1) & 0x1FFu : ~0u;
+            g.atMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_glitchStart).count();
+            if (state == 0 && pic.rgba.size() == size_t(kWidth) * kHeight * 4)
+            {
+                g.rgb.resize(size_t(kGlitchW) * kGlitchH * 3);
+                for (uint32_t y = 0; y < kGlitchH; ++y)
+                    for (uint32_t x = 0; x < kGlitchW; ++x)
+                        for (int c = 0; c < 3; ++c)
+                        {
+                            const size_t i = (size_t(2 * y) * kWidth + 2 * x) * 4 + c;
+                            g.rgb[(size_t(y) * kGlitchW + x) * 3 + c] =
+                                uint8_t((pic.rgba[i] + pic.rgba[i + 4] + pic.rgba[i + kWidth * 4] + pic.rgba[i + kWidth * 4 + 4] + 2) / 4);
+                        }
+            }
+            std::lock_guard<std::mutex> lock(g_glitchMutex);
+            while (!g_notes.empty() && int32_t(g_notes.front().seq - g.seq) < 0)
+                g_notes.pop_front(); // frames whose marker never came
+            if (!g_notes.empty() && g_notes.front().seq == g.seq)
+            {
+                g.note = g_notes.front();
+                g_notes.pop_front();
+            }
+            g_glitch.push_back(std::move(g));
+            while (g_glitch.size() > kGlitchFrames)
+                g_glitch.pop_front();
+        }
+
         // The buffer the frame draws into. The marker takes FRAME from the GS state, but the first frame after a
         // load has no clear sprite before its 3D, so FRAME is still the loading screen's last target, which is
         // the buffer on screen: the picture went straight onto the display for one frame (the load flash; GS
         // traces of 23 Oct, docs/native_renderer.md "Load flash: what the GS traces show"). The game never draws
         // into the displayed buffer, so then the target is the other buffer of the pair seen in play.
-        const GSRegisters *g_display = nullptr;
         uint32_t targetFbp(uint32_t fbp, uint32_t seq)
         {
             static uint32_t pair[2] = {~0u, ~0u};
@@ -297,6 +359,7 @@ namespace pop_native_world
             }
             if (!found || !pic.ok)
             {
+                glitchRecord(pic, found ? 2 : 1, t.fbp, t.fbp);
                 dumpFrame(pic, found);
                 if (g_stats.missed++ < 8)
                     std::fprintf(stderr, "[pop:world] frame %u: no native picture (its static world is missing)\n", seq);
@@ -311,12 +374,15 @@ namespace pop_native_world
                 if (g_stats.wrongTarget++ < 8)
                     std::fprintf(stderr, "[pop:world] frame %u: unexpected buffers (FRAME fbp %x fbw %u psm %x, ZBUF zbp %x psm %x mask %d)\n", seq,
                                  t.fbp, t.fbw, t.fpsm, t.zbp, t.zpsm, int(t.zmask));
+                glitchRecord(pic, 3, t.fbp, t.fbp);
                 return true;
             }
             // BITBLTBUF: DBP (64-word blocks) bits 32-45, DBW bits 48-53, DPSM bits 56-61; TRXREG: RRW, RRH
             // at bit 32; TRXPOS 0 (destination 0, 0), TRXDIR 0 (host -> local)
             const uint64_t trxreg = uint64_t(kWidth) | (uint64_t(kHeight) << 32);
-            const uint64_t frame = (uint64_t(targetFbp(t.fbp, seq) * 32u) << 32) | (uint64_t(t.fbw) << 48);
+            const uint32_t target = targetFbp(t.fbp, seq);
+            glitchRecord(pic, 0, t.fbp, target);
+            const uint64_t frame = (uint64_t(target * 32u) << 32) | (uint64_t(t.fbw) << 48);
             gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
             const bool z24 = t.zpsm == 0x31;
             // Depth bias (POP_NATIVE_WORLD_ZBIAS, Z24 units, default 128): the native Z lies slightly nearer
@@ -389,6 +455,54 @@ namespace pop_native_world
         std::lock_guard<std::mutex> lock(g_sentMutex);
         return !g_sent.insert(key).second;
     }
+
+    void noteFrame(uint32_t seq, std::string &&text)
+    {
+        std::lock_guard<std::mutex> lock(g_glitchMutex);
+        g_notes.push_back({seq, std::move(text)});
+        while (g_notes.size() > 16)
+            g_notes.pop_front();
+    }
+
+    // <path>: "PNGL" u32 version 1, frames, width, height, then per frame the RGB picture (zeros without one);
+    // <path>.txt: one line per frame. Written on a thread from a copy, so the game does not wait for the disk.
+    void dumpRecent(const std::string &path)
+    {
+        std::deque<GlitchFrame> frames;
+        {
+            std::lock_guard<std::mutex> lock(g_glitchMutex);
+            frames = g_glitch;
+        }
+        if (frames.empty())
+            return;
+        std::thread([frames = std::move(frames), path] {
+            const char *kState[] = {"injected", "NO PICTURE", "NOT DRAWN", "UNEXPECTED BUFFERS"};
+            FILE *bin = std::fopen(path.c_str(), "wb");
+            FILE *txt = std::fopen((path + ".txt").c_str(), "w");
+            if (!bin || !txt)
+            {
+                std::fprintf(stderr, "[pop:glitch] cannot write %s\n", path.c_str());
+                if (bin)
+                    std::fclose(bin);
+                if (txt)
+                    std::fclose(txt);
+                return;
+            }
+            const uint32_t header[5] = {0x4C474E50u, 1u, uint32_t(frames.size()), kGlitchW, kGlitchH};
+            std::fwrite(header, sizeof header, 1, bin);
+            const std::vector<uint8_t> blank(size_t(kGlitchW) * kGlitchH * 3, 0);
+            for (const GlitchFrame &g : frames)
+            {
+                const std::vector<uint8_t> &px = g.rgb.empty() ? blank : g.rgb;
+                std::fwrite(px.data(), 1, px.size(), bin);
+                std::fprintf(txt, "frame %u at %.1f ms: %s, %u draws, FRAME fbp %x -> %x, on screen %x | %s\n", g.seq, g.atMs, kState[g.state], g.draws,
+                             g.fbp, g.target, g.shown, g.note.seq == g.seq ? g.note.text.c_str() : "(no note)");
+            }
+            std::fclose(bin);
+            std::fclose(txt);
+            std::fprintf(stderr, "[pop:glitch] last %zu frames written to %s\n", frames.size(), path.c_str());
+        }).detach();
+    }
 }
 
 #else // a runtime without the GS host-inject hook: the native world cannot be shown
@@ -398,6 +512,8 @@ namespace pop_native_world
     bool active(const GSRegisters *) { return false; }
     void submitFrame(uint32_t, std::vector<uint8_t> &&) {}
     bool meshSent(uint64_t) { return false; }
+    void noteFrame(uint32_t, std::string &&) {}
+    void dumpRecent(const std::string &) {}
 }
 
 #endif

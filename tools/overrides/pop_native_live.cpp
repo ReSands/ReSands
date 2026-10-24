@@ -88,6 +88,7 @@ namespace pop_native_world // pop_native_world.cpp: draws the native world frame
     bool active(const GSRegisters *display);                  // the runtime can inject (GS host hook + renderer); display: DISPFB
     void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF7)
     bool meshSent(uint64_t key); // true if the renderer keeps this batch already; false: noted as sent now
+    void noteFrame(uint32_t seq, std::string &&text); // glitch capture: the frame's record (camera, fog, purity)
 }
 namespace pop_hdtex
 {
@@ -329,6 +330,7 @@ namespace pop_native_live
             uint64_t native = 0, gs = 0;                            // late-list calls (+0x88, +0xA8) drawn natively / on the GS
             std::map<std::string, uint64_t> closedBy;               // what ended purity first (path and list)
         } g_lateStats;
+        std::string g_frameClosedBy; // what ended this frame's purity (glitch capture record)
         // a draw call of the open frame goes to the GS: ends the frame's purity (the late lists stay on the GS from now on)
         void worldOnGs(uint8_t *rdram, const char *path)
         {
@@ -351,6 +353,7 @@ namespace pop_native_live
             char why[48];
             std::snprintf(why, sizeof why, "%s +0x%x", path, g_currentList);
             ++g_lateStats.closedBy[why];
+            g_frameClosedBy = why;
         }
 
         // POP_NATIVE_TRANSLUCENT=1 (23 Oct): every draw of the lists Display3DElements draws before
@@ -3606,6 +3609,35 @@ namespace pop_native_live
             g_worldMarked = true;
             g_worldOpen = true;
             g_worldPure = true;
+            g_frameClosedBy.clear();
+        }
+
+        // glitch capture (pop_native_world dumpRecent): the frame's camera, fog zones 0-4 and purity, one line
+        void noteGlitchFrame(uint8_t *rdram)
+        {
+            static uint64_t lastNative = 0, lastGs = 0;
+            std::string t;
+            char b[160];
+            std::snprintf(b, sizeof b, "views %u, %s, late native %llu GS %llu; clip", g_worldViews,
+                          g_worldPure ? "pure to the end" : ("purity ended by " + g_frameClosedBy).c_str(),
+                          (unsigned long long)(g_lateStats.native - lastNative), (unsigned long long)(g_lateStats.gs - lastGs));
+            t += b;
+            lastNative = g_lateStats.native;
+            lastGs = g_lateStats.gs;
+            for (float c : g_frameClip)
+            {
+                std::snprintf(b, sizeof b, " %.5g", double(c));
+                t += b;
+            }
+            t += "; fog";
+            for (uint32_t z = 0; z < 5; ++z)
+            {
+                const uint32_t a = 0x70000270u + 16u * z;
+                std::snprintf(b, sizeof b, " %u:(%.0f %.0f %.1f %.4g %06x)", z, double(guestF(rdram, a)), double(guestF(rdram, a + 4)),
+                              double(guestF(rdram, a + 8)), double(guestF(rdram, a + 12)), guestAny(rdram, 0x70000470u + 4u * z) & 0xFFFFFFu);
+                t += b;
+            }
+            pop_native_world::noteFrame(g_worldSeq, std::move(t));
         }
 
         // the frame's DMA kick (0x4A2C80) from PS2_Flip: the frame's native draws go to pop_native_world
@@ -3616,6 +3648,7 @@ namespace pop_native_live
             if (g_worldMarked && ra >= 0x004A20C0u && ra < 0x004A2200u)
             {
                 logClipChange(rdram, "kick");
+                noteGlitchFrame(rdram);
                 std::vector<uint8_t> f;
                 writeFrame(true, &f);
                 pop_native_world::submitFrame(g_worldSeq, std::move(f));

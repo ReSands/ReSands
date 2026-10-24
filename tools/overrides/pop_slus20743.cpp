@@ -63,6 +63,10 @@ namespace pop_native_live // pop_native_live.cpp: live C++ asset conversion chec
     void install(PS2Runtime &runtime);
     void onBigfileLookup(uint32_t key);
 }
+namespace pop_native_world // pop_native_world.cpp: glitch capture, the last seconds of native frames
+{
+    void dumpRecent(const std::string &path);
+}
 namespace pop_profiler // pop_profiler.cpp: rolling profile of the last seconds (POP_PROFILE_LAST)
 {
     void dumpLast(const std::string &path);
@@ -434,6 +438,7 @@ namespace
         std::strftime(name, sizeof name, "states/play_%Y%m%d_%H%M%S.state", std::localtime(&now));
         fs::copy_file(quick, name, fs::copy_options::overwrite_existing, ec);
         pop_profiler::dumpLast(fs::path(name).replace_extension(".prof").string()); // POP_PROFILE_LAST
+        pop_native_world::dumpRecent(fs::path(name).replace_extension(".glitch").string()); // POP_NATIVE_WORLD: the last 10 s
         std::cerr << "[pop] quick-save kept as " << name << (ec ? " (copy FAILED)" : "") << std::endl;
     }
 

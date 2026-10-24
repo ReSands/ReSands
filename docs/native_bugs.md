@@ -6,9 +6,15 @@ hypothesis (marked as such), status.
 
 ## Tooling first (agreed 24 Oct)
 
-1. **Glitch capture key:** a rolling buffer of the last few seconds (final frames + per-frame renderer state: camera,
-   which lists went native / where purity ended, fog zone, injected buffer), written on a key/pad combo. For one-frame
-   glitches a save state cannot hold (N3, N4).
+1. **Glitch capture (built 24 Oct evening, not yet used in play):** every kept quick-save (Select / F5) also writes
+   `states/play_<date>_<time>.glitch` (+ `.txt`): the last 10 s (600 frames) of the injected native world picture at
+   320x224 and one record per frame (state: injected / no picture / not drawn / unexpected buffers; draws; FRAME fbp
+   and the target used; DISPFB1; purity and what ended it; late-list calls native/GS; the clip matrix; fog zones 0-4
+   with colours). The kept copy is made 1-2 s after the press, so ~8 s before it are in. Read with
+   `tools/glitchview.py <file.glitch> <out dir>` (PNGs + report.txt flagging picture changes, camera jumps, missed
+   frames, fog and purity flips). Limit: the native world picture only (the GS draws characters, effects and 2D on
+   top; the final picture is not readable each frame: GPU presentation). Code: `pop_native_world.cpp` glitchRecord
+   / dumpRecent, `pop_native_live.cpp` noteGlitchFrame.
 2. **Native conversion after a save-state load** (convert the elements already in RAM instead of waiting for
    ReadElement), so saves can be booted with the live renderer path and screenshotted with it on and off.
 
