@@ -172,12 +172,16 @@ namespace pop_native
         // each static batch once), found again by the caller's 64-bit key. keepMesh returns the kept
         // mesh's id (its material is the draw's); keptMesh(key) is -1 for an unknown key. When the kept
         // meshes outgrow keptBudgetBytes they are all dropped at the next upload and keptEpoch() goes up
-        // (the sender must then send everything again).
+        // (the sender must then send everything again). With autoDropKept false the kept meshes may grow past the
+        // budget and the caller drops them itself (dropKept) at a frame that sends all its geometry: dropping in
+        // the middle of a frame left that frame's kept draws without geometry (a black world frame, 24 Oct).
         int keepMesh(uint64_t key, Mesh mesh);
         int keptMesh(uint64_t key) const;
         uint32_t keptEpoch() const;
         size_t keptBytes() const;
+        void dropKept();
         size_t keptBudgetBytes = size_t(512) << 20;
+        bool autoDropKept = true;
         // uploads everything added so far (call once, after all add* calls)
         bool upload(std::string &error);
         // drops the scene (materials, meshes, and the images unless keepImages) and their GPU copies

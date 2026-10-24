@@ -86,8 +86,9 @@ uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> b
 namespace pop_native_world // pop_native_world.cpp: draws the native world frames into the GS memory
 {
     bool active(const GSRegisters *display);                  // the runtime can inject (GS host hook + renderer); display: DISPFB
-    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF7)
-    bool meshSent(uint64_t key); // true if the renderer keeps this batch already; false: noted as sent now
+    void submitFrame(uint32_t seq, uint32_t generation, std::vector<uint8_t> &&pnf); // frame `seq`'s native draws (PNF7)
+    uint32_t sentGeneration(); // the kept-mesh generation a frame is written in (sampled before writing it)
+    bool meshSent(uint64_t key, uint32_t generation); // true if the renderer keeps this batch already; false: send it
     void noteFrame(uint32_t seq, std::string &&text); // glitch capture: the frame's record (camera, fog, purity)
 }
 namespace pop_hdtex
@@ -3105,10 +3106,14 @@ namespace pop_native_live
         // diagnostics (side files, stderr reports) are skipped
         // worldOut (POP_NATIVE_WORLD): only the draws marked native, as PNF7 for pop_native_world
         // (textures by key with pixels once, batches by key with geometry once), returned instead of written or sent
+        uint32_t g_frameGeneration = 0; // POP_NATIVE_WORLD: the kept-mesh generation of the frame being written
         void writeFrame(bool live = false, std::vector<uint8_t> *worldOut = nullptr)
         {
             if (worldOut)
+            {
                 live = true;
+                g_frameGeneration = pop_native_world::sentGeneration();
+            }
             std::vector<uint8_t> f;
             f.reserve(8u << 20);
             // "PNF5": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
@@ -3338,7 +3343,7 @@ namespace pop_native_live
                                                          : mix64(contentKey(b), variant);
                         putBytes(f, &key, 8);
                         tris += b.indices.size() / 3;
-                        if (key && pop_native_world::meshSent(key))
+                        if (key && pop_native_world::meshSent(key, g_frameGeneration))
                         {
                             const uint32_t known = 0xFFFFFFFFu;
                             putBytes(f, &known, 4);
@@ -3651,7 +3656,7 @@ namespace pop_native_live
                 noteGlitchFrame(rdram);
                 std::vector<uint8_t> f;
                 writeFrame(true, &f);
-                pop_native_world::submitFrame(g_worldSeq, std::move(f));
+                pop_native_world::submitFrame(g_worldSeq, g_frameGeneration, std::move(f));
                 resetFrameCapture();
                 g_frameCapturing = false;
                 g_worldMarked = g_worldOpen = false;

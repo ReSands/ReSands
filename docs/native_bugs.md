@@ -54,6 +54,18 @@ fog). To confirm: the same spot with `play.ps1 -NoNativeWorld` (fully emulated);
 Open side question: does POP_60FPS change how fast the game moves these values (a per-frame lerp would run twice as
 fast)?
 
+## N5: random one-frame flashes = black world frames when the kept meshes were dropped (FIXED 24 Oct, 8dd... see git)
+
+Glitch captures 200042 (frame 411, mean 0.5) and 200541 (frame 458, mean 4.5): one native world picture almost
+black, same draw count as its neighbours, injected normally, arriving late (30-40 ms). Each follows a
+`[native] kept meshes over budget (512 MB): dropped` line in the play log (5 drops that session; one also before
+save 200337). The renderer dropped all kept meshes in the middle of a frame whose draws referred to them, so that
+frame drew nothing; the next frame resent everything. Fix: the renderer no longer drops by itself in the world
+path (autoDropKept false); pop_native_world starts a new kept-mesh generation (frames written from then on send all
+their geometry; meshSent ignores frames of an older generation) and drops the kept meshes just before the first
+frame of the new generation. Tested with pop_world_test and POP_NATIVE_WORLD_KEPT_MB=1 (every frame over budget,
+dropped each time, every picture right). Likely also N3.
+
 ## N3: one-frame flash walking up stairs, as if the environment mesh vanished (24 Oct, not captured)
 
 Hypothesis: a frame whose world picture was not injected or came from a stale camera (the load flash family,

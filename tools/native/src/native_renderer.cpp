@@ -1453,6 +1453,15 @@ namespace pop_native
     }
 
     uint32_t Renderer::keptEpoch() const { return m->keptEpoch; }
+    void Renderer::dropKept()
+    {
+        if (!m->device)
+            return;
+        if (m->frameFence)
+            vkWaitForFences(m->device, 1, &m->frameFence, VK_TRUE, UINT64_MAX); // the last frame still draws from them
+        vkDeviceWaitIdle(m->device);
+        m->dropKept();
+    }
 
     size_t Renderer::keptBytes() const
     {
@@ -1560,7 +1569,7 @@ namespace pop_native
         m->meshes.clear();
         return m->uploadBuffer(verts.data(), verts.size() * sizeof(Vertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, m->vertexBuffer, error) &&
                m->uploadBuffer(idx.data(), idx.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT, m->indexBuffer, error) &&
-               m->uploadKept(keptBudgetBytes, error);
+               m->uploadKept(autoDropKept ? keptBudgetBytes : ~size_t(0), error);
     }
 
     void Renderer::reset(bool keepImages)

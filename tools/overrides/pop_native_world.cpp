@@ -53,11 +53,28 @@ namespace pop_native_world
 
         std::mutex g_mutex;
         std::condition_variable g_wake, g_ready;
-        std::deque<std::pair<uint32_t, std::vector<uint8_t>>> g_queue; // frames to draw
+        struct Job
+        {
+            uint32_t seq = 0, generation = 0;
+            std::vector<uint8_t> pnf;
+        };
+        std::deque<Job> g_queue; // frames to draw
         std::deque<Picture> g_done;                                    // drawn, oldest first
-        // batches the renderer keeps (PNF7 keys sent with their geometry); cleared when it drops them
+        // batches the renderer keeps (PNF7 keys sent with their geometry), per generation: when the kept meshes
+        // outgrow the budget, a new generation starts (g_sent cleared, so the frames written from then on send all
+        // their geometry) and the worker drops the kept meshes just before the first frame of it. Dropping them in
+        // the middle of a frame (the renderer's own drop) left that frame's kept draws without geometry: a black
+        // world frame, the "random flashes" of 24 Oct (glitch captures 200042 / 200541).
         std::mutex g_sentMutex;
         std::unordered_set<uint64_t> g_sent;
+        uint32_t g_sentGeneration = 1;
+        void newGeneration(const char *why)
+        {
+            std::lock_guard<std::mutex> lock(g_sentMutex);
+            g_sent.clear();
+            ++g_sentGeneration;
+            std::fprintf(stderr, "[pop:world] kept meshes: generation %u (%s)\n", g_sentGeneration, why);
+        }
         bool g_started = false, g_initDone = false, g_failed = false;
 
         struct Stats
@@ -88,9 +105,13 @@ namespace pop_native_world
             }
             std::fprintf(stderr, "[pop:world] drawing on %s\n", renderer.deviceName().c_str());
             pop_native::FrameLoader loader;
+            renderer.autoDropKept = false; // dropped here, between generations
+            if (const char *mb = std::getenv("POP_NATIVE_WORLD_KEPT_MB")) // debug: a smaller budget (tests the drop)
+                renderer.keptBudgetBytes = size_t(std::atoi(mb)) << 20;
+            uint32_t dropAt = 0;           // the generation whose first frame drops the kept meshes (0: none due)
             for (;;)
             {
-                std::pair<uint32_t, std::vector<uint8_t>> job;
+                Job job;
                 {
                     std::unique_lock<std::mutex> lock(g_mutex);
                     g_wake.wait(lock, [] { return !g_queue.empty(); });
@@ -99,23 +120,34 @@ namespace pop_native_world
                 }
                 const auto t0 = std::chrono::steady_clock::now();
                 Picture pic;
-                pic.seq = job.first;
+                pic.seq = job.seq;
+                if (dropAt && int32_t(job.generation - dropAt) >= 0)
+                {
+                    std::fprintf(stderr, "[pop:world] frame %u: kept meshes dropped (%zu MB)\n", job.seq, renderer.keptBytes() >> 20);
+                    renderer.dropKept();
+                    dropAt = 0;
+                }
                 renderer.reset(true); // the textures stay (the frames send each one once)
                 std::vector<pop_native::Draw> draws;
                 pop_native::FrameExtras extras;
                 float clip[16];
-                std::istringstream in(std::string(reinterpret_cast<const char *>(job.second.data()), job.second.size()), std::ios::binary);
+                std::istringstream in(std::string(reinterpret_cast<const char *>(job.pnf.data()), job.pnf.size()), std::ios::binary);
                 error.clear();
-                const uint32_t epoch = renderer.keptEpoch();
                 pic.ok = loader.load(renderer, in, "world", clip, draws, extras, false);
                 const auto t1 = std::chrono::steady_clock::now();
                 pic.ok = pic.ok && renderer.upload(error);
-                if (renderer.keptEpoch() != epoch || loader.keptMissing)
+                if (loader.keptMissing)
                 {
-                    // dropped over budget (or a key the renderer lost): the writer sends everything again
-                    std::lock_guard<std::mutex> lock(g_sentMutex);
-                    g_sent.clear();
+                    // a key the renderer does not have (should not happen any more): the writer sends everything again
+                    std::fprintf(stderr, "[pop:world] frame %u: %zu kept batches missing\n", job.seq, loader.keptMissing);
                     loader.keptMissing = 0;
+                    newGeneration("batches missing");
+                }
+                else if (!dropAt && renderer.keptBytes() > renderer.keptBudgetBytes)
+                {
+                    newGeneration("over budget");
+                    std::lock_guard<std::mutex> lock(g_sentMutex);
+                    dropAt = g_sentGeneration;
                 }
                 const auto t2 = std::chrono::steady_clock::now();
                 pic.draws = uint32_t(draws.size());
@@ -439,20 +471,30 @@ namespace pop_native_world
         return true;
     }
 
-    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf)
+    void submitFrame(uint32_t seq, uint32_t generation, std::vector<uint8_t> &&pnf)
     {
         {
             std::lock_guard<std::mutex> lock(g_mutex);
             if (g_failed)
                 return;
-            g_queue.emplace_back(seq, std::move(pnf));
+            g_queue.push_back({seq, generation, std::move(pnf)});
         }
         g_wake.notify_one();
     }
 
-    bool meshSent(uint64_t key)
+    uint32_t sentGeneration()
     {
         std::lock_guard<std::mutex> lock(g_sentMutex);
+        return g_sentGeneration;
+    }
+
+    // a frame written in an older generation sends everything in full and notes nothing (its keys would
+    // otherwise count as kept in the new generation, but its geometry goes before the drop)
+    bool meshSent(uint64_t key, uint32_t generation)
+    {
+        std::lock_guard<std::mutex> lock(g_sentMutex);
+        if (generation != g_sentGeneration)
+            return false;
         return !g_sent.insert(key).second;
     }
 
@@ -510,8 +552,9 @@ namespace pop_native_world
 namespace pop_native_world
 {
     bool active(const GSRegisters *) { return false; }
-    void submitFrame(uint32_t, std::vector<uint8_t> &&) {}
-    bool meshSent(uint64_t) { return false; }
+    void submitFrame(uint32_t, uint32_t, std::vector<uint8_t> &&) {}
+    uint32_t sentGeneration() { return 0; }
+    bool meshSent(uint64_t, uint32_t) { return false; }
     void noteFrame(uint32_t, std::string &&) {}
     void dumpRecent(const std::string &) {}
 }

@@ -83,18 +83,26 @@ int main(int argc, char **argv)
         }
         again.insert(again.end(), pnf.begin() + o, pnf.end());
     }
+    uint32_t fullGeneration = 0; // as the game: a frame written in a new kept-mesh generation sends all its geometry
     for (int n = 1; n <= frames; ++n)
     {
         g_uploads.clear();
         const auto t0 = std::chrono::steady_clock::now();
-        pop_native_world::submitFrame(uint32_t(n), std::vector<uint8_t>(n == 1 ? pnf : again));
+        const uint32_t generation = pop_native_world::sentGeneration();
+        const bool full = generation != fullGeneration;
+        fullGeneration = generation;
+        pop_native_world::submitFrame(uint32_t(n), generation, std::vector<uint8_t>(full ? pnf : again));
         // the marker as pop_native_live.cpp writes it (after the CNT tag): GIF tag, A+D "PNWD" + n -> reg 0x7F
         const uint32_t marker[8] = {0x00008001u, 0x10000000u, 0xEu, 0u, uint32_t(n), 0x504E5744u, 0x7Fu, 0u};
         const bool consumed = g_hook(gs, reinterpret_cast<const uint8_t *>(marker), 32, t);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-        std::printf("frame %d: consumed %d, %zu uploads, %.1f ms from submit to uploads\n", n, int(consumed), g_uploads.size(), ms);
+        std::printf("frame %d: consumed %d, %zu uploads, %.1f ms from submit to uploads", n, int(consumed), g_uploads.size(), ms);
         if (!consumed || g_uploads.size() != 2)
             return 1;
+        double sum = 0;
+        for (size_t i = 0; i < g_uploads[0].data.size(); i += 4)
+            sum += g_uploads[0].data[i] + g_uploads[0].data[i + 1] + g_uploads[0].data[i + 2];
+        std::printf(", %s, picture mean %.1f\n", full ? "full" : "kept", sum / (3.0 * g_uploads[0].data.size() / 4));
         for (const Upload &u : g_uploads)
             std::printf("  BITBLTBUF %016llx (DBP %llx DBW %llu DPSM %02llx) TRXREG %016llx, %zu bytes\n", (unsigned long long)u.bitbltbuf,
                         (unsigned long long)((u.bitbltbuf >> 32) & 0x3FFF), (unsigned long long)((u.bitbltbuf >> 48) & 0x3F),

@@ -325,12 +325,14 @@ namespace
 namespace pop_native_world
 {
     bool active(const GSRegisters *) { return true; }
-    void submitFrame(uint32_t seq, std::vector<uint8_t> &&pnf)
+    void submitFrame(uint32_t seq, uint32_t, std::vector<uint8_t> &&pnf)
     {
         g_worldFrameSeq = seq;
         g_worldFrame = std::move(pnf);
     }
-    bool meshSent(uint64_t key)
+    uint32_t sentGeneration() { return 1; }
+    void noteFrame(uint32_t, std::string &&) {}
+    bool meshSent(uint64_t key, uint32_t)
     {
         static std::unordered_set<uint64_t> sent;
         return !sent.insert(key).second;
