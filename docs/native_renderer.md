@@ -994,6 +994,13 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
   Prince's shadow lands where the game's does, with the same shape (`game/analysis/shadow/native/`). First version
   darkened twice (records of every pass and repeat call taken; floor x 0.49), now keyed by pass, first call only:
   floor x 0.67 in shadow, game ~0.74 (noisy; the GS formula gives 0.59 at fade 1). The game's edge is a little softer.
-- Not yet: live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
+- **Live path built (same day):** `Renderer::updateImage` (a key re-sent with pixels updates its texture in place;
+  shadow images are always sent, synthetic keys), world mode: a projector goes native only if every receiver's base
+  record is native, then FUN_004C3540 is skipped and both list counts zeroed (as FUN_004B8080). PC (save 192521,
+  `game\jobs\shadowtest.ps1`): 6 of 6 projectors native, `pop_world_test` 60 frames fine, worker 3.09 ms per frame
+  vs 2.60 without shadows (six 256x256 RGBA images per frame, 1.5 MB: R8 or a bounding box would cut it). (Its GS Z
+  is not byte-identical to the viewer's with or without shadows: older than this, not looked into.) Play build with
+  it compiles (`play.ps1 -NativeShadows`); not booted yet.
+- Was "not yet": live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
   image update; then skip FUN_004C3540 when every receiver's base is native, clearing both lists as FUN_004B8080
   does), blob receivers (+0x20 list, FUN_004C2E00 path), mirror projectors, CJIdxMesh entries, FUN_004C2C40.
