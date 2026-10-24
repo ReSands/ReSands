@@ -159,15 +159,22 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Night 23-24 Oct:
   13 of 21; 24 Oct morning: 6 more fixed by hand from Qwen's attempts** (the a_g2 "expected 0" shape = VU float
   normalisation, missing from the primer, now in it), **the two checks split into 12 pieces (3 by hand); tonight
-  `tools/windows/oct24.ps1` ports the 9 left** (shortcut "Qwen overnight (then shuts down)" retargeted). Details:
+  `tools/windows/oct24.ps1` ports the 9 left, then P9**. Details:
   `docs/llm_jobs.md` "24 Oct morning". Details: `docs/llm_jobs.md` "Post-mortem (23 Oct lunch)". The translucents +
   particles work (above) waits until after this.
+- **Sprite (P9) VU1 port for Qwen: set up 24 Oct evening** (the sprite interpreter is the fps cost in busy scenes).
+  Cases from ~130 saves offline (`tools/vu1port/cases_p9.sh`, no game boot), 37 stages, R register in the harness,
+  3 hand ports pass (`known_good/p9_*`). **Tonight's `tools/windows/oct24.ps1` runs the water pieces, then P9 with no
+  deadline** (shortcut "Qwen overnight (until Stop Qwen)"; the user cancels with the shortcut **"Stop Qwen"**; rounds
+  are kept, the next run resumes; shuts down only if everything passes). Morning: `game\jobs\qwen-night.log`, the
+  stages' PASS files; passed stages then go into the game in place of `spriteRun`. Details: `docs/llm_jobs.md`
+  "VU1 sprite program P9".
 - **Water (P6) VU1 port (needed for 0.13):** the VU1 water program to C++ in stages, each judged against the
   runtime's VU1 interpreter on recorded cases (`tools/vu1port/port.py`; passing ports in `game\analysis\qwen\vu1_p6_*\best.cpp`
   (PASS file) or `tools/vu1port/known_good/`). **Night 24-25 Oct: `tools/windows/oct24.ps1`** (PC desktop shortcut
-  "Qwen overnight (then shuts down)", retargeted 24 Oct), the 9 clip-check pieces left (a_ck_head/loop/cull/sub,
-  b_ck_head/loop/next/cull/sub), passes of 6 rounds until 07:30, `--chain` (whole program, 600 runs) if all pass, then
-  shuts the PC down. Estimate (24 Oct): head/next 1-3 rounds, loop/cull 2-6, the two sub pieces (MAC flags via FMAND)
+  "Qwen overnight (until Stop Qwen)"), the 9 clip-check pieces left (a_ck_head/loop/cull/sub,
+  b_ck_head/loop/next/cull/sub), 4 passes of 6 rounds, `--chain` (whole program, 600 runs) if all pass, then P9 (above)
+  with no deadline. Estimate (24 Oct): head/next 1-3 rounds, loop/cull 2-6, the two sub pieces (MAC flags via FMAND)
   the likeliest to fail. **Morning:** wake the PC, read `game\jobs\qwen-night.log` and the stages' `port.log` /
   `attempts\roundNN.report.txt`; hand-port whatever still fails (the sub pieces are 28 small pairs); if `--chain` ran,
   check its result. Details: `docs/llm_jobs.md` "VU1 water program P6" and "24 Oct morning".

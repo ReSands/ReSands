@@ -432,9 +432,12 @@ def spec(name):
         if re.search(r'\bJR vi\d+', code_text):
             exit_notes += (' JR viN returns from a subroutine: after its delay slot set vu.pc = vu.vi[N] * 8 (one of the '
                            'exits above, the caller\'s next pair) and return.')
-        if re.search(r'\bBAL vi\d+', code_text):
+        bals = re.findall(r'^([0-9a-f]{4}):.*\bBAL vi(\d+), 0x([0-9a-f]+)', code_text, re.M)
+        if bals:
             exit_notes += (' BAL viT, target calls a subroutine that another stage translates: set vi[T] = (address of the '
-                           'pair after the delay slot) / 8, execute the delay slot, then set vu.pc = target and return.')
+                           'pair after the delay slot) / 8, execute the delay slot, then set vu.pc = target and return. Here: ' +
+                           '; '.join('BAL at 0x%s: vi[%s] = 0x%x / 8 = %d, vu.pc = 0x%s' % (a, t, int(a, 16) + 16, (int(a, 16) + 16) // 8, g)
+                                     for a, t, g in bals) + '.')
     return TASK.format(
         what=p['what'], scenes=p['scenes'],
         cases=n, header=header_for(p), primer=PRIMER + (PRIMER_R if p['r'] else ''), name=name, entry=st['entry'],
