@@ -106,6 +106,9 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   the likeliest to fail. **Morning:** wake the PC, read `game\jobs\qwen-night.log` and the stages' `port.log` /
   `attempts\roundNN.report.txt`; hand-port whatever still fails (the sub pieces are 28 small pairs); if `--chain` ran,
   check its result. Details: `docs/llm_jobs.md` "VU1 water program P6" and "24 Oct morning".
+- **Before the next Qwen job (after P6):** build in the ReAgent learnings (bounded evidence requests, a bulk
+  Ghidra JSON export with `jalr`/constant-address refs, save-state global values, recorded cases as judge):
+  `docs/llm_jobs.md` "ReAgent + ghidra-bridge".
 - **Qwen candidates for later nights:** standalone tested decoders (`livePacketBatches`, `skinnedFromPacket`, particle
   quads; judged against the Python decoders on DMA captures) and the character VU1 program (above). User rule: Qwen
   work is overnight only; daytime is Claude + user. GPU skinning only if the profiler asks.

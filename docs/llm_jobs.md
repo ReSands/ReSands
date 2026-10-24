@@ -103,6 +103,56 @@ to later specs. This matches our own finding (14 Oct) that precise wording decid
 stays only if it measurably helps: re-run a fixed set of past tasks with and without it and compare
 first-round pass rates. Fully offline; the judge keeps it honest.
 
+## ReAgent + ghidra-bridge (Dryxio) looked at, 24 Oct 2026: not adopted; two ideas for the next Qwen job
+
+Decision (user, 24 Oct): finish the P6 water job first; build the ideas below into the **next** Qwen
+project, not into the running P6 harness.
+
+What it is (github.com/Dryxio/reagent + github.com/Dryxio/ghidra-bridge, both MIT; read, not run):
+ReAgent is a reverser -> checker -> fix loop that turns Ghidra decompiles into C/C++ source (profiles
+for gta-reversed, OpenRCT2, windows-x64; backends Claude API/CLI, Codex CLI, any OpenAI-compatible
+endpoint). A candidate passes on: LLM checker PASS + a structural heuristic + the project's build/tests
++ 11 heuristic "parity" signals; its README says this is not semantic equivalence. ghidra-bridge is a
+pyghidra headless exporter (`exporters/runner.py`, ~650 lines) writing JSON once per project: per
+function decompile, signature, callers, callees, assembly, normalized high P-code, basic-block CFG;
+program-wide structs/enums/typedefs, vtables, strings and named globals with their referencing
+functions. `ghidra-bridge context <addr>` bundles one function's callers/callees/strings/globals/CFG;
+ReAgent puts that in the prompt next to the decompile (each item capped at 8k characters).
+
+Why not as a tool:
+- No need for whole-game source: PS2Recomp already gives working C++ for every function.
+- Its judge is weaker than ours (LLM verdict + heuristics vs execution against recorded cases).
+- The hard ports (P6, character VU1 program) are VU1 microcode, which Ghidra does not decompile.
+- On our R5900 ELF the exporter loses much of its value: callees come only from direct call refs
+  (`jal`), so Jade's virtual calls through `jalr` are missing; vtables are found only by MSVC symbol
+  names (`??_7...@@6B`) or names containing "vtable" (we have none); globals named `DAT_`/`BYTE_` are
+  skipped (most of ours). Callers/callees/strings we already export with
+  `tools/ghidra/PoPNamingContext.java`. Asm, P-code and CFG would work (architecture-independent).
+
+Ideas to build into the next Qwen job:
+1. **Bounded evidence requests** (ReAgent `agents/reverser.py:176-257`, `prompts/reverser_system.md`):
+   instead of code the model may reply with only `{"actions":[{"tool":"decompile","target":"0x..."}]}`;
+   the harness answers from pre-exported data (read-only), the model continues, within a fixed budget
+   (theirs: 8). For Qwen keep it small (2-3 requests; tools limited to decompile / asm / xrefs / a
+   global's value of a named address): discovery and long loops are where it is weakest (14 Oct tests),
+   and 34% of the 22-23 Oct rounds used up their thinking budget without code. Measure it like the
+   lessons idea above: first-round pass rate on a fixed task set with and without requests.
+   Fixes the "spec forgot what callee X does" failure without losing a night.
+2. **One bulk export of the Ghidra project to JSON** (our own script, an extension of
+   `PoPNamingContext.java`, not ghidra-bridge): per function decompile, asm, callers, callees, **plus
+   `jalr` sites and constant-address loads/stores** (gp-relative included). Specs and evidence answers
+   are then assembled on the Mac without a headless Ghidra run per job.
+3. Our advantage over ReAgent, to use: **global values from a save** (`tools/popstate.py` reads RAM,
+   so a `DAT_` address gets its real value and, via a type guess, its meaning) and **cases recorded
+   from the running game** (capture wrapper per function; job #5 in the table above). ReAgent's
+   `verification/differential.py` is the same reference-vs-candidate JSON shape but on hand-supplied
+   cases.
+
+Shape of the next job (proposal): a generic "game function -> standalone C++" Qwen job. Claude picks
+the function and writes the spec; the export (2) + save values (3) give the evidence; a capture
+wrapper records input/output cases from a normal boot; `tools/llm_port/generic` runs it with the
+evidence-request loop (1) and the recorded cases as the judge.
+
 ## VU1 water program P6 for Qwen, 19-20 Oct 2026 night (unfinished: 13 of 24 stages pass)
 Harness `tools/vu1port/`: `replay.cpp` (vu1replay: the runtime's VU1 interpreter replaying the `PS2X_VU1_TRACE`
 water traces, x86_64; writes per-stage cases and hints), `cases.sh <stage> <entry>:<exits>`, `judge.cpp` (exact
