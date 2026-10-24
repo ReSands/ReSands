@@ -58,6 +58,30 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 #include <unordered_set>
 #include <vector>
 
+// Sprites (CJadeSpriteElement, list kind 8) are placed by VU1 program P9; until it is ported to C++ the native path
+// runs it on the runtime's VU1 interpreter (pop-sotc: its source sits next to the runner directory this file is
+// copied to; offline, pop_state_frame_vu1 defines POP_SPRITE_VU1). The interpreter hands XGKICK packets to the
+// thread's packet sink (vu1_impl::packetSink, an inline variable of ps2_vu1_impl.inl, declared here identically);
+// with forward = false they never reach the GS.
+#if defined(POP_SPRITE_VU1) || __has_include("../lib/vu/ps2_vu1_impl.inl")
+#undef POP_SPRITE_VU1
+#define POP_SPRITE_VU1 1
+#include "runtime/ps2_vu1.h"
+#include <xmmintrin.h>
+namespace vu1_impl
+{
+    struct Vu1PacketSink
+    {
+        std::vector<std::vector<uint8_t>> packets;
+        bool forward = true;
+    };
+
+    inline thread_local Vu1PacketSink *packetSink = nullptr;
+}
+#else
+#define POP_SPRITE_VU1 0
+#endif
+
 uint32_t popTextureKey(uint32_t index); // pop_slus20743.cpp: texture index -> bigfile key
 namespace pop_native_world // pop_native_world.cpp: draws the native world frames into the GS memory
 {
@@ -1552,6 +1576,432 @@ namespace pop_native_live
             uint32_t textureKey, flags, object, list;
         };
         std::vector<OtherDraw> g_frameOther;
+
+#if POP_SPRITE_VU1
+        // CJadeSpriteElement::Display (0x4C6200; element = *(0x6E1598) + u16 * 0x20, matrix index, kind 8 flag), 24 Oct.
+        // Up to 4 slots: packet word at +4i (low 31 bits; 0 ends), sprite count at +0x10 + 4i. Per slot FUN_004B5F80
+        // (kind 8; kind 7 takes SetParticleEnv and program 4: left to the GS) sends FLUSHA + UNPACK V4-32 of 19 qw to
+        // VU 0 and DMA-CALLs the packet: qw 0-3 the model matrix (pool entry 0x70000090), 4-7 / 8-11 the graphics
+        // object's +0x200 (world -> GS screen) / +0x240, 13 / 14 the camera's right / up (camera object +0x160 /
+        // +0x170) turned into object space (sceVu0InversMatrix of the Display matrix: transposed rotation), 15 the fog
+        // zone (0x70000270 + (0x70000084 & 0xFF) * 16, zero for zone -1), 16 the GIF tag (count | 0x8000, 0x603B4000,
+        // 0x412412, 0: PRE, sprite with TME/FGE/ABE, ST RGBAQ XYZF2 x 2), 17.xy / 18.xy the screen box (2048 -+ half
+        // the display size 0x66D03C / 0x66D040). The packet (STCYCL, BASE 0x18, OFFSET 0 = one buffer, MSCALF 0x68,
+        // UNPACKs, MSCNT) runs P9 (ELF MPG packet 0x4E338C): 0x340 sets up and ends, the MSCNT goes on from there;
+        // the first element of a group uploads its curve (8 points at TOP+0x10, 8 directions at TOP+0x3A), the next
+        // ones only a colour (TOP+7) and their sprites (count TOP+100, 3 qw each from TOP+101), so the VU data memory
+        // and the program's position carry over from draw to draw: one interpreter and one data image for all.
+        // Output: GS sprites split into 32-pixel strips; each strip becomes a quad unprojected through +0x200.
+        struct SpriteVu
+        {
+            std::unique_ptr<VU1Interpreter> vu;
+            std::vector<uint8_t> code, data;
+            uint32_t tops = 0, cl = 4, wl = 4;
+            bool loaded = false, broken = false;
+        } g_spriteVu;
+        alignas(16) unsigned char g_spriteGsStandIn[64]; // the GS reference execute() wants; never touched (forward = false)
+        struct SpriteStats
+        {
+            uint64_t draws = 0, native = 0, quads = 0, failed = 0;
+        } g_spriteStats;
+
+        bool spriteLoadProgram(uint8_t *rdram)
+        {
+            // MPG chain as tools/vu1progs.py reads it: each MPG word followed by its code, the next MPG word after it
+            g_spriteVu.code.assign(0x4000, 0);
+            uint32_t p = 0x004E338Cu, next = 0;
+            for (int k = 0; k < 64; ++k)
+            {
+                const uint32_t w = guestAny(rdram, p);
+                if ((w >> 24) != 0x4A)
+                    break;
+                const uint32_t num = ((w >> 16) & 0xFF) ? ((w >> 16) & 0xFF) : 256u, addr = (w & 0xFFFF) * 8;
+                if (addr != next || addr + num * 8 > 0x4000)
+                    break;
+                std::memcpy(g_spriteVu.code.data() + addr, getConstMemPtr(rdram, p + 4), num * 8);
+                next = addr + num * 8;
+                p += 4 + num * 8 + 4;
+            }
+            if (next != 0x13A0)
+            {
+                std::fprintf(stderr, "[pop:native] sprite program: read 0x%x bytes at 0x4E338C (expected 0x13A0); sprites stay on the GS\n", next);
+                return false;
+            }
+            g_spriteVu.vu = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
+            g_spriteVu.data.assign(0x4000, 0);
+            return true;
+        }
+
+        // one VU run: from `pc` (MSCAL/MSCALF) or on from where the last one ended (MSCNT, pc < 0)
+        void spriteRun(int32_t pc)
+        {
+            SpriteVu &s = g_spriteVu;
+            GS &gs = *reinterpret_cast<GS *>(g_spriteGsStandIn);
+            const unsigned csr = _mm_getcsr();
+            _mm_setcsr(csr | 0x6000u); // round toward zero, as the runtime runs VU code
+            if (pc >= 0)
+                s.vu->execute(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, uint32_t(pc), s.tops, 0, 1u << 20);
+            else
+                s.vu->resume(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, s.tops, 0, 1u << 20);
+            _mm_setcsr(csr);
+        }
+
+        // VIF codes of one DMA packet (source chain, TTE: each tag's upper 64 bits are two VIF codes; CALL / RET nest)
+        bool spriteVif(uint8_t *rdram, uint32_t start)
+        {
+            std::vector<uint32_t> words;
+            uint32_t addr = start;
+            std::vector<uint32_t> stack;
+            for (int rec = 0;; ++rec)
+            {
+                if (rec > 4096 || words.size() > (1u << 18))
+                    return false;
+                const uint32_t t0 = guestAny(rdram, addr), t1 = guestAny(rdram, addr + 4);
+                const uint32_t qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7, ta = t1 & 0x7FFFFFF0u;
+                words.push_back(guestAny(rdram, addr + 8));
+                words.push_back(guestAny(rdram, addr + 12));
+                const uint32_t data = (id == 0 || id == 3 || id == 4) ? ta : addr + 16, after = addr + 16 + ((id == 0 || id == 3 || id == 4) ? 0 : qwc * 16);
+                for (uint32_t k = 0; k < qwc * 4; ++k)
+                    words.push_back(guestAny(rdram, data + 4 * k));
+                if (id == 0 || id == 7)
+                    break;
+                if (id == 2)
+                    addr = ta;
+                else if (id == 5)
+                    stack.push_back(after), addr = ta;
+                else if (id == 6)
+                {
+                    if (stack.empty())
+                        break;
+                    addr = stack.back();
+                    stack.pop_back();
+                }
+                else
+                    addr = after;
+            }
+            SpriteVu &s = g_spriteVu;
+            uint32_t base = 0, offset = 0;
+            for (size_t i = 0; i < words.size();)
+            {
+                const uint32_t w = words[i++], cmd = (w >> 24) & 0x7F, num = (w >> 16) & 0xFF, imm = w & 0xFFFF;
+                if (cmd >= 0x60)
+                {
+                    if (cmd & 0x10)
+                        return false; // masked unpack: not used by these packets
+                    const uint32_t vl = cmd & 3, vn = (cmd >> 2) & 3, comps = vn + 1, n = num ? num : 256;
+                    if (vl == 3)
+                        return false;
+                    const uint32_t bytesPer = (4u >> vl) * comps, writes = n;
+                    const uint32_t srcVectors = s.cl >= s.wl ? writes : (writes / s.wl) * s.cl + std::min(writes % s.wl, s.cl);
+                    const size_t wordsIn = (size_t(srcVectors) * bytesPer + 3) / 4;
+                    if (i + wordsIn > words.size())
+                        return false;
+                    const uint8_t *src = reinterpret_cast<const uint8_t *>(words.data() + i);
+                    uint32_t vu = imm & 0x3FF;
+                    if (imm & 0x8000)
+                        vu = (vu + s.tops) & 0x3FF;
+                    const bool usn = (imm & 0x4000) != 0;
+                    for (uint32_t k = 0; k < writes; ++k)
+                    {
+                        const uint32_t dest = (vu + (k / s.wl) * s.cl + k % s.wl) & 0x3FF;
+                        uint32_t v[4];
+                        std::memcpy(v, s.data.data() + dest * 16, 16);
+                        const uint8_t *sv = src + size_t(k) * bytesPer;
+                        for (uint32_t c = 0; c < comps; ++c)
+                        {
+                            if (vl == 0)
+                                std::memcpy(&v[c], sv + 4 * c, 4);
+                            else if (vl == 1)
+                            {
+                                uint16_t r;
+                                std::memcpy(&r, sv + 2 * c, 2);
+                                v[c] = usn ? r : uint32_t(int32_t(int16_t(r)));
+                            }
+                            else
+                                v[c] = usn ? sv[c] : uint32_t(int32_t(int8_t(sv[c])));
+                        }
+                        if (comps == 1)
+                            v[1] = v[2] = v[3] = v[0];
+                        std::memcpy(s.data.data() + dest * 16, v, 16);
+                    }
+                    i += wordsIn;
+                    continue;
+                }
+                switch (cmd)
+                {
+                case 0x00: case 0x06: case 0x07: case 0x10: case 0x11: case 0x13: case 0x04:
+                    break; // NOP, MSKPATH3, MARK, FLUSHE, FLUSH, FLUSHA, ITOP (unused by P9)
+                case 0x01:
+                    s.cl = imm & 0xFF ? imm & 0xFF : 1;
+                    s.wl = (imm >> 8) & 0xFF ? (imm >> 8) & 0xFF : 1;
+                    break;
+                case 0x02:
+                    offset = imm & 0x3FF;
+                    break;
+                case 0x03:
+                    base = imm & 0x3FF;
+                    s.tops = base; // OFFSET 0 in these packets: both buffers at BASE
+                    if (offset)
+                        return false;
+                    break;
+                case 0x05:
+                    if (imm & 3)
+                        return false; // STMOD add / accumulate: not used here
+                    break;
+                case 0x14: case 0x15:
+                    spriteRun(int32_t(imm) * 8);
+                    break;
+                case 0x17:
+                    spriteRun(-1);
+                    break;
+                case 0x20:
+                    ++i;
+                    break; // STMASK
+                case 0x30: case 0x31:
+                    i += 4;
+                    break; // STROW / STCOL
+                case 0x4A:
+                    return false; // MPG inside a sprite packet: not expected
+                default:
+                    return false; // DIRECT etc.
+                }
+            }
+            return true;
+        }
+
+        // the frame's sprites drawn natively: false = this call goes to the GS (it is emulated all the same, so the
+        // data later elements reuse stays right)
+        bool spriteRecord(uint8_t *rdram, R5900Context *ctx)
+        {
+            SpriteVu &s = g_spriteVu;
+            if (s.broken || getRegU32(ctx, 6) == 0)
+                return false; // kind 7: SetParticleEnv and program 4, not read
+            if (!s.loaded)
+            {
+                s.loaded = true;
+                s.broken = !spriteLoadProgram(rdram);
+                if (s.broken)
+                    return false;
+            }
+            ++g_spriteStats.draws;
+            const uint32_t element = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFF;
+            const uint32_t gso = guestAny(rdram, 0x00675148u), cam = guestAny(rdram, 0x006749F0u + 0x110u);
+            const uint32_t pool = guestAny(rdram, 0x70000260u), model = pool + (guest16(rdram, 0x70000090u)) * 0x40u, disp = pool + index * 0x40u;
+            float right[3], up[3];
+            for (int j = 0; j < 3; ++j)
+            {
+                // sceVu0InversMatrix (rotation transposed), then sceVu0ApplyMatrix with w = 0: component j = row j . v
+                right[j] = up[j] = 0;
+                for (int k = 0; k < 3; ++k)
+                {
+                    right[j] += guestF(rdram, disp + 16 * j + 4 * k) * guestF(rdram, cam + 0x160 + 4 * k);
+                    up[j] += guestF(rdram, disp + 16 * j + 4 * k) * guestF(rdram, cam + 0x170 + 4 * k);
+                }
+            }
+            const float w = float(int32_t(guestAny(rdram, 0x0066D03Cu))), h = float(int32_t(guestAny(rdram, 0x0066D040u)));
+            vu1_impl::Vu1PacketSink sink;
+            sink.forward = false;
+            bool ok = true;
+            for (uint32_t slot = 0; slot < 4; ++slot)
+            {
+                const uint32_t packet = guestAny(rdram, element + 4 * slot) & 0x7FFFFFFFu;
+                if (!guestAny(rdram, element + 4 * slot))
+                    break;
+                uint8_t *d = s.data.data();
+                std::memcpy(d + 0 * 16, getConstMemPtr(rdram, model), 64);
+                std::memcpy(d + 4 * 16, getConstMemPtr(rdram, gso + 0x200u), 64);
+                std::memcpy(d + 8 * 16, getConstMemPtr(rdram, gso + 0x240u), 64);
+                std::memset(d + 12 * 16, 0, 16); // not written by FUN_004B5F80 (stale DMA buffer words; P9 never reads them)
+                const float r4[4] = {right[0], right[1], right[2], 0}, u4[4] = {up[0], up[1], up[2], 0};
+                std::memcpy(d + 13 * 16, r4, 16);
+                std::memcpy(d + 14 * 16, u4, 16);
+                const uint32_t zone = guestAny(rdram, 0x70000084u);
+                if (zone == 0xFFFFFFFFu)
+                    std::memset(d + 15 * 16, 0, 16);
+                else
+                    std::memcpy(d + 15 * 16, getConstMemPtr(rdram, 0x70000270u + (zone & 0xFF) * 16), 16);
+                const uint32_t tag[4] = {guestAny(rdram, element + 0x10 + 4 * slot) | 0x8000u, 0x603B4000u, 0x412412u, 0};
+                std::memcpy(d + 16 * 16, tag, 16);
+                const float lo[4] = {2048.0f - w / 2.0f, 2048.0f - h / 2.0f, 0, 0}, hi[4] = {2048.0f + w / 2.0f, 2048.0f + h / 2.0f, 0, 0};
+                std::memcpy(d + 17 * 16, lo, 16);
+                std::memcpy(d + 18 * 16, hi, 16);
+                vu1_impl::packetSink = &sink;
+                ok = spriteVif(rdram, packet) && ok;
+                vu1_impl::packetSink = nullptr;
+            }
+            if (!ok)
+            {
+                if (g_spriteStats.failed++ < 4)
+                    std::fprintf(stderr, "[pop:native] sprite element %08x: packet not replayed; on the GS\n", element);
+                return false;
+            }
+            // world <- GS screen: solve M p = s for the screen point (x, y, z) (M = +0x200, PS2 layout: rows of memory are
+            // the columns: s_c = sum_k M[k][c] p_k + M[3][c], divided by the same with c = 3)
+            float M[4][4];
+            for (int k = 0; k < 4; ++k)
+                for (int c = 0; c < 4; ++c)
+                    M[k][c] = guestF(rdram, gso + 0x200u + 16 * k + 4 * c);
+            const auto unproject = [&M](double x, double y, double z, float out[3]) {
+                const double sc[3] = {x, y, z};
+                double A[3][4];
+                for (int c = 0; c < 3; ++c)
+                {
+                    for (int k = 0; k < 3; ++k)
+                        A[c][k] = double(M[k][c]) - sc[c] * double(M[k][3]);
+                    A[c][3] = sc[c] * double(M[3][3]) - double(M[3][c]);
+                }
+                for (int col = 0; col < 3; ++col) // Gaussian elimination with partial pivoting
+                {
+                    int piv = col;
+                    for (int r = col + 1; r < 3; ++r)
+                        if (std::fabs(A[r][col]) > std::fabs(A[piv][col]))
+                            piv = r;
+                    std::swap(A[col], A[piv]);
+                    if (std::fabs(A[col][col]) < 1e-12)
+                        return false;
+                    for (int r = 0; r < 3; ++r)
+                        if (r != col)
+                        {
+                            const double f = A[r][col] / A[col][col];
+                            for (int k = col; k < 4; ++k)
+                                A[r][k] -= f * A[col][k];
+                        }
+                }
+                for (int k = 0; k < 3; ++k)
+                    out[k] = float(A[k][3] / A[k][k]);
+                return true;
+            };
+            pop_assets::Batch b;
+            for (const auto &pk : sink.packets)
+            {
+                size_t q = 0;
+                const size_t nq = pk.size() / 16;
+                while (q < nq)
+                {
+                    uint64_t lo, hi;
+                    std::memcpy(&lo, pk.data() + q * 16, 8);
+                    std::memcpy(&hi, pk.data() + q * 16 + 8, 8);
+                    ++q;
+                    const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t(lo >> 58) & 3, nreg = (uint32_t(lo >> 60) & 0xF) ? uint32_t(lo >> 60) & 0xF : 16;
+                    const bool eop = (lo >> 15) & 1;
+                    if (flg != 0)
+                    {
+                        q += flg == 1 ? (size_t(nloop) * nreg + 1) / 2 : nloop; // not PACKED: not P9's
+                        if (eop)
+                            break;
+                        continue;
+                    }
+                    if ((lo >> 46) & 1)
+                    {
+                        const uint32_t prim = uint32_t(lo >> 47) & 0x7FF;
+                        if ((prim & 7) != 6)
+                        {
+                            ok = false; // not sprites
+                            break;
+                        }
+                    }
+                    float S = 0, T = 0, Q = 1;
+                    uint32_t rgba = 0;
+                    struct Corner
+                    {
+                        float x, y, u, v;
+                        uint32_t z;
+                    } c[2];
+                    int nc = 0;
+                    for (uint32_t l = 0; l < nloop && q < nq; ++l)
+                        for (uint32_t r = 0; r < nreg && q < nq; ++r, ++q)
+                        {
+                            const uint32_t reg = uint32_t(hi >> (4 * r)) & 0xF;
+                            uint32_t v[4];
+                            std::memcpy(v, pk.data() + q * 16, 16);
+                            if (reg == 2) // ST (+ Q in PACKED)
+                            {
+                                std::memcpy(&S, &v[0], 4);
+                                std::memcpy(&T, &v[1], 4);
+                                std::memcpy(&Q, &v[2], 4);
+                            }
+                            else if (reg == 1)
+                                rgba = (v[0] & 0xFF) | (v[1] & 0xFF) << 8 | (v[2] & 0xFF) << 16 | (v[3] & 0xFF) << 24;
+                            else if (reg == 4 || reg == 5) // XYZF2 / XYZ2
+                            {
+                                const bool adc = (v[3] >> 15) & 1;
+                                const float qq = Q != 0.0f ? Q : 1.0f;
+                                c[nc] = {float(v[0] & 0xFFFF) / 16.0f, float(v[1] & 0xFFFF) / 16.0f, S / qq, T / qq,
+                                         reg == 4 ? (v[2] >> 4) & 0xFFFFFF : v[2]};
+                                if (++nc == 2)
+                                {
+                                    nc = 0;
+                                    if (adc)
+                                        continue;
+                                    static const bool spriteLog = std::getenv("POP_SPRITE_LOG") != nullptr;
+                                    static int spriteLogged = 0;
+                                    if (spriteLog && spriteLogged++ < 24)
+                                        std::fprintf(stderr, "[pop:sprite] (%.1f %.1f) uv (%.3f %.3f) - (%.1f %.1f) uv (%.3f %.3f) z %u rgba %08x Q %.4g\n", c[0].x,
+                                                     c[0].y, c[0].u, c[0].v, c[1].x, c[1].y, c[1].u, c[1].v, c[1].z, rgba, Q);
+                                    // a sprite: corners 0 and 1, colour and Z of the second
+                                    const float xs[4] = {c[0].x, c[1].x, c[1].x, c[0].x}, ys[4] = {c[0].y, c[0].y, c[1].y, c[1].y};
+                                    const float us[4] = {c[0].u, c[1].u, c[1].u, c[0].u}, vs[4] = {c[0].v, c[0].v, c[1].v, c[1].v};
+                                    const uint32_t base0 = uint32_t(b.vertices.size());
+                                    bool good = true;
+                                    for (int k = 0; k < 4 && good; ++k)
+                                    {
+                                        pop_native::Vertex vx{};
+                                        good = unproject(xs[k], ys[k], double(c[1].z), vx.pos);
+                                        vx.uv[0] = us[k];
+                                        vx.uv[1] = vs[k];
+                                        for (int ch = 0; ch < 4; ++ch)
+                                            vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
+                                        b.vertices.push_back(vx);
+                                    }
+                                    if (!good)
+                                    {
+                                        b.vertices.resize(base0);
+                                        continue;
+                                    }
+                                    b.indices.insert(b.indices.end(), {base0, base0 + 1, base0 + 2, base0, base0 + 2, base0 + 3});
+                                    ++g_spriteStats.quads;
+                                }
+                            }
+                        }
+                    if (eop || !ok)
+                        break;
+                }
+            }
+            static int logged = 0;
+            if (logged++ < 6)
+                std::fprintf(stderr, "[pop:native] sprite element %08x matrix %u: %zu packets, %zu quads%s\n", element, index, sink.packets.size(),
+                             b.vertices.size() / 4, ok ? "" : " (unexpected primitive: on the GS)");
+            if (!ok)
+                return false;
+            if (b.indices.empty())
+            {
+                // every sprite culled or clipped away: the call draws nothing, so skipping it keeps the frame pure
+                if (g_world && g_worldLate && worldStateOk(rdram))
+                {
+                    ++g_spriteStats.native;
+                    return true;
+                }
+                return false;
+            }
+            std::vector<pop_assets::Batch> bs;
+            bs.push_back(std::move(b));
+            DrawMaterial dm = currentMaterial(rdram);
+            dm.hasUvm = false;
+            dm.constColour = dm.constAlpha = -1; // P9 writes RGBAQ itself
+            if (logged <= 6)
+                std::fprintf(stderr, "[pop:native] sprite material: texture %08x flags %08x ref %08x\n", dm.textureKey, dm.flags, dm.ref);
+            const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
+            std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+            if (g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {}))
+            {
+                ++g_spriteStats.native;
+                return true;
+            }
+            return false;
+        }
+#endif
+
         template <int N>
         void otherDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -1560,6 +2010,14 @@ namespace pop_native_live
                 const uint32_t sub = guestAny(rdram, 0x70000034u);
                 g_frameOther.push_back({N, sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
                                         getRegU32(ctx, 4), g_currentList});
+#if POP_SPRITE_VU1
+                if (N == 1 && spriteRecord(rdram, ctx))
+                {
+                    if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                        ++g_lateStats.native;
+                    return;
+                }
+#endif
                 if (N == 0)
                 {
                     // CJIdxMesh::Display(mesh, matrix index): CALLs the packet at the low 28 bits of the
@@ -3143,6 +3601,11 @@ namespace pop_native_live
                                  (unsigned long long)g_lateStats.frames, (unsigned long long)g_lateStats.pureAtLate,
                                  (unsigned long long)g_lateStats.closedInLate, (unsigned long long)g_lateStats.native,
                                  (unsigned long long)g_lateStats.gs, (unsigned long long)g_worldStats.particles, top.c_str());
+#if POP_SPRITE_VU1
+                    std::fprintf(stderr, "[pop:world] sprites (P9 on the interpreter): draws %llu, native %llu, quads %llu, not replayed %llu\n",
+                                 (unsigned long long)g_spriteStats.draws, (unsigned long long)g_spriteStats.native,
+                                 (unsigned long long)g_spriteStats.quads, (unsigned long long)g_spriteStats.failed);
+#endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu\n",

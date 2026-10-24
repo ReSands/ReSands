@@ -83,6 +83,24 @@ if(POP_RUNTIME_SRC)
   endif()
 endif()
 
+# pop_state_frame_vu1: pop_state_frame against the pop-sotc runtime with its VU1 interpreter linked in, so the
+# sprite path (VU1 program P9 on the interpreter, POP_SPRITE_VU1) runs offline too. The interpreter uses x86
+# intrinsics: on the Mac this target is built for x86_64 (runs under Rosetta).
+if(POP_SOTC_SRC AND POP_RUNTIME_SRC)
+  add_executable(pop_state_frame_vu1 src/state_frame.cpp ${POP_SOTC_SRC}/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp)
+  set_target_properties(pop_state_frame_vu1 PROPERTIES CXX_STANDARD 20)
+  target_include_directories(pop_state_frame_vu1 PRIVATE src ${POP_SOTC_SRC}/ps2xRuntime/include ${POP_SOTC_SRC}/ps2xRuntime/src/lib/Kernel
+                             ${POP_SOTC_SRC}/ps2xIOP/include ${POP_SOTC_SRC}/ps2xRuntime/src/lib/vu ${POP_SOTC_SRC}/ps2xRuntime/src/lib
+                             ${POP_RUNTIME_SRC}/ps2xRuntime/src/runner)
+  target_compile_definitions(pop_state_frame_vu1 PRIVATE POP_SPRITE_VU1=1)
+  if(APPLE)
+    set_target_properties(pop_state_frame_vu1 PROPERTIES OSX_ARCHITECTURES x86_64)
+  endif()
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(pop_state_frame_vu1 PRIVATE -msse4.1)
+  endif()
+endif()
+
 # pop_world_test: the runtime side of POP_NATIVE_WORLD (tools/overrides/pop_native_world.cpp) with a stand-in
 # GS: a --world frame of pop_state_frame through the worker and the GS hook. Needs a runtime with the GS
 # host-inject hook (runtime patch 38): -DPOP_SOTC_SRC=<PS2Recomp-sotc checkout>; the runner directory of

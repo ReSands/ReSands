@@ -119,7 +119,8 @@ namespace
                 call(0x00469C00u, ctx);
                 break;
             case 7:
-            case 8: // CJadeSpriteElement: element table *(0x6E1598) + u16 * 0x20 (CElementList::Render)
+            case 8: // CJadeSpriteElement: element table *(0x6E1598) + u16 * 0x20 (CElementList::Render, which also sets 0x90)
+                wr32(0x70000090u, uint32_t((word << 26) >> 54));
                 setArgs(*ctx, rd32(0x006E1598u) + uint32_t(word & 0xFFFF) * 0x20, matrix, kind == 8);
                 call(0x004C6200u, ctx);
                 break;
@@ -297,6 +298,10 @@ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
     g_hooks[address] = func;
     return true;
 }
+#if POP_SPRITE_VU1 // pop_state_frame_vu1: the interpreter's XGKICK targets (the sprite path's sink keeps everything)
+void PS2Memory::submitGifPacket(GifPathId, const uint8_t *, uint32_t, bool, bool) {}
+void GS::processGIFPacket(const uint8_t *, uint32_t) {}
+#endif
 // the live window's GS comparison picture (never used offline; the Mac runtime's GS has it)
 bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &, uint32_t &, uint32_t &, uint32_t *, uint32_t *, bool *) const { return false; }
 #if POP_LIVE_QUICKSAVE // the SotC runtime's save states (POP_NATIVE_FLASH_SAVE): nothing to save offline
@@ -498,6 +503,11 @@ int main(int argc, char **argv)
                      (unsigned long long)ws.skipped, (unsigned long long)ws.noTexture, (unsigned long long)ws.notRecorded,
                      (unsigned long long)ws.posed, (unsigned long long)ws.drivers, (unsigned long long)ws.skinGs[0],
                      (unsigned long long)ws.skinGs[1], (unsigned long long)ws.skinGs[2]);
+#if POP_SPRITE_VU1
+        const auto &ss = pop_native_live::g_spriteStats;
+        std::fprintf(stderr, "[state] sprites: draws %llu, native %llu, quads %llu, not replayed %llu\n", (unsigned long long)ss.draws,
+                     (unsigned long long)ss.native, (unsigned long long)ss.quads, (unsigned long long)ss.failed);
+#endif
         const auto &ls = pop_native_live::g_lateStats;
         std::string by;
         for (const auto &[why, n] : ls.closedBy)
