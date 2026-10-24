@@ -173,3 +173,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   bits" for ~60 rounds over two nights were one rule missing from the spec (the VU reads denormals as zero; these
   lanes held colour bytes). Retries cannot fix a spec gap; one judged patch found it in minutes. Also: read the
   reference implementation's float handling (here `ps2_vu1_impl.inl`'s `vnorm`) before writing a spec for it.
+- **"pc unchanged after a call" is not always a stub return (24 Oct).** Generated code can come back to the
+  scheduler with the same pc without unwinding (a Ghidra-split loop whose pieces call each other). A runtime rule
+  "pc unchanged = return to $ra" must be limited to functions known to be host code (replaced after
+  registration), or it jumps into garbage (patches 41/42).
