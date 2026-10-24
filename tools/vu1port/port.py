@@ -42,7 +42,15 @@ STAGES = {
     'p6_a_g1_in2b': dict(entry=0x4a0, exits=[0x4f8], ranges=[(0x4a0, 0x4f0)]),
     'p6_a_g1_in2c': dict(entry=0x4f8, exits=[0x338, 0x590], ranges=[(0x4f8, 0x588)]),
     'p6_a_g1_tail': dict(entry=0x590, exits=[0x288, 0x5e0], ranges=[(0x590, 0x5d8)]),
-    'p6_a_check': dict(entry=0x5e0, exits=[0xcf0, 0x830, 0x14e8, 0x1528], ranges=[(0x5e0, 0x828), (0x1568, 0x1640)]),
+    # the clip check (was one stage, p6_a_check: 0 of 174 cases in two nights; split 24 Oct): setup, the vertex
+    # loop, its continuation, the clip-flag tests (0x7e8 leads to the polygon clipper, never reached), the
+    # triangle test subroutine and its return
+    'p6_a_ck_head': dict(entry=0x5e0, exits=[0x698], ranges=[(0x5e0, 0x690)]),
+    'p6_a_ck_loop': dict(entry=0x698, exits=[0x6f0, 0x710], ranges=[(0x698, 0x6e8)]),
+    'p6_a_ck_next': dict(entry=0x6f0, exits=[0x698, 0xcf0], ranges=[(0x6f0, 0x708)]),
+    'p6_a_ck_cull': dict(entry=0x710, exits=[0x6f0, 0x1568, 0x7e8], ranges=[(0x710, 0x7d0), (0x818, 0x828)]),
+    'p6_a_ck_sub': dict(entry=0x1568, exits=[0x7d8], ranges=[(0x1568, 0x1640)]),
+    'p6_a_ck_ret': dict(entry=0x7d8, exits=[0x6f0, 0x7e8], ranges=[(0x7d8, 0x7e0)]),
     'p6_a_g2_head': dict(entry=0x930, exits=[0x9e0], ranges=[(0x930, 0x9d8)]),
     'p6_a_g2_in1a': dict(entry=0x9e0, exits=[0xa58], ranges=[(0x9e0, 0xa50)]),
     'p6_a_g2_in1b': dict(entry=0xa58, exits=[0xae8], ranges=[(0xa58, 0xae0)]),
@@ -59,7 +67,13 @@ STAGES = {
     'p6_b_g1_in1b': dict(entry=0x17f0, exits=[0x1840], ranges=[(0x17f0, 0x1838)]),
     'p6_b_g1_in2': dict(entry=0x1840, exits=[0x1770, 0x1910], ranges=[(0x1840, 0x1908)]),
     'p6_b_g1_tail': dict(entry=0x1910, exits=[0x1698, 0x1960], ranges=[(0x1910, 0x1958)]),
-    'p6_b_check': dict(entry=0x1960, exits=[0x1dd0, 0x14e8, 0x1528, 0x1b28], ranges=[(0x1960, 0x1b20), (0x1568, 0x1640), (0x2550, 0x2628)]),
+    # the clip check (was p6_b_check, split 24 Oct like p6_a_check; 0x1ae8 leads to the polygon clipper)
+    'p6_b_ck_head': dict(entry=0x1960, exits=[0x19c8], ranges=[(0x1960, 0x19c0)]),
+    'p6_b_ck_loop': dict(entry=0x19c8, exits=[0x19f0, 0x1a10], ranges=[(0x19c8, 0x19e8)]),
+    'p6_b_ck_next': dict(entry=0x19f0, exits=[0x19c8, 0x1dd0], ranges=[(0x19f0, 0x1a08)]),
+    'p6_b_ck_cull': dict(entry=0x1a10, exits=[0x19f0, 0x2550, 0x1ae8], ranges=[(0x1a10, 0x1ad0), (0x1b18, 0x1b20)]),
+    'p6_b_ck_sub': dict(entry=0x2550, exits=[0x1ad8], ranges=[(0x2550, 0x2628)]),
+    'p6_b_ck_ret': dict(entry=0x1ad8, exits=[0x19f0, 0x1ae8], ranges=[(0x1ad8, 0x1ae0)]),
     'p6_b_g2_head_a': dict(entry=0x1b60, exits=[0x1bd0], ranges=[(0x1b60, 0x1bc8)]),
     'p6_b_g2_head_b': dict(entry=0x1bd0, exits=[0x1c40], ranges=[(0x1bd0, 0x1c38)]),
     'p6_b_g2_in1a': dict(entry=0x1c40, exits=[0x1c98], ranges=[(0x1c40, 0x1c90)]),
@@ -87,6 +101,14 @@ the program stops.
   leaves vf6.x, y, w unchanged; "ADDy.x vf5, vf0, vf5y" writes only vf5.x (= 0 + vf5.y). Suffix i or q
   (ADDi, MULq, MADDAq, ...): the I or Q register instead of the last operand.
 - vf0 is always (0, 0, 0, 1): writes to vf0 are discarded (such instructions only set flags). vi0 is 0.
+- VU floats have no denormals, infinities or NaNs. Every float operand an upper instruction reads (vf lanes,
+  ACC, I, Q; also for MAX, MINI, ABS, CLIP) is first normalised: exponent bits 0 (a denormal, often integer
+  bits such as colours: 0x000000ff) -> zero of the same sign; exponent bits 0xff -> +-0x7f7fffff (the largest
+  float, same sign). Arithmetic results (ADD, SUB, MUL, MADD, MSUB, their A forms) that underflow become zero
+  of the same sign, overflowing ones +-0x7f7fffff. So MAX.xyzw vf13, vf20, vf0x on vf20 = 0x000000ff gives
+  0, not the denormal; MINIi on it gives 0; SUB of two such lanes gives 0. MOVE, MR32, LQ, SQ, MFIR, FTOI and
+  ITOF copy or convert bits without normalising. Write a helper (memcpy to uint32_t, test 0x7f800000) and use
+  it on every operand and result.
 - ACC: MULA, ADDA, SUBA, MADDA, MSUBA write ACC (the masked lanes) instead of a vf register. Per lane, with
   b = the second operand, its broadcast lane, I or Q:
   ADD d = a + b; SUB d = a - b; MUL d = a * b; MADD d = ACC + a * b; MSUB d = ACC - a * b;
@@ -291,9 +313,12 @@ def spec(name):
         data = f.read()
     n = data.count(b'CASE')  # approximate (magic per case)
     exit_notes = ''
-    if any(e in (0x830, 0x14e8, 0x1528, 0x1b28) for e in st['exits']):
-        exit_notes = ('0x830, 0x14e8, 0x1528 and 0x1b28 are calls into the polygon clipper (BAL): the recorded scenes never '
-                      'reach them; if your code does, stop there (after the BAL and its delay slot).')
+    if any(e in (0x7e8, 0x1ae8) for e in st['exits']):
+        exit_notes = ('0x%x starts the calls into the polygon clipper: the recorded scenes never reach it; if your code '
+                      'does, stop before it.' % [e for e in st['exits'] if e in (0x7e8, 0x1ae8)][0])
+    if st['exits'] in ([0x7d8], [0x1ad8]):
+        exit_notes = ('A subroutine: the caller\'s BAL set vi15; the JR vi15 at its end (after its delay slot) returns to '
+                      '0x%x, so set vu.pc = vu.vi[15] * 8.' % st['exits'][0])
     slots = [e for e in st['exits'] if any(lo <= e - 8 <= hi for lo, hi in st['ranges']) and
              re.search(r'\b(B|BAL|IBEQ|IBNE|IBLTZ|IBGTZ|IBLEZ|IBGEZ) ', disasm(open(IMAGE, 'rb').read()[e - 8:e], e - 8)[0][41:])]
     for e in slots:

@@ -196,3 +196,22 @@ despite the 16k thinking budget), rounds counted right. Failure shapes from the 
   data qwords: a real mistranslation; hand-port or smaller cuts.
 - **a_check / b_check, 174 of 174 every round, both nights**: exit pc wrong (0x6f0 vs 0xcf0), ~560 differences,
   several compile failures and one endless loop: too big for the model as one piece. Cut them up or hand-port.
+
+**24 Oct morning: 6 of the 8 fixed by hand from Qwen's own attempts, the checks split; 9 pieces for tonight.**
+- **The "expected 0" class was the VU's float normalisation**, missing from the primer: the runtime's VU1
+  interpreter (`ps2_vu1_impl.inl`: `vnorm`, `normalizeOperand`, `normalizeFmacExactResult`) reads every upper
+  operand with exponent 0 as +-0 and exponent 0xff as +-0x7f7fffff, and flushes FMAC results the same way.
+  These stages run MAX/MINI/SUB on lanes holding integer bits (colours, counters: 0x000000ff is a denormal).
+  Adding that to Qwen's best attempts (round numbers in each file's header) passed a_g2_in3a, a_g2_in3b,
+  a_g2_in2a and b_g1_in1b. The primer (`port.py` PRIMER) now states the rule.
+- **a_g1_in2c**: round24 also stored through the wrong address register (SQ used vi[source vf]) and wrote
+  FTOI4 results as floats; fixed. **b_g2_in1a**: round16 wrote ISW as one byte (a 32-bit word) and computed
+  MADDw as vf18 += (ACC + ...); fixed. All six are in `tools/vu1port/known_good/` (counts as passed).
+- **a_check / b_check split** (`port.py` STAGES, cases recorded with `cases.sh`): head (setup), loop (vertex
+  loop to the clip test), next (loop end / exit to the tail), cull (clip-flag tests), sub (triangle test
+  subroutine 0x1568 / 0x2550, JR vi15 back) and ret (2 pairs). a_ck_next, a_ck_ret and b_ck_ret hand-ported
+  (they pass: the end-to-end check of the new cases); 9 left for Qwen: a_ck_head/loop/cull/sub,
+  b_ck_head/loop/next/cull/sub. Night job `tools/windows/oct24.ps1` (passes of 6 rounds until 07:30, then
+  `--chain` if all pass).
+- Lesson: when several stages fail the same few cases the same way for many rounds, judge a patched attempt
+  by hand before giving Qwen more rounds: here one missing rule in the primer cost ~60 rounds over two nights.
