@@ -3,7 +3,8 @@
 // instead; PNF4 + fog a, b, FOGCOL, Z test per draw (game order); PNF5 + FBMSK per draw, GLOW and
 // HAZE trailers; PNF6 = PNF5 with images by texture key, pixels only the first time; PNF7 (the in-game
 // native world) = PNF6 with a 64-bit key per batch, its geometry only the first time (kept meshes); key 0 =
-// a batch for this frame only (posed characters), always with its geometry.
+// a batch for this frame only (posed characters), always with its geometry. PNF8 = "PNF8", the layout it
+// follows (5, 6 or 7), then that layout with fog min, max after fog b per draw (the VU1 drivers clamp F to them).
 #include "frame_loader.h"
 
 #include <cstdio>
@@ -17,7 +18,7 @@ namespace pop_native
     bool frameInGameOrder(const char magic[4])
     {
         return std::memcmp(magic, "PNF4", 4) == 0 || std::memcmp(magic, "PNF5", 4) == 0 || std::memcmp(magic, "PNF6", 4) == 0 ||
-               std::memcmp(magic, "PNF7", 4) == 0;
+               std::memcmp(magic, "PNF7", 4) == 0 || std::memcmp(magic, "PNF8", 4) == 0;
     }
 
     bool FrameLoader::load(Renderer &r, std::istream &f, const char *name, float clip[16], std::vector<Draw> &draws, FrameExtras &extras,
@@ -25,9 +26,14 @@ namespace pop_native
     {
         char magic[4] = {};
         f.read(magic, 4);
-        const bool v7 = std::memcmp(magic, "PNF7", 4) == 0; // + batch keys, geometry only the first time
-        const bool v6 = v7 || std::memcmp(magic, "PNF6", 4) == 0; // live: images by texture key, pixels only the first time
-        const bool v5 = v6 || std::memcmp(magic, "PNF5", 4) == 0; // + FBMSK per draw, GLOW trailer
+        // PNF8: a word naming the layout (5, 6 or 7) follows, then that layout + fog min, max per draw
+        const bool v8 = std::memcmp(magic, "PNF8", 4) == 0;
+        uint32_t layout = 0;
+        if (v8)
+            f.read(reinterpret_cast<char *>(&layout), 4);
+        const bool v7 = layout == 7 || std::memcmp(magic, "PNF7", 4) == 0; // + batch keys, geometry only the first time
+        const bool v6 = v7 || layout == 6 || std::memcmp(magic, "PNF6", 4) == 0; // live: images by texture key, pixels only the first time
+        const bool v5 = v6 || layout == 5 || std::memcmp(magic, "PNF5", 4) == 0; // + FBMSK per draw, GLOW trailer
         const bool v4 = v5 || std::memcmp(magic, "PNF4", 4) == 0; // + fog a, b, FOGCOL, Z test per draw
         const bool v3 = v4 || std::memcmp(magic, "PNF3", 4) == 0;
         const bool v2 = v3 || std::memcmp(magic, "PNF2", 4) == 0;
@@ -81,6 +87,11 @@ namespace pop_native
                 {
                     f.read(reinterpret_cast<char *>(&d.fogA), 4);
                     f.read(reinterpret_cast<char *>(&d.fogB), 4);
+                    if (v8)
+                    {
+                        f.read(reinterpret_cast<char *>(&d.fogMin), 4);
+                        f.read(reinterpret_cast<char *>(&d.fogMax), 4);
+                    }
                     f.read(reinterpret_cast<char *>(&fogColour), 4);
                     f.read(reinterpret_cast<char *>(&zTest), 4);
                     if (v5)

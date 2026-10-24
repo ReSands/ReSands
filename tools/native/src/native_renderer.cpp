@@ -518,10 +518,12 @@ namespace pop_native
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)
-                    push.fog[0] = d.ownFog ? d.fogA : fog.a;
-                    push.fog[1] = d.ownFog ? d.fogB : fog.b;
-                    push.fog[2] = fog.enabled || d.ownFog ? 1.0f : 0.0f;
-                    push.fog[3] = 0.0f;
+                    // no fog: F = 255 everywhere
+                    const bool fogged = fog.enabled || d.ownFog;
+                    push.fog[0] = !fogged ? 255.0f : d.ownFog ? d.fogA : fog.a;
+                    push.fog[1] = !fogged ? 0.0f : d.ownFog ? d.fogB : fog.b;
+                    push.fog[2] = !fogged ? 0.0f : d.ownFog ? d.fogMin : fog.min;
+                    push.fog[3] = !fogged ? 255.0f : d.ownFog ? d.fogMax : fog.max;
                     const float *fc = d.ownFogColour ? d.fogColour : fog.colour;
                     push.fogColour[0] = fc[0];
                     push.fogColour[1] = fc[1];

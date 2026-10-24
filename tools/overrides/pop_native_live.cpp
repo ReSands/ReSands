@@ -147,9 +147,11 @@ namespace pop_native_live
             int32_t constColour = -1; // 0xBBGGRR, -1: vertex colours
             int32_t constAlpha = -1;  // 0..0x7F, -1: vertex alpha
             // GS fog of the draw: zone (0x70000084, uploaded by FUN_004B7200 from the table at
-            // 0x70000270 + id * 16 to VU 0x10 = (255, 0, a, b); F = a + b * w) and FOGCOL as the
-            // render state sends it (0x70000024: the zone colour, 0 for additive/darkening blends)
-            float fogA = 255.0f, fogB = 0.0f;
+            // 0x70000270 + id * 16 to VU 0x10 = (max, min, a, b); F = a + b * w clamped to min..max by
+            // the VU1 drivers (MINIx / MAXy with vf31): min 102 keeps distant buildings 40% visible)
+            // and FOGCOL as the render state sends it (0x70000024: the zone colour, 0 for
+            // additive/darkening blends)
+            float fogA = 255.0f, fogB = 0.0f, fogMin = 0.0f, fogMax = 255.0f;
             uint32_t fogColour = 0;
             uint32_t zTest = 1; // render state 0x70000038: 0 = ZTST ALWAYS (Display3DElements' +0x78 list)
             // GS FRAME FBMSK as FUN_004B2000 sets it: flags 0x60 == 0x40: RGB masked (alpha only);
@@ -386,10 +388,13 @@ namespace pop_native_live
                     std::fprintf(stderr, "[pop:native] UV matrix sub %08x flags %08x: %.3f %.3f %.3f %.3f + (%.3f, %.3f)\n", sub, dm.flags, dm.uvm[0],
                                  dm.uvm[1], dm.uvm[2], dm.uvm[3], dm.uvm[4], dm.uvm[5]);
             }
-            const uint32_t zone = guestAny(rdram, 0x70000084u) & 0xFF, fa = guestAny(rdram, 0x70000270u + zone * 16 + 8),
+            const uint32_t zone = guestAny(rdram, 0x70000084u) & 0xFF, fmax = guestAny(rdram, 0x70000270u + zone * 16),
+                           fmin = guestAny(rdram, 0x70000270u + zone * 16 + 4), fa = guestAny(rdram, 0x70000270u + zone * 16 + 8),
                            fb = guestAny(rdram, 0x70000270u + zone * 16 + 12);
             std::memcpy(&dm.fogA, &fa, 4);
             std::memcpy(&dm.fogB, &fb, 4);
+            std::memcpy(&dm.fogMin, &fmin, 4);
+            std::memcpy(&dm.fogMax, &fmax, 4);
             dm.fogColour = guestAny(rdram, 0x70000024u) & 0xFFFFFF;
             dm.zTest = guest8(rdram, 0x70000038u);
             if ((dm.flags & 0x60) == 0x40)
@@ -2175,7 +2180,11 @@ namespace pop_native_live
             // world: "PNF7" = PNF6 with a 64-bit key before each batch; a batch the renderer keeps already is
             // (key, 0xFFFFFFFF), otherwise (key, vertex count, index count, data) as before; key 0 = this frame
             // only (posed characters: always with their data, never kept)
-            putBytes(f, worldOut ? "PNF7" : live ? "PNF6" : "PNF5", 4);
+            // all three are written as "PNF8" + the layout (5, 6, 7), with fog min, max after fog b per draw
+            // (the VU1 drivers' clamp of F)
+            putBytes(f, "PNF8", 4);
+            const uint32_t layout = worldOut ? 7 : live ? 6 : 5;
+            putBytes(f, &layout, size_t(4) * size_t(1));
             putBytes(f, g_frameClip, size_t(4) * size_t(16));
             std::unordered_map<uint32_t, int32_t> imageOf;
             std::vector<pop_native::Image> images;
@@ -2355,6 +2364,8 @@ namespace pop_native_live
                 putBytes(f, &mat.ref, size_t(4) * size_t(1));
                 putBytes(f, &mat.fogA, size_t(4) * size_t(1));
                 putBytes(f, &mat.fogB, size_t(4) * size_t(1));
+                putBytes(f, &mat.fogMin, size_t(4) * size_t(1));
+                putBytes(f, &mat.fogMax, size_t(4) * size_t(1));
                 putBytes(f, &mat.fogColour, size_t(4) * size_t(1));
                 putBytes(f, &mat.zTest, size_t(4) * size_t(1));
                 putBytes(f, &mat.fbmsk, size_t(4) * size_t(1));

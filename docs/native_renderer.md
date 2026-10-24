@@ -180,6 +180,13 @@ List order: +200, +0x2C, +0x3C, then (when both used) +0x68 and +0x78 with `SetZ
 state byte 0x70000038 = 0: GS ZTST ALWAYS), +0x4C, lightmaps +0x5C, shadows, +0x88, +0x98, +0xA8.
 Frame format **PNF4** records per draw fog a/b, FOGCOL and the Z-test byte, all draws in the
 game's order (the viewer then draws one pass in that order, `Options::gameOrder`).
+**Correction (24 Oct): the zone entry is (max, min, a, b), not (255, 0, a, b).** The VU1 drivers load it into vf31 and
+clamp F with `MINIx.w` / `MAXy.w` (static driver 9d41512c, e.g. 0x0F68/0x0F88). Night palace (save 21_202624): zones
+0/3/6 have min 102 (fog never above 60%), zone 1 min 127.5; zones 0x10+ have max 127. Without the minimum, distant
+buildings came out as flat fog colour (user, 24 Oct, palace at night). Fixed: fog min/max per draw (`DrawMaterial`,
+PNF8, push constant fog.zw, `mesh.vert`); A/B over 191 saves 14.46 -> 14.33 (28 better, 3 worse by <= 0.5, 160 same;
+21_204628 11.80 -> 5.36, 21_202624 3.00 -> 0.84). **PNF8** = "PNF8", the layout (5, 6, 7), then that layout with fog
+min, max after fog b per draw; all writer modes use it.
 Balcony frame: world fog (300.3 - 5.667 w), sky dome and backdrop (2643 - 6.467 w), FOGCOL
 RGB 52,78,95. Clear sky pixel: game (50,78,94), native (54,82,97). No draw used the no-Z-test list
 there. `~/Desktop/pop_renders/27_live_fog_order_game_vs_native.png`.
@@ -874,3 +881,26 @@ again). Same scene, the same stale camera on the first 2 frames.
 - **Fixed with (a) (85587ef), checked in game 23 Oct ~19:15.** Fix candidates were: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
   buffer index at Display3DElements) instead of the GS state at the marker; (b) honour the frame's missing clear: no
   injection (or a Z-tested merge) when the Z buffer was not cleared before the marker.
+
+## Shadows: first decompile (24 Oct)
+Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-texture shadows, not mesh shadows:
+- Display3DElements calls `CJadeShadowManager::DisplayAllShadows` (0x4C02C0) after the lightmaps (+0x5C): it resets
+  some GS state words (0x6751B0..C4), `FindAndSortProjectorByTextureId`, then FUN_004C2400 per projector, then
+  FUN_004B1D40 (render state flush).
+- **FUN_004C2400 (one CJadeShadowProjector):** builds the projection at +0x170/+0x1B0/+0x1F0 (perspective when
+  +0x3D0 == 0 from +0x3EC..+0x410, else orthographic from +0x3D8..+0x400), the camera from +0x360/+0x370/+0x380
+  (sceVu0CameraMatrix -> +0x130), +0x230 = proj * cam, +0x270 = clip * cam, `UpdateTexProjectionMatrix`; strength
+  +0x45C scaled by a distance fade (+0x104 set: 1 below 5, 0 above 20, linear between; distance at
+  (+0x460)->+0x14->+0x60) and FUN_004C2C40; nothing when <= 0. VU program 6 (`DoSetVUProgram`), a GS word from
+  +0x40C..+0x42C. Then: +0x111 set -> FUN_004C3180 (texture +0x100/+0x102 known) or FUN_004C3540 (caster lists +4/+0x14),
+  both call FUN_004B80C0 twice (likely: render the caster into the shadow texture); +0x114 set -> receivers: either
+  (+0x115 == 0) load texture +0x102 (TEX0 built inline), FUN_004C4540(projector, TEX0, alpha = +0x11C * 128 | 0x62),
+  FUN_004B59C0, **FUN_004B80C0(+0x20 list, 0)**, FUN_004B8080; or (+0x115 set) FUN_004C2E00. Ends with a 3-qword GS
+  packet (A+D: PRMODECONT = 1, i.e. back to PRIM attributes).
+- **FUN_004B80C0(list, mode):** walks 16-byte entries (count at +4), kind = (byte +6 & 0x3F) >> 2 as in Render:
+  4 CJIdxMesh (driver 0xB, mode 1: 5), 9 CJMeshElement::Display, 10 CJMeshElementRef (FUN_004C7B40), pass = byte +0xD
+  & 0xF, matrix = entry bits 28-37. Before each, `DoSetShadowDriver` to driver (one bone 5 / more 3) + (mode 0: 6), |
+  0x100 when the element's flag bit (+0x47 / ref +0x1B, bit 2) is set; sets 0x700000A8 = more than one bone,
+  0x700000AC = 2. So the receivers are redrawn through their normal Display with a shadow VU1 driver.
+- Still to read: FUN_004C3180, FUN_004C3540, FUN_004C2E00, UpdateTexProjectionMatrix, FUN_004C4540, FUN_004B59C0,
+  FUN_004B8080, FUN_004C2C40.

@@ -70,8 +70,11 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   now **on by default in `play.ps1`** (`-NoNativeTranslucent` = off; 23 Oct night). The cloud "bug" of save 21_202624 was
   the offline judge: `pop_native_view --frame` drew PNF7 frames opaque-first, so the clouds landed on the opaque horizon
   band the game draws after them; the game window was always in game order. Viewer fixed; A/B over 201 saves 19.24 ->
-  18.23 (108 better, 14 worse = letterboxed cutscenes). **User check in game pending** (needs the PC to pull this
-  commit; no rebuild). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
+  18.23 (108 better, 14 worse = letterboxed cutscenes). **User check in game (24 Oct): clouds fine**; it showed distant
+  buildings as flat grey: fog zones are (max, min, a, b) and the VU1 drivers clamp F to min..max (min 102 = at most
+  60% fog); we clamped to 0..255. Fixed (PNF8, fog min/max per draw), offline A/B 191 saves 28 better / 3 worse
+  (<= 0.5); **user check of the fix in game pending** (PC: -Fast rebuild). First shadow decompile:
+  `docs/native_renderer.md` "Shadows: first decompile". Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
   **Order for the next session:** (1) done (above; user check in game); (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour

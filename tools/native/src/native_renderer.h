@@ -100,12 +100,12 @@ namespace pop_native
         int material = -1;
     };
 
-    // GS fog for the frame (from the VU1 constants the game uploads, e.g. VU 0x10 = (255, 0, a, b)):
-    // F = a + b * w clamped to 0..255 (255 = no fog), colour = (F * Cs + (255 - F) * FOGCOL) / 255
+    // GS fog for the frame (from the VU1 constants the game uploads, VU 0x10 = (max, min, a, b)):
+    // F = a + b * w clamped to min..max (255 = no fog), colour = (F * Cs + (255 - F) * FOGCOL) / 255
     struct Fog
     {
         bool enabled = false;
-        float a = 255.0f, b = 0.0f;
+        float a = 255.0f, b = 0.0f, min = 0.0f, max = 255.0f;
         float colour[3] = {0, 0, 0}; // FOGCOL, 0..1
     };
 
@@ -116,7 +116,7 @@ namespace pop_native
         int material = -1;
         float model[16]; // object -> world, column-major (glTF order)
         bool ownFog = false;           // far layers (sky) use their own GS fog constants
-        float fogA = 255.0f, fogB = 0.0f;
+        float fogA = 255.0f, fogB = 0.0f, fogMin = 0.0f, fogMax = 255.0f;
         bool ownFogColour = false;     // per draw FOGCOL (live frames: the render state's, 0 for additive blends)
         float fogColour[3] = {0, 0, 0};
     };

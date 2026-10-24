@@ -7,7 +7,7 @@
 layout(push_constant) uniform Push {
     mat4 mvp;          // game clip matrix * object matrix (column-major)
     vec4 params;       // x: flags (1 alpha test, 2 blended, 4 test LESS, 8 legacy blend), y: cutoff, z: lightmap strength, w: zScale
-    vec4 fog;          // x, y: GS fog factor F = x + y * w (clamped 0..255, 255 = no fog), z: enabled
+    vec4 fog;          // GS fog factor F = x + y * w clamped to z..w (the VU1 drivers' min, max; 255 = no fog)
     vec4 fogColour;    // FOGCOL (0..1)
 } pc;
 layout(location = 0) in vec3 inPos;
@@ -26,5 +26,5 @@ void main()
     vUv = inUv;
     vColour = inColour;
     vUv2 = inUv2;
-    vFog = pc.fog.z > 0.5 ? clamp(pc.fog.x + pc.fog.y * c.w, 0.0, 255.0) / 255.0 : 1.0;
+    vFog = clamp(pc.fog.x + pc.fog.y * c.w, pc.fog.z, pc.fog.w) / 255.0;
 }
