@@ -295,6 +295,9 @@ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
 }
 // the live window's GS comparison picture (never used offline; the Mac runtime's GS has it)
 bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &, uint32_t &, uint32_t &, uint32_t *, uint32_t *, bool *) const { return false; }
+#if POP_LIVE_QUICKSAVE // the SotC runtime's save states (POP_NATIVE_FLASH_SAVE): nothing to save offline
+void ps2x::savestate::requestQuickSave() {}
+#endif
 uint32_t popTextureKey(uint32_t index)
 {
     const auto it = g_texKeys.find(index);

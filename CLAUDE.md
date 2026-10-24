@@ -73,13 +73,19 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   18.23 (108 better, 14 worse = letterboxed cutscenes). **User check in game (24 Oct): clouds fine**; it showed distant
   buildings as flat grey: fog zones are (max, min, a, b) and the VU1 drivers clamp F to min..max (min 102 = at most
   60% fog); we clamped to 0..255. Fixed (PNF8, fog min/max per draw), offline A/B 191 saves 28 better / 3 worse
-  (<= 0.5); **user: palace fix looks good (24 Oct)**. First shadow decompile:
-  `docs/native_renderer.md` "Shadows: first decompile" (24 Oct midday: render-to-texture shadows; caster and receiver
-  entries of the shadow VU1 program found in the 192521 trace; next = the receivers' executed per-vertex loop). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
-  b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
-  0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
-  **Order for the next session:** (1) done (above; user check in game); (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour
-  (measure from a VU1 trace like the light probe), draw offline over the saves, judge on save 172041; (3) open the
+  (<= 0.5); **user: palace fix looks good (24 Oct)**.
+  **Native shadows built (24 Oct afternoon, 5347dbd; offline only so far):** `POP_NATIVE_SHADOWS=1` (`play.ps1
+  -NativeShadows`, off by default). The receiver loop of the shadow VU1 program (0x1D98) decoded and checked against the
+  interpreter (alpha within 1 on 32,940 vertices); the shadow buffer is the alpha of the displayed frame. A hook on
+  FUN_004C3540 rasterises the casters into a 256x256 alpha image per projector and redraws the receivers from the
+  frame's own records (same mesh + model matrix as the base, so the GEQUAL test sees its exact depth). In world mode a
+  projector goes native only if all its receivers' bases are native (then FUN_004C3540 is skipped, its lists emptied).
+  Save 192521: the Prince's shadow in place and shape, floor x 0.67 vs the game's ~0.74 (game edge a bit softer).
+  A/B over 204 saves: only 3 hold filled shadow lists (the game empties them after drawing), all 3 better, none worse;
+  so **the real judge is in game** (lever save 172041's flicker). Details: `docs/native_renderer.md` "Native shadows".
+  **Order for the next session:** (1) done; (2) shadows: user check in game with `play.ps1 -NativeShadows` (normal
+  boot; look at the Prince's shadow on floors and the lever area for flicker); left out so far: mirror projectors,
+  blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.
 - **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
