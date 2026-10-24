@@ -2441,6 +2441,14 @@ namespace
             g_originals[addr] = runtime.lookupFunction(addr);
         for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u, 0x00186440u})
             g_originals[addr] = runtime.lookupFunction(addr);
+        // The combat freeze ("crash 1", docs/saves_1021.md; again 24 Oct 20:24, save play_20261024_202314): Ghidra
+        // ends FUN_00172800 at its last `jal 0x160D40` and starts FUN_00172840 (the epilogue) at that jal's delay
+        // slot, so the call's return address 0x172844 had no entry. When the scheduler unwound the thread inside
+        // the call and resumed it there, the target was missing and the thread stopped. The delay slot is a nop,
+        // so the epilogue function run from 0x172840 is the resume. The only such split in the ELF (every
+        // function ending in a call checked, 24 Oct).
+        if (!runtime.hasFunction(0x00172844u))
+            runtime.registerFunction(0x00172844u, runtime.lookupFunction(0x00172840u));
         if (const char *v = std::getenv("POP_CAPTURE_ADPCM"); v && *v)
         {
             g_adpcmCapture = std::fopen(v, "wb");
