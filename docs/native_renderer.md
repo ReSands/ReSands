@@ -1000,7 +1000,10 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
   `game\jobs\shadowtest.ps1`): 6 of 6 projectors native, `pop_world_test` 60 frames fine, worker 3.09 ms per frame
   vs 2.60 without shadows (six 256x256 RGBA images per frame, 1.5 MB: R8 or a bounding box would cut it). (Its GS Z
   is not byte-identical to the viewer's with or without shadows: older than this, not looked into.) Play build with
-  it compiles (`play.ps1 -NativeShadows`); not booted yet.
+  it compiles.
+- **In game (24 Oct, normal boot, TV):** ~59-60 fps, every projector native (1,132 of 1,132 in the first minutes, no
+  list entry without records); **user: shadows look right on the floors, the lever flicker is gone.** Now on by default
+  in `play.ps1` (`-NoNativeShadows` = off). The stats line printed every frame in that build (fixed: every 300).
 - Was "not yet": live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
   image update; then skip FUN_004C3540 when every receiver's base is native, clearing both lists as FUN_004B8080
   does), blob receivers (+0x20 list, FUN_004C2E00 path), mirror projectors, CJIdxMesh entries, FUN_004C2C40.

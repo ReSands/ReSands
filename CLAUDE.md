@@ -74,17 +74,17 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   buildings as flat grey: fog zones are (max, min, a, b) and the VU1 drivers clamp F to min..max (min 102 = at most
   60% fog); we clamped to 0..255. Fixed (PNF8, fog min/max per draw), offline A/B 191 saves 28 better / 3 worse
   (<= 0.5); **user: palace fix looks good (24 Oct)**.
-  **Native shadows built (24 Oct afternoon, 5347dbd; offline only so far):** `POP_NATIVE_SHADOWS=1` (`play.ps1
-  -NativeShadows`, off by default). The receiver loop of the shadow VU1 program (0x1D98) decoded and checked against the
+  **Native shadows: done and checked in game (24 Oct afternoon; user: shadows right on the floors, lever flicker
+  gone).** `POP_NATIVE_SHADOWS=1`, **on by default in `play.ps1`** (`-NoNativeShadows` = off). The receiver loop of the shadow VU1 program (0x1D98) decoded and checked against the
   interpreter (alpha within 1 on 32,940 vertices); the shadow buffer is the alpha of the displayed frame. A hook on
   FUN_004C3540 rasterises the casters into a 256x256 alpha image per projector and redraws the receivers from the
   frame's own records (same mesh + model matrix as the base, so the GEQUAL test sees its exact depth). In world mode a
   projector goes native only if all its receivers' bases are native (then FUN_004C3540 is skipped, its lists emptied).
   Save 192521: the Prince's shadow in place and shape, floor x 0.67 vs the game's ~0.74 (game edge a bit softer).
   A/B over 204 saves: only 3 hold filled shadow lists (the game empties them after drawing), all 3 better, none worse;
-  so **the real judge is in game** (lever save 172041's flicker). Details: `docs/native_renderer.md` "Native shadows".
-  **Order for the next session:** (1) done; (2) shadows: user check in game with `play.ps1 -NativeShadows` (normal
-  boot; look at the Prince's shadow on floors and the lever area for flicker); left out so far: mirror projectors,
+  so the judge was the game. Details: `docs/native_renderer.md` "Native shadows".
+  **Order for the next session:** (1) done; (2) shadows done (in game, ~60 fps, every projector native in the
+  first session); left out so far: mirror projectors,
   blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.

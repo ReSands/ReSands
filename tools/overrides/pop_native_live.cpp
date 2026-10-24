@@ -3013,7 +3013,7 @@ namespace pop_native_live
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
                                  (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic,
                                  (unsigned long long)g_worldStats.litNative, (unsigned long long)g_worldStats.envNative);
-                if (g_nativeShadows)
+                if (g_nativeShadows && g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu\n",
                                  (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
                                  (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.receivers,
