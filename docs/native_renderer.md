@@ -1007,3 +1007,37 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - Was "not yet": live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
   image update; then skip FUN_004C3540 when every receiver's base is native, clearing both lists as FUN_004B8080
   does), blob receivers (+0x20 list, FUN_004C2E00 path), mirror projectors, CJIdxMesh entries, FUN_004C2C40.
+
+## Lists after the shadows: POP_NATIVE_LATE=1 (24 Oct afternoon)
+- **Rule (purity).** The injected picture goes in at the frame's marker, so every draw left to the GS lands on top of
+  every native one. A native draw after the shadows keeps the game's order only if *no* draw before it in the frame
+  went to the GS (an early GS draw, e.g. water or an undecoded wall, would otherwise paint over native smoke). So
+  `worldOnGs` ends the frame's purity at its first GS draw (mesh, ref, CJIdxMesh, sprite, water, list 0x18, GFX, the
+  shadow list walker FUN_004B80C0 = any projector not native, FUN_004BDC80), and lists +0x88 / +0xA8 go native only
+  while the frame is pure. The earlier lists keep the old policy (native wherever decodable).
+- **+0x98 stays on the GS:** EraseAlphaBuffer runs before it and every +0x98 draw is alpha-only (render state 0x44 =
+  0xFF000000: FBMSK 0x00FFFFFF), so it changes no colour; it ends purity only if it writes Z. A +0xA8 draw goes native
+  only if it writes neither Z (+0x98 tests GEQUAL against it) nor alpha (EraseAlphaBuffer would clear it).
+- **GFX particles** (FUN_004584C0) native in world mode (with the switch): the call is skipped and the particle driver
+  index 0x70000080 set as the function does (0 billboards, 1 oriented). Counted as a GS draw only if its generators
+  hold particles.
+- **Census (203 saves, entries):** +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676, GFX 3,049, sprites 1,128, ref 923, water
+  76), +0x98 2,526 (mesh/ref), +0xA8 1,189 (all CJIdxMesh). Only 37% of +0x88 entries come before its first sprite or
+  water draw, so **sprites are the main limit**: 58 of 142 pure frames end at a +0x88 sprite.
+- **Sprites (CJadeSpriteElement::Display 0x4C6200, list kinds 7/8) read:** element = *(0x6E1598) + u16 * 0x20 (not
+  low word << 4: `pop_state_frame` fixed); up to 4 slots, packet word at +4i (low 31 bits), count at +0x10+4i; per slot
+  `SetParticleEnv` (0x4B6140; kind 8: FUN_004B5F80, VU program 5 instead of 4) with the camera right/up turned into
+  object space, and a 9th argument (t2, dropped by Ghidra's C; `tools/ghidra/PoPDisasm.java`) = the packet, which turns
+  the env tag into a DMA CALL. The packet (save 19_082854): MSCALF 0x68 with 8 control points (V3-32 at VU 0x10) and 8
+  directions (0x3A), then count 45 at 0x64 and 3 qw per sprite at 0x65: the sprites are placed along a curve **on
+  VU1**, so a native version needs that program read (0.13, with P9).
+- **Offline A/B** (world frame vs the game's picture, 203 saves, characters + translucent + shadows on): mean 18.07 ->
+  17.58; 54 better (best: 21_195939 21.80 -> 11.99, the moon and sky layer of the ramparts), 7 worse by <= 0.30
+  (cutscene saves whose picture does not match the save's camera), 142 same. Pure at +0x88: 142 frames; 677
+  particle draws native. What ended purity first: sprite +0x88 58, gfx +0x2C 30, mesh +0x2C 22, water +0x88 18, ref
+  +0x88 18, mesh +0x98 (Z writes) 15, gfx +0x88 15.
+- **GFX textures not found** (the GFX ends purity then): 2E005850 (+0x2C, flags 0x17; in no pack of the index: made at
+  run time?) and 250004EC (+0x88; in many packs, does not decode from the one chosen). `POP_NATIVE_WORLD_WHY=1` logs them.
+- Stats: `[pop:world] late lists: ...` every 300 frames (frames pure at +0x88, ended within, calls native/GS,
+  particles native, the five commonest causes). On by default in `play.ps1` (`-NoNativeLate`); in-game check pending.
+- Next: sprites (VU1 curve program), the two textures, then +0x98 natively (skip EraseAlphaBuffer when pure).

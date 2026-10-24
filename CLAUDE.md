@@ -83,6 +83,11 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   Save 192521: the Prince's shadow in place and shape, floor x 0.67 vs the game's ~0.74 (game edge a bit softer).
   A/B over 204 saves: only 3 hold filled shadow lists (the game empties them after drawing), all 3 better, none worse;
   so the judge was the game. Details: `docs/native_renderer.md` "Native shadows".
+  **Lists after the shadows: built, offline-judged, in-game check pending (24 Oct afternoon).** `POP_NATIVE_LATE=1`,
+  **on by default in `play.ps1`** (`-NoNativeLate` = off): +0x88/+0xA8 and the GFX particles go native while no
+  earlier draw of the frame went to the GS (otherwise the order would break); +0x98 (alpha-only) stays on the GS.
+  Offline 203 saves 18.07 -> 17.58 (54 better, 7 worse <= 0.30). Main limit: sprites (VU1 places them along a curve;
+  0.13). Details: `docs/native_renderer.md` "Lists after the shadows".
   **Order for the next session:** (1) done; (2) shadows done (in game, ~60 fps, every projector native in the
   first session); left out so far: mirror projectors,
   blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
