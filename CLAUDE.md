@@ -93,6 +93,34 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.
+- **HANDOFF (24 Oct ~19:00; start here after the context clear).** In-game session 18:41-18:53 on the late-lists
+  build (042b0b1, before sprites): clouds and torch smoke fine; fights at 47-56 fps for a minute or more (log
+  `game/analysis/saves1024b/play_20261024_184116.log`), save of a slow fight `saves1024b/play_20261024_184926.state`;
+  **then a hang at the end of a fight** (fps 0, audio stuttering; one thread 15484 at 100% CPU, the others idle).
+  Things to do, in order:
+  1. **Analyse the hang dump** `game/analysis/hang1024/hang.dmp` (2 GB, full minidump via comsvcs, PID 2492, taken
+     while hung). Not started. Find thread 15484's RIP and stack, and the guest state (R5900Context: pc, ra, sp)
+     the runtime was running; the log's last line is the quick-save at field 30811, a few seconds before the hang
+     (the save itself is probably unrelated; check). **The exe was rebuilt at 18:54 (b/c of 88acfc5), so the PC's
+     current `ps2EntryRunner.map` no longer matches the dump:** either rebuild the old one (check out 042b0b1's
+     `tools/overrides` into a scratch copy and `-Fast` build; or match function bytes in the dump's image against
+     the new exe), or read the guest pc from the context in memory (independent of the map). No Windows debugger
+     on the PC (no cdb/procdump); on the Mac, e.g. Python `minidump`. Compare with the known combat freezes in
+     `docs/saves_1021.md` (crash 1: resume at 0x172844 without an entry; crash 2: unknown, save kept).
+  2. **White enemies (earlier session, saves 18330x-183541):** enemies drawn native with another texture (Prince,
+     Farah fine; a fresh boot showed them right). Cause believed: `popTextureKey`'s table (filled only by
+     PS2_Texture_Load) going stale mid-session; fix 88acfc5 reads TEX_List at draw time and logs
+     `[pop:native] texture index N: TEX_List key .., PS2_Texture_Load registered ..` when they differ. **Not yet
+     confirmed:** look for those lines in the next play log; if enemies still go white, the theory is wrong.
+     One enemy's calves were invisible (same cause?).
+  3. **Native sprites (2469ab0, 367e9e2):** in the PC build since 18:54, user check pending (`POP_NATIVE_SPRITES=0`
+     = off). Docs: `docs/native_renderer.md` "Native sprites on the VU1 interpreter".
+  4. **Save-point glow pops brighter when the camera turns to it** (saves 183302 left / 183305 facing): the light
+     column is native in both; the difference is the halo / after-effects pass (FUN_004ABFC0, GS). Asked the user for
+     an A/B at a save point with `play.ps1 -NoNativeLate` and `-NoNativeWorld` (pops in both = original behaviour;
+     smooth without the native world = its depth fools the halo's visibility test).
+  5. **Fight fps:** profile save 184926 (`tools/windows/profile-states.ps1`, or ask for a `-Profile` session);
+     the late lists add work per frame (worker 4.4 ms/frame in the earlier log).
 - **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
   runtime patch 40): frame 1 after a load has no clear sprite, so FRAME at our marker was still the loading screen's
   target = the buffer on screen, and the stale-camera picture was uploaded onto the display. Fix: never inject into
