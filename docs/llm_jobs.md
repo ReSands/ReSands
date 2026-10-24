@@ -265,3 +265,36 @@ despite the 16k thinking budget), rounds counted right. Failure shapes from the 
   `--chain` if all pass).
 - Lesson: when several stages fail the same few cases the same way for many rounds, judge a patched attempt
   by hand before giving Qwen more rounds: here one missing rule in the primer cost ~60 rounds over two nights.
+
+## VU1 sprite program P9, 24 Oct 2026 evening (set up; Qwen runs it after the water pieces)
+
+Why: the sprites (GFX particles drawn as strips along a curve) run P9 on the runtime's VU1 interpreter in
+`spriteRecord` (`tools/overrides/pop_native_live.cpp`), which is slow in busy scenes; a C++ port removes it.
+P9 = ELF MPG packet 0x4E338C, 0x13A0 bytes (628 pairs, 563 run in the recorded scenes), image hash 04994ae7ba41b01f.
+
+- **Cases without booting the game.** `pop_state_frame_vu1` with `POP_P9_TRACE=<file>` (`tools/native/src/p9trace.cpp`,
+  through a hook in `spriteRun` that is null in the game) records every P9 run of a save in the runtime's
+  `PS2X_VU1_TRACE` format. ~130 saves (shadow/ab/in, saves1024b-f, play1021) give 2,984 runs (1,492 MSCALF setups at
+  0x340 + 1,492 MSCNT runs at 0x390), 13.6 MB, replay deterministic. `tools/vu1port/cases_p9.sh [--record <dirs>]`
+  records and cuts; cases spread evenly over the trace with `vu1replay --stride`, at most 600 per stage
+  (`game/analysis/vu1port/p9_*.cases`, 739 MB; also copied to the PC), whole runs in `p9_whole.cases` for `--chain p9`.
+- **37 stages** (`port.py` STAGES_P9), cut at subroutine entries/returns and branch joins: a caller stage executes its
+  BAL and delay slot and stops at the subroutine entry; JR stages return to `vi[N] * 8`. Exits must be pairs the
+  program arrives at, never delay slots (a delay-slot exit gave "ended inside").
+- **What may be in flight at a boundary** (`vu1replay --allow`): xgkick (the judge takes a kick's packet at the
+  XGKICK), MAC and status (P9 has no status reader; `cases_p9.sh` checks that no FMAND reads MAC flags from before
+  its stage's entry: 0), and Q (four boundaries have a DIV in flight; every Q reader after them reads that DIV's
+  result, so the snapshot's landed Q is right). P6 keeps the strict default.
+- **The R register** (RINIT/RNEXT/RGET/RXOR, used by P9 only): `VuState.r` behind `VU_TASK_R` (P6's binary cases
+  and prompts stay byte-identical, checked on all 44 P6 prompts), the replayer `vu1replay_r`, the judge
+  `/DVU_TASK_R=1`; the primer gets the R semantics (LFSR step) for P9 only. P9 prompts show LOI constants as exact
+  bits (vudis rounds them).
+- **Hand ports as the end-to-end check:** `known_good/p9_setup`, `p9_init` (the two 4x4 matrix products), `p9_main`
+  (RINIT): all pass 498 cases, on the Mac and with MSVC on the PC; a port with one wrong RINIT bit fails all 498.
+- **Qwen test (24 Oct ~21:25):** see below.
+- **Night job** `tools/windows/oct24.ps1` (shortcut "Qwen overnight (then shuts down)"): the water's 4 passes as
+  planned, then passes **without a deadline**: each unpassed P9 stage in program order (3 rounds), then the P6
+  leftovers (6), `--chain` per program once it passes; llama-server checked before every stage (the LlamaServe task
+  has a 24-hour limit). Shuts down only if everything passes. **Cancel at any time with the desktop shortcut
+  "Stop Qwen"** (`tools/windows/qwen-stop.ps1`: ends the job and llama-server, never shuts down); every round is on
+  disk as it finishes, so the next run resumes.
