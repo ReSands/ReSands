@@ -49,6 +49,14 @@ def main(argv):
     size = w * h * 3
     lines = [parse_line(l) for l in open(argv[0] + '.txt', encoding='utf-8')]
     os.makedirs(argv[1], exist_ok=True)
+    # camera: the per-frame change of the clip matrix's rotation part; a cut (a teleport) is one big step between
+    # quiet frames, unlike a fast turn, whose steps are big on several frames in a row
+    steps = [0.0] * (n + 1)
+    for i in range(1, n):
+        a, b = lines[i].get('clip') if i < len(lines) else None, lines[i - 1].get('clip') if i - 1 < len(lines) else None
+        if a and b:
+            steps[i] = max(abs(x - y) for x, y in zip(a[:12], b[:12]))
+    cut = [0 < i < n - 1 and steps[i] > 0.3 and steps[i] > 4 * max(steps[i - 1], steps[i + 1], 0.01) for i in range(n)]
     report, flagged, prev, prev_pic = [], set(), None, None
     for i in range(n):
         pic = data[20 + i * size:20 + (i + 1) * size]
@@ -64,10 +72,8 @@ def main(argv):
             why.append('empty picture')
         if prev_pic and change > 12:
             why.append(f'picture changed {change:.1f}')
-        if prev and rec.get('clip') and prev.get('clip'):
-            d = max(abs(a - b) for a, b in zip(rec['clip'], prev['clip']))
-            if d > 0.5:
-                why.append(f'camera jump {d:.2f}')
+        if cut[i]:
+            why.append(f'camera cut (rotation step {steps[i]:.2f}, neighbours {steps[i - 1]:.2f} / {steps[i + 1]:.2f})')
         if prev and rec.get('fog') and prev.get('fog') and rec['fog'] != prev['fog']:
             changed = [k for k, (a, b) in enumerate(zip(rec['fog'], prev['fog'])) if a != b]
             why.append('fog zone ' + ','.join(map(str, changed)) + ' changed')

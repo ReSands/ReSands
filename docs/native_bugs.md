@@ -43,6 +43,17 @@ min 24 / 28 / 21, a 292.9 / 286.8 / 298.0, colour 445b78 / 435977 / 465c79; all 
 animates that zone with the camera, and the native frame follows it. Open: whether the blip seen in play is this
 (original behaviour; check with `play.ps1 -NoNativeWorld`) or a native/GS switch the saves missed.
 
+First glitch capture (`game/analysis/glitch1024/play_20261024_195406.glitch`, 600 frames, user: "fog blipping"):
+all 600 frames injected, none missed; purity never reached the late lists (they stayed on the GS throughout), so
+the native/GS-switch hypothesis is **ruled out** for this one. What moves is the game's own fog table: during a fast
+camera turn (frames 256-270, ~230 ms, rotation 0.42 in the first frame after a still one) zone 0's a goes
+301 -> 474 -> 318 and zone 2's min 51 -> 4 (higher a = less fog), and the native picture follows (frame means
+44.8 -> 39.4 -> 49.5). The fog table is the game's computation (FUN_004BAE80 in Display3DElements), not ours, and the
+offline judge matches native to the game picture on single frames. **Likely original behaviour** (camera-dependent
+fog). To confirm: the same spot with `play.ps1 -NoNativeWorld` (fully emulated); if it blips the same, close N2.
+Open side question: does POP_60FPS change how fast the game moves these values (a per-frame lerp would run twice as
+fast)?
+
 ## N3: one-frame flash walking up stairs, as if the environment mesh vanished (24 Oct, not captured)
 
 Hypothesis: a frame whose world picture was not injected or came from a stale camera (the load flash family,
