@@ -1,0 +1,104 @@
+From ca40a70fd728488670090b842e1744a5c3cc12dc Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sat, 24 Oct 2026 19:21:32 +0100
+Subject: [PATCH] scheduler: the stub-return rule only for replaced functions
+ (patch 41 broke a split loop)
+
+Generated code can come back to the scheduler with the same pc without unwinding: PoP's
+0x4A6180 loop is split by Ghidra into pieces that call each other, so the scheduler sees
+pc 0x4A61D4 again after each iteration. Patch 41 took that for a stub return and jumped
+to $ra (0xB35A70: missing function, main thread dormant, game frozen). replaceFunction now
+records addresses whose generated function was replaced (overrides, stubs), and only those
+get pc = $ra; the first 20 uses are logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012ykdxyr2QmZs4nHkERuTzq
+---
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 18 ++++++++++++++----
+ ps2xRuntime/src/lib/ps2_runtime.cpp        | 19 +++++++++++++++++++
+ 2 files changed, 33 insertions(+), 4 deletions(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 3ce0e16..75a00f7 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -15,6 +15,7 @@
+ #include <stdexcept>
+ 
+ void ps2xTraceSchedulerDispatch(R5900Context *ctx);
++bool ps2xIsReplacedFunction(uint32_t address);
+ 
+ namespace
+ {
+@@ -406,14 +407,23 @@ void EeScheduler::run()
+             const int dispatchedThread = m_currentThreadId;
+             const size_t dispatchedInvocations = running->invocations.size();
+             function(m_rdram, &context, &m_runtime);
+-            // A host function (runtime stub or game override) that returns without touching pc means
++            // A replaced function (game override or runtime stub) that returns without touching pc means
+             // "return to the caller": dispatchGuestBranch turns that into the fallthrough for direct calls,
+             // but a call resumed here (the checkpoint fired at its JAL) kept pc at its own entry and was
+-            // dispatched again forever. Generated code always sets pc before a normal return, and a checkpoint
+-            // inside it sets m_unwinding, so only the stub case is caught.
++            // dispatched again forever. Only replaced functions: generated code can legitimately come back
++            // with the same pc (a loop split by Ghidra whose pieces call each other, PoP 0x4A61D4), and
++            // jumping to $ra there sent the game to 0xB35A70 (patch 41, 24 Oct).
+             if (!m_unwinding && !m_transferPending && m_currentThreadId == dispatchedThread &&
+-                running->invocations.size() == dispatchedInvocations && context.pc == dispatchedPc)
++                running->invocations.size() == dispatchedInvocations && context.pc == dispatchedPc &&
++                ps2xIsReplacedFunction(dispatchedPc))
+             {
++                static unsigned logged = 0;
++                if (logged < 20)
++                {
++                    ++logged;
++                    std::fprintf(stderr, "[ee-scheduler] replaced function %08x resumed by the scheduler left pc: returning to ra %08x\n",
++                                 dispatchedPc, getRegU32(&context, 31));
++                }
+                 context.pc = getRegU32(&context, 31);
+             }
+             saveSharedVu0Random(context);
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ab4cf81..ba60afb 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1252,6 +1252,12 @@ namespace
+     }
+ }
+ 
++namespace
++{
++    std::mutex g_replacedFunctionsMutex;
++    std::unordered_set<uint32_t> g_replacedFunctions;
++}
++
+ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
+ {
+     uint32_t slot = 0u;
+@@ -1264,10 +1270,23 @@ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
+         return false;
+     }
+ 
++    if (g_ps2RecompiledFunctionTable[slot] != nullptr && g_ps2RecompiledFunctionTable[slot] != func)
++    {
++        std::lock_guard<std::mutex> lock(g_replacedFunctionsMutex);
++        g_replacedFunctions.insert(address);
++    }
+     g_ps2RecompiledFunctionTable[slot] = func;
+     return true;
+ }
+ 
++// true if the function at this address was replaced after registration (a game override or a runtime
++// stub in place of the generated code); EeScheduler::run uses it for host functions that leave pc
++bool ps2xIsReplacedFunction(uint32_t address)
++{
++    std::lock_guard<std::mutex> lock(g_replacedFunctionsMutex);
++    return g_replacedFunctions.count(address) != 0;
++}
++
+ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
+ {
+     return replaceFunction(address, func);
+-- 
+2.54.0 (Apple Git-157)
+
