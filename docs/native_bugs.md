@@ -54,7 +54,7 @@ fog). To confirm: the same spot with `play.ps1 -NoNativeWorld` (fully emulated);
 Open side question: does POP_60FPS change how fast the game moves these values (a per-frame lerp would run twice as
 fast)?
 
-## N5: random one-frame flashes = black world frames when the kept meshes were dropped (FIXED 24 Oct, 8dd... see git)
+## N5: random one-frame flashes = black world frames when the kept meshes were dropped (fix built 24 Oct, in-game check pending)
 
 Glitch captures 200042 (frame 411, mean 0.5) and 200541 (frame 458, mean 4.5): one native world picture almost
 black, same draw count as its neighbours, injected normally, arriving late (30-40 ms). Each follows a
