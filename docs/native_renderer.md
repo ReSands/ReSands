@@ -902,5 +902,17 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
   & 0xF, matrix = entry bits 28-37. Before each, `DoSetShadowDriver` to driver (one bone 5 / more 3) + (mode 0: 6), |
   0x100 when the element's flag bit (+0x47 / ref +0x1B, bit 2) is set; sets 0x700000A8 = more than one bone,
   0x700000AC = 2. So the receivers are redrawn through their normal Display with a shadow VU1 driver.
-- Still to read: FUN_004C3180, FUN_004C3540, FUN_004C2E00, UpdateTexProjectionMatrix, FUN_004C4540, FUN_004B59C0,
-  FUN_004B8080, FUN_004C2C40.
+- **Render-to-texture shadows.** FUN_004C3540 / FUN_004C3180: FUN_004C48C0 (target setup), `SetDrawShadowCastersMode`,
+  `CVuManager::SetShadowCastingEnv`, **FUN_004B80C0(projector, 1)** = the casters (projector list +0) drawn into the
+  shadow buffer; FUN_004C3180 first fills it (FUN_004C3A40, colour 0x80808080) and may apply a mask texture +0x102
+  (`ApplyMaskToProjectorShadow`, alpha +0x120 * 128) and `BlendShadowTextureWithBrightnessTexture`. Then
+  FUN_004C4540(projector, TEX0, ALPHA, fbmsk): an A+D packet that points the GS back at the frame (FRAME_1 from the
+  display size 0x66D03C/40 and +0xBCC & 1, ZBUF_1, XYOFFSET_1, SCISSOR_1, TEST_1 0x50000, CLAMP_1 0, TEX0_1 = the
+  shadow texture, TEX1_1 0x60, TEXFLUSH, ALPHA_1, PRMODECONT 0, PRMODE 0x58); FUN_004B59C0 (a VU1 constant: 0x63FD20..4C
+  or 0x6E1580); **FUN_004B80C0(projector + 0x10, 0)** = the receivers, drawn with the shadow texture projected by the P7
+  driver. FUN_004B8080 empties a list (count = 0) after use. The +0x20 receivers path (FUN_004C2400, +0x115 == 0) skips
+  the caster render: a fixed (blob) texture +0x102.
+- FUN_004C2C40 = a fog-like fade by distance from the camera (fog zone table 0x6CA504, the projector's object's zone).
+- Still to read: FUN_004C2E00, FUN_004C48C0, FUN_004C3A40, SetDrawShadowCastersMode, SetShadowCastingEnv,
+  UpdateTexProjectionMatrix, the two Blend/Mask functions, FUN_004B59C0's constants; and the P7 driver(s) 3/5/6+.
+  Native plan follows from it: (a) render casters into our own shadow texture, (b) redraw receivers with projected UVs.
