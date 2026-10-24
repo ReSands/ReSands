@@ -179,3 +179,20 @@ then improve tonight's run (more time per stage? smaller cuts? better examples? 
   round10: vf11 expected 0x00000080 in all four lanes (an integer), got floats; vf16, Q and one data qword wrong),
   so something they share (the vf11 input/conversion, or the loop's start) is mistranslated. Not examined
   further; first thing to look at if a_g2 fails again tonight.
+
+**Night 23-24 Oct (`oct23.ps1`, 12 stages, 2 passes of 6 more rounds): 4 passed, 13 of 21 in all.** Passed:
+a_g2_in1a, a_g2_in2b, b_g2_in1b, b_g2_in2a. Left (8): a_g1_in2c, a_g2_in2a, a_g2_in3a, a_g2_in3b, b_g1_in1b,
+b_g2_in1a, a_check, b_check. The harness fixes held: 2 no-code rounds of ~130 (both a_g1_in2c, 32,768 tokens
+despite the 16k thinking budget), rounds counted right. Failure shapes from the last `attempts\roundNN.report.txt`:
+- **Stuck on a few cases, "expected 0, got small integer bits"**: a_g2_in3a and in3b at exactly 90 of 1620
+  (cases 13, 27, ... = one case in ~14; vf13/vf27 resp. vf05/vf28 expected 0x0, got e.g. 0x1fe0, 0x6bff, 0x100),
+  a_g2_in2a down to 54/90 at times, b_g1_in1b at 48 of 2484 (vf27 expected 0, got 0xff/0xa7/0xa7/0x34). The
+  same class across stages, so most likely one shared cause in the trace or spec (a path or load that leaves
+  zeros in the real run), not four separate model errors. First thing to examine.
+- **a_g1_in2c, all 2484 fail**: vf13 expected raw integers (0x00000fe4 = 4068) but got the float 4068.0, and
+  data qwords 0x49/0xa0 wrong: the port converts (ITOF) where the program keeps integer bits, or the spec
+  suggests it. Probably a quick hand fix.
+- **b_g2_in1a, all 1620 fail every round**: vf18 far off (expected ~70815, got ~-500430) and stray .w writes to
+  data qwords: a real mistranslation; hand-port or smaller cuts.
+- **a_check / b_check, 174 of 174 every round, both nights**: exit pc wrong (0x6f0 vs 0xcf0), ~560 differences,
+  several compile failures and one endless loop: too big for the model as one piece. Cut them up or hand-port.

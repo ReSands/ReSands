@@ -91,8 +91,8 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   on the trace of save 192521 (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
 - **Qwen night 22-23 Oct: 9 of 21 P6 pieces passed; post-mortem done (23 Oct lunch).** Mostly harness losses: 34% of
   rounds thought for all 32k tokens and wrote no code (now a 16k thinking budget, tested), and `--rounds` was absolute,
-  so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Tonight: the user
-  starts "Qwen overnight (then shuts down)" (now `tools/windows/oct23.ps1`, 12 stages left).** a_g2 (4 stages,
+  so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Night 23-24 Oct
+  (`oct23.ps1`): 4 more passed, 13 of 21 in all; 8 left** (shapes in `docs/llm_jobs.md` "Night 23-24 Oct"). a_g2 (4 stages,
   same failure shape) still unexplained. Details: `docs/llm_jobs.md` "Post-mortem (23 Oct lunch)". The translucents +
   particles work (above) waits until after this.
 - **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
