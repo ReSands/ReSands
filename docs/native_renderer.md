@@ -1041,3 +1041,25 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - Stats: `[pop:world] late lists: ...` every 300 frames (frames pure at +0x88, ended within, calls native/GS,
   particles native, the five commonest causes). On by default in `play.ps1` (`-NoNativeLate`); in-game check pending.
 - Next: sprites (VU1 curve program), the two textures, then +0x98 natively (skip EraseAlphaBuffer when pure).
+
+## Native sprites on the VU1 interpreter (24 Oct evening)
+
+CJadeSpriteElement (list kind 8, `CJadeSpriteElement::Display` 0x4C6200) goes native under `POP_NATIVE_LATE` while
+the frame is pure (`POP_NATIVE_SPRITES=0` sends them back to the GS). Until VU1 program P9 (ELF MPG 0x4E338C,
+0x13A0 bytes) is ported to C++ (a Qwen job candidate, judged against the interpreter), the override runs it on
+the runtime's own VU1 interpreter (`spriteRecord` in `pop_native_live.cpp`):
+
+- FUN_004B5F80's env (19 qw at VU 0): model matrix, graphics object +0x200 / +0x240, camera right/up in object
+  space, fog zone, GIF tag (sprite, TME/FGE/ABE, ST RGBAQ XYZF2 x 2), screen box. Rebuilt from guest memory.
+- The element's packets (up to 4) are replayed VIF code by VIF code into one persistent 16 KB data image:
+  the first element of a group uploads the curve, the next ones only a colour and their sprites, so data and
+  the program's position carry over (MSCALF 0x68 then MSCNT).
+- XGKICK output is caught by the interpreter's packet sink (`vu1_impl::packetSink`, forward = false); each GS
+  sprite (strips of 32 pixels) is unprojected through +0x200 into a world-space quad and drawn as a kind-2 record
+  with the vertex RGBA (material constant colour/alpha ignored: P9 writes RGBAQ itself). Sprite fog (F) not yet
+  applied. A call whose sprites are all culled draws nothing and keeps the frame pure.
+- Offline: `pop_state_frame_vu1` (x86_64 build with the sotc interpreter; on the Mac it runs under Rosetta).
+  A/B over 203 saves (late lists on, game picture as judge): 17.58 -> 17.35, 41 better, 2 worse (<= 0.19: a
+  lattice +0x88 mesh that now goes native because the frame stays pure longer); 1,128 of 1,128 draws replayed.
+- Not sprites: the big light halos and streaks around glowing pickups are the after-effects pass (FUN_004ABFC0),
+  still on the GS.
