@@ -950,3 +950,50 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
   0x46 = Cd (1 - As) on the rendered-caster path (FUN_004C3540), 0x62 = Cd - Cs FIX (FIX = +0x11C x 128) on the
   blob path; TEX0 = the shadow texture, TCC on, modulate.
 - Then the offline frame: casters into a 256x256 texture, receivers redrawn, judged on save 192521.
+
+## Native shadows (24 Oct afternoon): the receiver loop found, POP_NATIVE_SHADOWS=1 offline
+- **The receiver loop** (`vu1replay --start <pc> --coverage`, new: only the runs that start at a pc): entry 0x2058 is
+  `B 0x750`, the head shared with the casters; 0x14E8 culls the batch by its bounding box (8 corners, x 1.005); the
+  dispatcher at 0x1410 sends batch types >= 6 to 0x1CE8 (the earlier note "0x1CE8-0x2050 = clipping" was wrong) and
+  type 11 to **0x1D98-0x2038, the receiver loop** (software-pipelined), with 0x2068-0x2320 the per-triangle clip
+  handling (ADC). Per vertex p (object space, qw vi1+1+k; count = qw vi1 x & 0x7FFF; output from vi1+196: tag, then
+  STQ / RGBAQ / XYZ2):
+  screen = (vf1..vf4) p / w; STQ = (T p / T.w) / w, Q = 1/w, with T = qw 1020-1023; RGBA = (128,128,128, A),
+  A = int(max(min(qw22.z + qw22.w w, qw22.y) fade, qw22.x)), fade = clamp(qw23.z + qw23.w sum(qw28_i d_i^2), 0, 1),
+  d = qw 1019 - p. Triangles with all three vertices outside one plane of qw 1015-1018 get ADC (dropped); outside the
+  camera: guard band check (0x1BA8) or real clipping (0x2240) when qw29.w & 256. Model (`game/analysis/shadow/tools/
+  rcvmodel.py` on `vu1replay --stage 1d98:2038` cases): **alpha within 1 on all 32,940 vertices of the 594 receiver
+  runs of save 192521, STQ within 0.5%**; XY only differs on vertices behind the camera (ADC set). In that save qw22 =
+  (0.03125, 255, 127, 0) (A = 127 x fade) and qw28 = (0, 0, 1): the fade is by height below the projector only.
+- **The setup (0x0000, receivers):** W = qw 0-3 (the object's matrix): qw 1015-1018 = projector clip (qw 24-27 =
+  +0x270) x W, qw 1020-1023 = texture projection (qw 16-19 = +0x2B0) x W, qw 1019 = the projector position (qw 20 =
+  +0x360) in object space ((P - W.t) . W's rows), vf1-4 / vf5-8 = the camera matrices (qw 4-7, 8-11) x W.
+  SetShadowCastingEnv (casters) uploads qw 4-7 = +0x230 (projector proj x cam), 8-11 = +0x270, 12-15 = +0x1F0,
+  16-19 = +0x2B0, 21 = (128,128,128, strength x 128), 22 = scratchpad 0x360.
+- **The shadow buffer is the alpha of the displayed frame** (fight GS trace `gstrace26f`: FRAME = DISPFB's buffer, fbw 4,
+  FBMSK 0x00FFFFFF): per projector ~20 strips clear the alpha of a 256x256 corner to 0, the casters write alpha =
+  strength x 128 (0x35) without blending or Z (SetDrawShadowCastersMode: XYOFFSET (2048 - size/2) x 16, scissor
+  1..size-2, so the border stays 0; mirror projectors +0x50 use a Z test), then 8-9 receiver triangles into the back
+  buffer: TEX0 = that buffer (CT32, TBW 4, TCC, modulate), CLAMP 5, bilinear, ALPHA 0x46, TEST 0x50000 (Z GEQUAL), Z not
+  written, FGE 0. The picture is unchanged (only alpha is written), so the screen never shows it.
+- Projector #0 of save 192521: the "perspective" path is orthographic (+0x170 has w = 1), the projector camera looks
+  straight down from z 4.12; +0x230 maps to GS pixels around 2048; +0x2B0 = 0.5 clip + 0.5 (UV = t.xy).
+  FUN_004C2400 multiplies +0x45C by +0x120 (distance fade) and FUN_004C2C40 (a fog-zone fade) for the call and
+  restores it afterwards; all 8 active projectors take FUN_004C3540 (render to texture; +0x104 clear, both lists
+  filled, +0x111 set).
+- **Implementation** (`POP_NATIVE_SHADOWS=1`, offline frames only so far): a hook on FUN_004C3540 (`shadowRtt` in
+  `pop_native_live.cpp`). The geometry is the frame's own records: the Display hooks note which records each call
+  (element or ref, matrix index, pass; first call only) added, and the list entries look them up (kind 4 CJIdxMesh not
+  yet). Casters: world space through +0x230, rasterised on the CPU into a 256x256 image (alpha only, GS top-left rule,
+  1..size-2). Receivers: a copy of the base record's batches in object space with the base's model matrix (the same
+  transform as the base draw, so GEQUAL sees its exact depth): UV = T p_world / T.w, colour (1,1,1, A/128), frustum
+  culling as the VU; material flags 0xF0200 (Cd (1 - As), no depth write), fog off, Z-test word bit 1 = clamp
+  (new `Material::clampUv`, a CLAMP_TO_EDGE sampler). Shadow images use synthetic texture keys 0xFE5D0000 + n.
+  `pop_state_frame` replays DisplayAllShadows after the lightmaps (strength x +0x120; FUN_004C2C40 taken as 1).
+- **Save 192521:** 6 projectors, 40 casters (7,033 triangles), 18 receivers (145 triangles drawn, 4,079 culled). The
+  Prince's shadow lands where the game's does, with the same shape (`game/analysis/shadow/native/`). First version
+  darkened twice (records of every pass and repeat call taken; floor x 0.49), now keyed by pass, first call only:
+  floor x 0.67 in shadow, game ~0.74 (noisy; the GS formula gives 0.59 at fade 1). The game's edge is a little softer.
+- Not yet: live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
+  image update; then skip FUN_004C3540 when every receiver's base is native, clearing both lists as FUN_004B8080
+  does), blob receivers (+0x20 list, FUN_004C2E00 path), mirror projectors, CJIdxMesh entries, FUN_004C2C40.

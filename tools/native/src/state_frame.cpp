@@ -15,7 +15,7 @@
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
 // from tools/packindex.py's index.
-// Not replayed yet: instanced lightmaps, shadows, halos.
+// Not replayed yet: instanced lightmaps, halos; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
 // Save-state layout: tools/popstate.py.
 
 #include "../../overrides/pop_native_live.cpp"
@@ -192,7 +192,41 @@ namespace
         call(0x004584C0u, &p);
     }
 
-    // Display3DElements (0x4BC000): the lists in the game's order; shadows are not replayed
+    // CJadeShadowManager::DisplayAllShadows (0x4C02C0) after the lightmaps: manager at scratchpad 0x500
+    // (projector pointers +0, count +0x100, active mask +0x110); per active projector FUN_004C2400 calls
+    // FUN_004C3540 (render-to-texture: casters into the shadow buffer, then the receivers) when the
+    // strength +0x45C x fade +0x120 x FUN_004C2C40 (a fade by fog zone, not replayed: 1) is > 0, +0x104 is
+    // clear (else a mask texture may replace the path) and both lists (counts +4, +0x14) are filled with
+    // +0x111 set. FUN_004C2400 multiplies +0x45C for the call and restores it; so does this replay.
+    uint64_t g_shadowProjectors = 0;
+    void displayShadows(R5900Context *ctx)
+    {
+        const uint32_t n = rd32(0x70000600u), mask = rd32(0x70000610u);
+        for (uint32_t i = 0; i < n && i < 32; ++i)
+        {
+            const uint32_t p = rd32(0x70000500u + 4 * i);
+            if (!(mask >> i & 1) || !p || *getConstMemPtr(g_ram.data(), p + 0x104) || !rd32(p + 4) || !rd32(p + 0x14) ||
+                !*getConstMemPtr(g_ram.data(), p + 0x111))
+                continue;
+            const uint32_t base = rd32(p + 0x45C);
+            float strength, fade;
+            std::memcpy(&strength, &base, 4);
+            const uint32_t fb = rd32(p + 0x120);
+            std::memcpy(&fade, &fb, 4);
+            strength *= fade;
+            if (strength <= 0)
+                continue;
+            uint32_t bits;
+            std::memcpy(&bits, &strength, 4);
+            wr32(p + 0x45C, bits);
+            setArgs(*ctx, p);
+            call(0x004C3540u, ctx);
+            wr32(p + 0x45C, base);
+            ++g_shadowProjectors;
+        }
+    }
+
+    // Display3DElements (0x4BC000): the lists in the game's order, the shadows after the lightmaps
     void display3DElements(uint8_t *, R5900Context *ctx, PS2Runtime *)
     {
         const uint32_t dm = getRegU32(ctx, 4);
@@ -202,6 +236,7 @@ namespace
             if (off == 0x5C)
             {
                 renderLightmaps(dm + off, &sub);
+                displayShadows(&sub);
                 continue;
             }
             setArgs(sub, dm + off);

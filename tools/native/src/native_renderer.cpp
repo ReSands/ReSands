@@ -28,6 +28,7 @@ namespace pop_native
             VkImage image = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
+            uint32_t width = 0, height = 0;
         };
         struct MeshRange
         {
@@ -77,6 +78,7 @@ namespace pop_native
         VkQueue queue = VK_NULL_HANDLE;
         VkCommandPool commandPool = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
+        VkSampler clampSampler = VK_NULL_HANDLE; // Material::clampUv (shadow receivers: GS CLAMP 5)
         VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -98,6 +100,7 @@ namespace pop_native
         uint32_t keptEpoch = 0;
 
         std::vector<Image> images;
+        std::vector<std::pair<int, Image>> imageUpdates; // updateImage: (image index, new pixels) for uploaded images
         std::vector<Material> materials;
         std::vector<Mesh> meshes;
         std::vector<MeshRange> ranges;
@@ -291,6 +294,8 @@ namespace pop_native
                 if (!createImage(imgs[i].width, imgs[i].height, VK_FORMAT_R8G8B8A8_UNORM,
                                  VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT, out[i], error))
                     return false;
+                out[i].width = imgs[i].width;
+                out[i].height = imgs[i].height;
                 total += (imgs[i].rgba.size() + 15) & ~VkDeviceSize(15);
             }
             Buffer staging;
@@ -324,6 +329,52 @@ namespace pop_native
                 }
             }, error);
             destroyBuffer(staging);
+            return ok;
+        }
+
+        // new pixels for textures already on the GPU (same size): after the frames that sampled them (queue order)
+        bool rewriteTextures(std::string &error)
+        {
+            VkDeviceSize total = 0;
+            for (const auto &u : imageUpdates)
+                total += (u.second.rgba.size() + 15) & ~VkDeviceSize(15);
+            if (!total)
+            {
+                imageUpdates.clear();
+                return true;
+            }
+            Buffer staging;
+            if (!createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              staging, error))
+                return false;
+            uint8_t *p = nullptr;
+            vkMapMemory(device, staging.memory, 0, total, 0, reinterpret_cast<void **>(&p));
+            VkDeviceSize at = 0;
+            std::vector<VkDeviceSize> offsets;
+            for (const auto &u : imageUpdates)
+            {
+                offsets.push_back(at);
+                std::memcpy(p + at, u.second.rgba.data(), u.second.rgba.size());
+                at += (u.second.rgba.size() + 15) & ~VkDeviceSize(15);
+            }
+            vkUnmapMemory(device, staging.memory);
+            const bool ok = oneShot([&](VkCommandBuffer cb) {
+                for (size_t i = 0; i < imageUpdates.size(); ++i)
+                {
+                    const Texture &t = textures[size_t(imageUpdates[i].first) + 1];
+                    barrier(cb, t.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                            VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                    VkBufferImageCopy region{};
+                    region.bufferOffset = offsets[i];
+                    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    region.imageExtent = {t.width, t.height, 1};
+                    vkCmdCopyBufferToImage(cb, staging.buffer, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                    barrier(cb, t.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                }
+            }, error);
+            destroyBuffer(staging);
+            imageUpdates.clear();
             return ok;
         }
 
@@ -1135,6 +1186,8 @@ namespace pop_native
                 vkDestroyRenderPass(m->device, m->renderPass, nullptr);
             if (m->sampler)
                 vkDestroySampler(m->device, m->sampler, nullptr);
+            if (m->clampSampler)
+                vkDestroySampler(m->device, m->clampSampler, nullptr);
             if (m->commandPool)
                 vkDestroyCommandPool(m->device, m->commandPool, nullptr);
             vkDestroyDevice(m->device, nullptr);
@@ -1353,6 +1406,9 @@ namespace pop_native
         si.maxLod = 0.0f;
         if (!check(vkCreateSampler(m->device, &si, nullptr, &m->sampler), "vkCreateSampler", error))
             return false;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        if (!check(vkCreateSampler(m->device, &si, nullptr, &m->clampSampler), "vkCreateSampler", error))
+            return false;
         return m->createPipelines(error) && m->createPostPipelines(error);
     }
 
@@ -1404,6 +1460,27 @@ namespace pop_native
                (m->keptIndexCount + m->keptPendingIndices.size()) * sizeof(uint32_t);
     }
 
+    bool Renderer::updateImage(int index, const Image &image)
+    {
+        const size_t uploaded = m->textures.empty() ? 0 : m->textures.size() - 1;
+        if (index < 0)
+            return false;
+        if (size_t(index) >= uploaded)
+        {
+            // still waiting for upload(): replace it there
+            const size_t pending = size_t(index) - uploaded;
+            if (pending >= m->images.size())
+                return false;
+            m->images[pending] = image;
+            return true;
+        }
+        const Texture &t = m->textures[size_t(index) + 1];
+        if (t.width != image.width || t.height != image.height || image.rgba.size() != size_t(image.width) * image.height * 4)
+            return false;
+        m->imageUpdates.emplace_back(index, image);
+        return true;
+    }
+
     bool Renderer::upload(std::string &error)
     {
         // textures persist across reset(true): textures[0] is white (missing texture / no lightmap),
@@ -1424,6 +1501,8 @@ namespace pop_native
             m->images.clear();
             m->images.shrink_to_fit();
         }
+        if (!m->imageUpdates.empty() && !m->rewriteTextures(error))
+            return false;
 
         // descriptor sets: one per material (base, lightmap) plus one all-white
         const uint32_t sets = static_cast<uint32_t>(m->materials.size()) + 1;
@@ -1449,7 +1528,7 @@ namespace pop_native
         {
             const Material *mat = s < m->materials.size() ? &m->materials[s] : nullptr;
             VkDescriptorImageInfo info[2] = {
-                {m->sampler, texView(mat ? mat->baseImage : -1), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                {mat && mat->clampUv ? m->clampSampler : m->sampler, texView(mat ? mat->baseImage : -1), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
                 {m->sampler, texView(mat ? mat->lightmapImage : -1), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
             };
             VkWriteDescriptorSet w[2]{};
@@ -1499,6 +1578,7 @@ namespace pop_native
                 m->destroyImage(t);
             m->textures.clear();
             m->images.clear();
+            m->imageUpdates.clear();
             m->dropKept();
         }
         if (m->descriptorPool)

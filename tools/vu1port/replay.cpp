@@ -10,6 +10,7 @@
 // memory side effects). --only: just the runs of one image (hex); --twice: run each twice, compare (the
 // interpreter must be deterministic for the judge to mean anything).
 //   --coverage: per pc of the replayed runs, how many runs execute it (<out> becomes a text table).
+//   --start <pc>: just the runs that start at that pc (e.g. one entry of a multi-entry program).
 //   --stage <entry>:<exit>[,<exit>...]: <out> becomes the stage's cases for the port judge (judge.cpp): each
 //   time a run reaches the entry pc, the state there (VuState, vu_task.h) and at the next exit pc reached, and
 //   the packets kicked in between. Boundaries must be clean (no write pending); unclean ones are counted.
@@ -264,6 +265,7 @@ int main(int argc, char **argv)
         return 2;
     }
     uint64_t only = 0;
+    uint32_t startPc = 0xFFFFFFFF;
     long limit = -1;
     bool twice = false, coverage = false;
     uint32_t stageEntry = 0xFFFFFFFF;
@@ -279,6 +281,8 @@ int main(int argc, char **argv)
         const std::string a = argv[i];
         if (a == "--only" && i + 1 < argc)
             only = std::stoull(argv[++i], nullptr, 16);
+        else if (a == "--start" && i + 1 < argc)
+            startPc = uint32_t(std::stoul(argv[++i], nullptr, 16));
         else if (a == "--limit" && i + 1 < argc)
             limit = std::stol(argv[++i]);
         else if (a == "--twice")
@@ -338,7 +342,7 @@ int main(int argc, char **argv)
         }
         const uint64_t index = records++;
         ++perImage[hash];
-        if ((only && hash != only) || (limit >= 0 && long(replayed) >= limit))
+        if ((only && hash != only) || (startPc != 0xFFFFFFFF && state.state.pc != startPc) || (limit >= 0 && long(replayed) >= limit))
             continue;
         auto img = images.find(hash);
         if (img == images.end())

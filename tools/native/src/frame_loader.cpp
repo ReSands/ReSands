@@ -61,6 +61,13 @@ namespace pop_native
                 }
                 img.rgba.resize(size_t(img.width) * img.height * 4);
                 f.read(reinterpret_cast<char *>(img.rgba.data()), std::streamsize(img.rgba.size()));
+                // a key sent again with pixels (shadow textures, every frame): the same image, new pixels
+                if (v6)
+                    if (const auto it = imageOf_.find(key); it != imageOf_.end() && r.updateImage(it->second, img))
+                    {
+                        imageIndex.push_back(it->second);
+                        continue;
+                    }
                 imageIndex.push_back(r.addImage(img));
                 if (v6)
                     imageOf_[key] = imageIndex.back();
@@ -114,7 +121,10 @@ namespace pop_native
                             static const bool noTest = std::getenv("POP_VIEW_NOTEST") != nullptr; // debug: alpha test off
                             if (noTest)
                                 mat.alphaTest = false;
-                            mat.depthTest = zTest != 0;
+                            // Z test word: bit 0 = the render state's Z test (0x70000038); bit 1 = ours, the
+                            // texture clamped to its edge (shadow receivers, GS CLAMP_1 5)
+                            mat.depthTest = (zTest & 1) != 0;
+                            mat.clampUv = (zTest & 2) != 0;
                             mat.writeRgb = (fbmsk & 0xFFFFFFu) != 0xFFFFFFu;
                             mat.writeAlpha = (fbmsk & 0xFF000000u) == 0;
                         }

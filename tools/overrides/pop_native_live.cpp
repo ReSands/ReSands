@@ -1049,7 +1049,7 @@ namespace pop_native_live
 
         // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
-        void refDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        void refDisplayRecord(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             ++g_refPassDraws[getRegU32(ctx, 6) & 7];
             // POP_NATIVE_WORLD: as CJMeshElement::Display; never instances with a lightmap entry
@@ -1741,7 +1741,7 @@ namespace pop_native_live
         // with a skinned packet).
         bool isLitStaticPass(uint32_t pass) { return pass == 1 || pass == 4; }
 
-        void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        void displayRecord(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
             uint32_t element = getRegU32(ctx, 4);
@@ -2133,6 +2133,341 @@ namespace pop_native_live
             return h | 1;
         }
 
+        // --- Native shadows (POP_NATIVE_SHADOWS=1; docs/native_renderer.md "Native shadows") ---
+        // CJadeShadowManager::DisplayAllShadows (0x4C02C0) runs after the lightmaps; per projector FUN_004C2400 builds
+        // its matrices and calls FUN_004C3540 (render-to-texture path, a0 = projector): the casters (list +0, count
+        // +4) drawn untextured into the alpha of a 256x256 corner of the displayed buffer (FUN_004C48C0: FBMSK
+        // 0x00FFFFFF; cleared to 0, scissor 1..size-2, XYOFFSET 2048 - size/2, no blend: alpha = strength x 128),
+        // then the receivers (list +0x10) redrawn into the frame by VU1 program 6 entry 0x2058 with that alpha as
+        // texture (CLAMP, bilinear; ALPHA 0x46 = Cd (1 - As), Z test GEQUAL, no Z write, no fog). The receiver loop
+        // (0x1D98, checked against the interpreter on 32,940 vertices of save 192521): STQ = T p / T.w with T =
+        // projector +0x2B0 (row vectors, world space); A = min(qw22.z + qw22.w * w_cam, 255) * fade, fade = clamp(
+        // qw23.z + qw23.w * sum(dir_i * d_i^2), 0, 1), d = the projector position (+0x360) minus the vertex in object
+        // space, qw23 = +0x3A0, dir = (0,0,1) (0x63FD30; 0x63FD20 = (1,1,1) with +0x104), qw22 = scratchpad 0x460;
+        // triangles wholly outside one plane of the projector frustum (+0x270) dropped. The geometry is the frame's
+        // own records of the same (element, matrix index) from the lists drawn before (displayRecord above).
+        struct RecordRange
+        {
+            int kind; // 0 static (g_frameDraws), 1 posed (g_framePosed), 2 instanced (g_frameRefs)
+            size_t first, count;
+        };
+        // (element or ref << 16 | matrix index | pass << 56) -> the records of its first Display call in the frame (later
+        // calls of the same draw, e.g. the alpha pass +0x98, would darken twice)
+        std::unordered_map<uint64_t, std::vector<RecordRange>> g_frameByCall;
+        uint64_t callKey(R5900Context *ctx)
+        {
+            return (uint64_t(getRegU32(ctx, 4)) << 16) | (getRegU32(ctx, 5) & 0xFFFF) | (uint64_t(getRegU32(ctx, 6) & 0xF) << 56);
+        }
+        void noteRecords(uint64_t key, size_t n0, size_t n1, size_t n2)
+        {
+            if (!g_frameCapturing || g_frameByCall.count(key))
+                return;
+            auto &v = g_frameByCall[key];
+            if (g_frameDraws.size() > n0)
+                v.push_back({0, n0, g_frameDraws.size() - n0});
+            if (g_framePosed.size() > n1)
+                v.push_back({1, n1, g_framePosed.size() - n1});
+            if (g_frameRefs.size() > n2)
+                v.push_back({2, n2, g_frameRefs.size() - n2});
+        }
+        // the hooks: the recording calls above, plus which records each call added (records are made before the
+        // original runs, so the counts after the call are right even if the scheduler unwinds inside it)
+        void display(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint64_t key = callKey(ctx);
+            const size_t n0 = g_frameDraws.size(), n1 = g_framePosed.size(), n2 = g_frameRefs.size();
+            displayRecord(rdram, ctx, runtime);
+            noteRecords(key, n0, n1, n2);
+        }
+        void refDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint64_t key = callKey(ctx);
+            const size_t n0 = g_frameDraws.size(), n1 = g_framePosed.size(), n2 = g_frameRefs.size();
+            refDisplayRecord(rdram, ctx, runtime);
+            noteRecords(key, n0, n1, n2);
+        }
+
+        constexpr uint32_t kShadowRtt = 0x004C3540u;
+        PS2Runtime::RecompiledFunction g_origShadowRtt = nullptr;
+        const bool g_nativeShadows = [] {
+            const char *e = std::getenv("POP_NATIVE_SHADOWS");
+            return e && *e == '1';
+        }();
+        // the frame's shadow textures (synthetic texture keys kShadowKey + n) and receiver draws (object space, drawn
+        // with the base draw's model matrix: the same transform gives them the base's exact depth for GEQUAL)
+        constexpr uint32_t kShadowKey = 0xFE5D0000u;
+        std::vector<pop_native::Image> g_frameShadowImages;
+        std::vector<std::pair<std::vector<pop_assets::Batch>, std::pair<std::array<float, 16>, DrawMaterial>>> g_frameShadows;
+        struct ShadowStats
+        {
+            uint64_t projectors = 0, nativeProjectors = 0, mirror = 0, casters = 0, casterTris = 0, receivers = 0, receiverTris = 0, culled = 0, noGeometry = 0;
+        } g_shadowStats;
+
+        // world position of a record's vertex (row vectors: model is column-major object -> world)
+        inline void toWorld(const float *model, const float *p, float out[3])
+        {
+            for (int c = 0; c < 3; ++c)
+                out[c] = p[0] * model[c] + p[1] * model[4 + c] + p[2] * model[8 + c] + model[12 + c];
+        }
+        // [x y z 1] * M for a game matrix (4 rows of 4 floats in guest memory)
+        struct GameMatrix
+        {
+            float m[16];
+            void read(uint8_t *rdram, uint32_t a)
+            {
+                for (int k = 0; k < 16; ++k)
+                    m[k] = guestF(rdram, a + 4u * k);
+            }
+            void apply(const float p[3], float out[4]) const
+            {
+                for (int c = 0; c < 4; ++c)
+                    out[c] = p[0] * m[c] + p[1] * m[4 + c] + p[2] * m[8 + c] + m[12 + c];
+            }
+        };
+
+        // the GS rasterises a triangle over the pixels whose integer coordinates it covers (top-left rule)
+        void rasterAlpha(pop_native::Image &img, const float a[2], const float b[2], const float c[2], uint8_t alpha, int lo, int hiX, int hiY)
+        {
+            const float area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if (area == 0)
+                return;
+            const float *p0 = a, *p1 = area > 0 ? b : c, *p2 = area > 0 ? c : b;
+            const int x0 = std::max(lo, int(std::ceil(std::min({a[0], b[0], c[0]})))), x1 = std::min(hiX, int(std::floor(std::max({a[0], b[0], c[0]}))));
+            const int y0 = std::max(lo, int(std::ceil(std::min({a[1], b[1], c[1]})))), y1 = std::min(hiY, int(std::floor(std::max({a[1], b[1], c[1]}))));
+            const auto edge = [](const float *u, const float *v, float x, float y) { return (v[0] - u[0]) * (y - u[1]) - (v[1] - u[1]) * (x - u[0]); };
+            const auto topLeft = [](const float *u, const float *v) { return (u[1] == v[1] && v[0] < u[0]) || v[1] < u[1]; };
+            const bool t0 = topLeft(p1, p2), t1 = topLeft(p2, p0), t2 = topLeft(p0, p1);
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x)
+                {
+                    const float e0 = edge(p1, p2, float(x), float(y)), e1 = edge(p2, p0, float(x), float(y)), e2 = edge(p0, p1, float(x), float(y));
+                    if ((e0 > 0 || (e0 == 0 && t0)) && (e1 > 0 || (e1 == 0 && t1)) && (e2 > 0 || (e2 == 0 && t2)))
+                        img.rgba[(size_t(y) * img.width + size_t(x)) * 4 + 3] = alpha;
+                }
+        }
+
+        // a list entry's geometry from the frame's records: (batches, model) pairs; false when the frame has none
+        struct RecordPart
+        {
+            const std::vector<pop_assets::Batch> *batches;
+            const float *model;
+            bool native; // POP_NATIVE_WORLD: the base record is drawn natively
+        };
+        using RecordGeometry = std::vector<RecordPart>;
+        bool entryGeometry(uint8_t *rdram, uint32_t entry, RecordGeometry &out)
+        {
+            static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            uint64_t word;
+            std::memcpy(&word, getConstMemPtr(rdram, entry), 8);
+            const uint32_t kind = (guest8(rdram, entry + 6) & 0x3F) >> 2, index = uint32_t((word << 26) >> 54);
+            if (kind != 9 && kind != 10)
+                return false; // 4 (CJIdxMesh) not recorded yet
+            const uint32_t pass = guest8(rdram, entry + 0xD) & 0xF;
+            const auto it = g_frameByCall.find((uint64_t(uint32_t(word) << 4) << 16) | index | (uint64_t(pass) << 56));
+            if (it == g_frameByCall.end())
+                return false;
+            for (const RecordRange &r : it->second)
+                for (size_t i = r.first; i < r.first + r.count; ++i)
+                {
+                    if (r.kind == 0)
+                        out.push_back({&g_elements[g_frameDraws[i].first].meshes, g_frameDraws[i].second.data(), g_frameMaterials[i].native});
+                    else if (r.kind == 1)
+                        out.push_back({&g_framePosed[i].first, kIdentity, g_framePosed[i].second.native});
+                    else
+                        out.push_back({&g_frameRefs[i].first, g_frameRefs[i].second.first.data(), g_frameRefs[i].second.second.native});
+                }
+            return !out.empty();
+        }
+
+        // one projector (FUN_004C3540's a0), its matrices and strength as FUN_004C2400 left them for this frame;
+        // true if it was recorded completely and every receiver's base record is native (POP_NATIVE_WORLD)
+        bool recordShadow(uint8_t *rdram, uint32_t proj)
+        {
+            ++g_shadowStats.projectors;
+            if (guest8(rdram, proj + 0x50))
+            {
+                ++g_shadowStats.mirror; // mirror projectors draw their casters Z-tested (SetDrawShadowCastersMode): not yet
+                return false;
+            }
+            const int w = int(guestAny(rdram, proj + 0x40C)), h = int(guestAny(rdram, proj + 0x410));
+            if (w < 4 || h < 4 || w > 1024 || h > 1024)
+                return false;
+            bool allNative = true;
+            // the casters: SetShadowCastingEnv's colour qw 21 = (128, 128, 128, strength x 128), FTOI0 in the VU
+            const float strength = guestF(rdram, proj + 0x45C);
+            const uint8_t casterAlpha = uint8_t(std::clamp(int(strength * 128.0f), 0, 255));
+            pop_native::Image img;
+            img.width = uint32_t(w);
+            img.height = uint32_t(h);
+            img.rgba.assign(size_t(w) * h * 4, 0xFF);
+            for (size_t i = 3; i < img.rgba.size(); i += 4)
+                img.rgba[i] = 0;
+            GameMatrix toBuffer, tex, frustum;
+            toBuffer.read(rdram, proj + 0x230);
+            tex.read(rdram, proj + 0x2B0);
+            frustum.read(rdram, proj + 0x270);
+            const float ox = float(2048 - w / 2), oy = float(2048 - h / 2);
+            const uint32_t casters = guestAny(rdram, proj), nc = guestAny(rdram, proj + 4);
+            for (uint32_t i = 0; i < nc && i < 4096; ++i)
+            {
+                RecordGeometry geo;
+                if (!entryGeometry(rdram, casters + 16 * i, geo))
+                {
+                    ++g_shadowStats.noGeometry;
+                    allNative = false;
+                    continue;
+                }
+                ++g_shadowStats.casters;
+                for (const auto &[batches, model, native] : geo)
+                    for (const auto &b : *batches)
+                    {
+                        std::vector<std::array<float, 3>> px(b.vertices.size());
+                        for (size_t v = 0; v < b.vertices.size(); ++v)
+                        {
+                            float wp[3], c[4];
+                            toWorld(model, b.vertices[v].pos, wp);
+                            toBuffer.apply(wp, c);
+                            px[v] = {c[0] / c[3] - ox, c[1] / c[3] - oy, c[3]};
+                        }
+                        for (size_t t = 0; t + 2 < b.indices.size(); t += 3)
+                        {
+                            const auto &p0 = px[b.indices[t]], &p1 = px[b.indices[t + 1]], &p2 = px[b.indices[t + 2]];
+                            if (p0[2] <= 0 || p1[2] <= 0 || p2[2] <= 0)
+                                continue;
+                            rasterAlpha(img, p0.data(), p1.data(), p2.data(), casterAlpha, 1, w - 2, h - 2);
+                            ++g_shadowStats.casterTris;
+                        }
+                    }
+            }
+            // as the renderer samples it: alpha on the 0x80 = 1.0 scale -> 0..255
+            for (size_t i = 3; i < img.rgba.size(); i += 4)
+                img.rgba[i] = uint8_t(std::min(255, (int(img.rgba[i]) * 255 + 64) / 128));
+            const uint32_t key = kShadowKey + uint32_t(g_frameShadowImages.size());
+            g_frameShadowImages.push_back(std::move(img));
+
+            // the receivers: FUN_004B59C0's constants as FUN_004C3540 passes them
+            float pos[3], fade[4], dir[3];
+            for (int k = 0; k < 3; ++k)
+                pos[k] = guestF(rdram, proj + 0x360 + 4 * k);
+            for (int k = 0; k < 4; ++k)
+                fade[k] = guestF(rdram, proj + 0x3A0 + 4 * k);
+            const uint32_t dirAt = guest8(rdram, proj + 0x104) ? 0x0063FD20u : 0x0063FD30u;
+            for (int k = 0; k < 3; ++k)
+                dir[k] = guestF(rdram, dirAt + 4 * k);
+            const float aBase = guestF(rdram, 0x70000468u), aW = guestF(rdram, 0x7000046Cu);
+            DrawMaterial dm;
+            dm.textureKey = key;
+            dm.flags = 0xF0200u; // blend kind 0xF = Cd (1 - As) (ALPHA 0x46), no depth write
+            dm.fogA = 255.0f;    // FGE off
+            dm.zTest = 1u | 2u;  // Z test on; bit 1: texture clamped (CLAMP_1 5)
+            dm.fbmsk = 0xFF000000u;
+            dm.list = 0x1000u; // marks the shadow pass in the side files
+            const uint32_t receivers = guestAny(rdram, proj + 0x10), nr = guestAny(rdram, proj + 0x14);
+            for (uint32_t i = 0; i < nr && i < 4096; ++i)
+            {
+                RecordGeometry geo;
+                if (!entryGeometry(rdram, receivers + 16 * i, geo))
+                {
+                    ++g_shadowStats.noGeometry;
+                    allNative = false;
+                    continue;
+                }
+                ++g_shadowStats.receivers;
+                for (const auto &[batches, model, native] : geo)
+                {
+                    allNative = allNative && native;
+                    // the projector position in object space (the VU setup: (P - W.t) . W's axes)
+                    float local[3];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const float *axis = model + 4 * k;
+                        local[k] = (pos[0] - model[12]) * axis[0] + (pos[1] - model[13]) * axis[1] + (pos[2] - model[14]) * axis[2];
+                    }
+                    std::vector<pop_assets::Batch> out;
+                    for (const auto &b : *batches)
+                    {
+                        pop_assets::Batch o;
+                        o.vertices = b.vertices;
+                        std::vector<uint32_t> clipFlags(b.vertices.size());
+                        for (size_t v = 0; v < o.vertices.size(); ++v)
+                        {
+                            pop_native::Vertex &x = o.vertices[v];
+                            float wp[3], t[4], f[4], cam[4];
+                            toWorld(model, x.pos, wp);
+                            tex.apply(wp, t);
+                            frustum.apply(wp, f);
+                            for (int c = 0; c < 4; ++c)
+                                cam[c] = wp[0] * g_frameClip[c] + wp[1] * g_frameClip[4 + c] + wp[2] * g_frameClip[8 + c] + g_frameClip[12 + c];
+                            uint32_t cf = 0;
+                            const float aw = std::fabs(f[3]);
+                            for (int c = 0; c < 3; ++c)
+                                cf |= (f[c] > aw ? 1u : 0u) << (2 * c) | (f[c] < -aw ? 2u : 0u) << (2 * c);
+                            clipFlags[v] = cf;
+                            float d2 = 0;
+                            for (int k = 0; k < 3; ++k)
+                                d2 += dir[k] * (local[k] - x.pos[k]) * (local[k] - x.pos[k]);
+                            const float fd = std::clamp(fade[2] + fade[3] * d2, 0.0f, 1.0f);
+                            const float a = std::max(std::min(aBase + aW * cam[3], 255.0f) * fd, 0.03125f);
+                            x.uv[0] = t[0] / t[3];
+                            x.uv[1] = t[1] / t[3];
+                            x.colour[0] = x.colour[1] = x.colour[2] = 1.0f;
+                            x.colour[3] = float(int(a)) / 128.0f;
+                            x.uv2[0] = x.uv2[1] = 0;
+                        }
+                        for (size_t t = 0; t + 2 < b.indices.size(); t += 3)
+                        {
+                            const uint32_t i0 = b.indices[t], i1 = b.indices[t + 1], i2 = b.indices[t + 2];
+                            if (clipFlags[i0] & clipFlags[i1] & clipFlags[i2])
+                            {
+                                ++g_shadowStats.culled;
+                                continue;
+                            }
+                            o.indices.insert(o.indices.end(), {i0, i1, i2});
+                        }
+                        g_shadowStats.receiverTris += o.indices.size() / 3;
+                        if (!o.indices.empty())
+                            out.push_back(std::move(o));
+                    }
+                    if (out.empty())
+                        continue;
+                    DrawMaterial m = dm;
+                    m.seq = g_frameSeq++;
+                    std::array<float, 16> mm;
+                    std::memcpy(mm.data(), model, sizeof(float) * 16);
+                    g_frameShadows.emplace_back(std::move(out), std::make_pair(mm, m));
+                }
+            }
+            return allNative;
+        }
+
+        // POP_NATIVE_WORLD: a projector whose receivers are all drawn natively is drawn natively too (its call skipped;
+        // both lists emptied as FUN_004B8080 does after the draw); otherwise the GS draws it and its records go
+        void shadowRtt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t proj = getRegU32(ctx, 4);
+            if (g_frameCapturing && g_nativeShadows && (!g_world || g_worldOpen))
+            {
+                const size_t shadows0 = g_frameShadows.size(), images0 = g_frameShadowImages.size();
+                const bool native = recordShadow(rdram, proj);
+                if (g_world)
+                {
+                    if (native)
+                    {
+                        for (size_t i = shadows0; i < g_frameShadows.size(); ++i)
+                            g_frameShadows[i].second.second.native = true;
+                        const uint32_t zero = 0;
+                        std::memcpy(getMemPtr(rdram, proj + 4), &zero, 4);
+                        std::memcpy(getMemPtr(rdram, proj + 0x14), &zero, 4);
+                        ++g_shadowStats.nativeProjectors;
+                        return;
+                    }
+                    g_frameShadows.resize(shadows0);
+                    g_frameShadowImages.resize(images0);
+                }
+            }
+            g_origShadowRtt(rdram, ctx, runtime);
+        }
+
         void writeVertices(std::vector<uint8_t> &f, const std::vector<pop_native::Vertex> &vertices, const DrawMaterial &m)
         {
             if (m.constColour < 0 && m.constAlpha < 0 && !m.hasUvm)
@@ -2199,6 +2534,9 @@ namespace pop_native_live
             for (const auto &r : g_frameRefs)
                 if (!worldOut || r.second.second.native)
                     allMaterials.push_back(r.second.second);
+            for (const auto &r : g_frameShadows)
+                if (!worldOut || r.second.second.native)
+                    allMaterials.push_back(r.second.second);
             for (const OtherDraw &o : worldOut ? std::vector<OtherDraw>{} : g_frameOther) // other paths' textures too (image list only)
             {
                 DrawMaterial m;
@@ -2218,7 +2556,13 @@ namespace pop_native_live
                 {
                     pop_native::Image img;
                     bool found = false;
-                    if (live)
+                    if (m.textureKey - kShadowKey < g_frameShadowImages.size())
+                    {
+                        // this frame's shadow textures (never cached: they change every frame)
+                        img = g_frameShadowImages[m.textureKey - kShadowKey];
+                        found = true;
+                    }
+                    else if (live)
                     {
                         // decoded once per texture key (the packs stay loaded); misses are retried
                         auto it = g_liveImages.find(m.textureKey);
@@ -2279,7 +2623,8 @@ namespace pop_native_live
                 if (live)
                 {
                     putBytes(f, &imageKeys[i], 4);
-                    if (!sent.insert(imageKeys[i]).second)
+                    // shadow textures always with their pixels (the viewer updates the image it has for the key)
+                    if (!sent.insert(imageKeys[i]).second && imageKeys[i] - kShadowKey >= 0x10000u)
                     {
                         const uint32_t zero[2] = {0, 0};
                         putBytes(f, zero, 8);
@@ -2292,7 +2637,7 @@ namespace pop_native_live
             }
             size_t tris = 0, textured = 0;
             static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            // every draw in the game's order: (seq, kind 0 static / 1 skinned / 2 instanced, index)
+            // every draw in the game's order: (seq, kind 0 static / 1 skinned / 2 instanced / 3 shadow receiver, index)
             std::vector<std::array<uint32_t, 3>> order;
             for (size_t i = 0; i < g_frameDraws.size(); ++i)
                 if (!worldOut || g_frameMaterials[i].native)
@@ -2306,6 +2651,9 @@ namespace pop_native_live
             for (size_t i = 0; i < g_frameRefs.size(); ++i)
                 if (!worldOut || g_frameRefs[i].second.second.native)
                     order.push_back({g_frameRefs[i].second.second.seq, 2u, uint32_t(i)});
+            for (size_t i = 0; i < g_frameShadows.size(); ++i)
+                if (!worldOut || g_frameShadows[i].second.second.native)
+                    order.push_back({g_frameShadows[i].second.second.seq, 3u, uint32_t(i)});
             std::sort(order.begin(), order.end());
             const uint32_t n = uint32_t(order.size());
             putBytes(f, &n, size_t(4) * size_t(1));
@@ -2317,8 +2665,9 @@ namespace pop_native_live
             {
                 if (dl)
                 {
-                    const DrawMaterial &m = o[1] == 0 ? g_frameMaterials[o[2]] : o[1] == 1 ? g_framePosed[o[2]].second : g_frameRefs[o[2]].second.second;
-                    const auto &bs = o[1] == 0 ? g_elements[g_frameDraws[o[2]].first].meshes : o[1] == 1 ? g_framePosed[o[2]].first : g_frameRefs[o[2]].first;
+                    const auto &rec = o[1] == 3 ? g_frameShadows[o[2]] : g_frameRefs[o[2]];
+                    const DrawMaterial &m = o[1] == 0 ? g_frameMaterials[o[2]] : o[1] == 1 ? g_framePosed[o[2]].second : rec.second.second;
+                    const auto &bs = o[1] == 0 ? g_elements[g_frameDraws[o[2]].first].meshes : o[1] == 1 ? g_framePosed[o[2]].first : rec.first;
                     double c[4] = {0, 0, 0, 0};
                     size_t nv = 0;
                     for (const auto &b : bs)
@@ -2329,7 +2678,7 @@ namespace pop_native_live
                             ++nv;
                         }
                     std::fprintf(dl, "%u %s %u element %08x flags %08x ref %08x tex %08x batches %zu verts %zu colour %.3f %.3f %.3f %.3f\n", drawNo,
-                                 o[1] == 0 ? "static" : o[1] == 1 ? "skinned" : "instanced", o[2],
+                                 o[1] == 0 ? "static" : o[1] == 1 ? "skinned" : o[1] == 2 ? "instanced" : "shadow", o[2],
                                  o[1] == 0 ? g_frameDraws[o[2]].first : 0u, m.flags, m.ref, m.textureKey, bs.size(), nv, nv ? c[0] / nv : 0,
                                  nv ? c[1] / nv : 0, nv ? c[2] / nv : 0, nv ? c[3] / nv : 0);
                 }
@@ -2350,9 +2699,10 @@ namespace pop_native_live
                 }
                 else
                 {
-                    model = g_frameRefs[o[2]].second.first.data();
-                    matp = &g_frameRefs[o[2]].second.second;
-                    batches = &g_frameRefs[o[2]].first;
+                    auto &rec = o[1] == 3 ? g_frameShadows[o[2]] : g_frameRefs[o[2]];
+                    model = rec.second.first.data();
+                    matp = &rec.second.second;
+                    batches = &rec.first;
                 }
                 const DrawMaterial &mat = *matp;
                 const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
@@ -2377,8 +2727,9 @@ namespace pop_native_live
                     if (worldOut)
                     {
                         // posed (skinned) batches change every frame: key 0, drawn for this frame only
+                        // shadow receivers too (their UVs and alpha follow the projector)
                         const uint64_t key = o[1] == 0   ? mix64(mix64(0x5354u, (uint64_t(g_elements[g_frameDraws[o[2]].first].serial) << 16) | bi), variant)
-                                             : o[1] == 1 ? 0u
+                                             : o[1] == 1 || o[1] == 3 ? 0u
                                                          : mix64(contentKey(b), variant);
                         putBytes(f, &key, 8);
                         tris += b.indices.size() / 3;
@@ -2540,6 +2891,11 @@ namespace pop_native_live
                                  texIndex != 0xFFFF ? popTextureKey(texIndex) : 0u);
                 }
             }
+            if (g_shadowStats.projectors)
+                std::fprintf(stderr, "[pop:native] shadows: %llu projectors (%llu mirror, left out), %llu casters (%llu triangles), %llu receivers (%llu triangles, %llu culled), %llu list entries without records\n",
+                             (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.casters,
+                             (unsigned long long)g_shadowStats.casterTris, (unsigned long long)g_shadowStats.receivers, (unsigned long long)g_shadowStats.receiverTris,
+                             (unsigned long long)g_shadowStats.culled, (unsigned long long)g_shadowStats.noGeometry);
             std::fprintf(stderr, "[pop:native] frame written to %s: %u draws (%zu skinned, %zu instanced, %zu textured, %u images), %zu triangles\n",
                          g_framePath.c_str(), n, g_framePosed.size(), g_frameRefs.size(), textured, ni0, tris);
         }
@@ -2562,6 +2918,9 @@ namespace pop_native_live
             g_frameGfx.clear();
             g_frameSeen.clear();
             g_frameLightmap.clear();
+            g_frameByCall.clear();
+            g_frameShadows.clear();
+            g_frameShadowImages.clear();
             g_frameSeq = 0;
             g_glowCalls = 0;
             g_hazeCalls = 0;
@@ -2654,6 +3013,11 @@ namespace pop_native_live
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
                                  (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic,
                                  (unsigned long long)g_worldStats.litNative, (unsigned long long)g_worldStats.envNative);
+                if (g_nativeShadows)
+                    std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu\n",
+                                 (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
+                                 (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.receivers,
+                                 (unsigned long long)g_shadowStats.noGeometry);
             }
             g_origKick(rdram, ctx, runtime);
         }
@@ -2937,7 +3301,8 @@ namespace pop_native_live
                          {0x004B9440u, listRender, &g_origListRender},
                          {0x004B7B80u, lmRender, &g_origLmRender},
                          {0x004A2C80u, worldKick, &g_origKick},
-                         {g_other[0].address, otherDisplay<0>, &g_other[0].original}};
+                         {g_other[0].address, otherDisplay<0>, &g_other[0].original},
+                         {kShadowRtt, shadowRtt, &g_origShadowRtt}};
             for (const auto &h : hooks)
                 if (!(*h.original = runtime.lookupFunction(h.address)))
                 {
@@ -3022,6 +3387,9 @@ namespace pop_native_live
             g_origGfx = runtime.lookupFunction(kGfxDisplay);
             if (g_origGfx)
                 runtime.replaceFunction(kGfxDisplay, gfxDisplay);
+            g_origShadowRtt = runtime.lookupFunction(kShadowRtt);
+            if (g_origShadowRtt)
+                runtime.replaceFunction(kShadowRtt, shadowRtt);
         }
         g_lastReport = std::chrono::steady_clock::now();
         std::fprintf(stderr, "[pop:native] live conversion check on\n");

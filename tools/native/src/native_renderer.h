@@ -59,6 +59,7 @@ namespace pop_native
         bool legacyBlend = false;   // glTF BLEND: no depth write, nearly transparent texels dropped
         bool afailRgbOnly = false;  // GS TEST AFAIL RGB_ONLY: alpha-test failures write colour, not depth
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
+        bool clampUv = false;    // base texture clamped to its edge texels (GS CLAMP_1 = 5) instead of repeated
     };
 
     inline bool isBlended(AlphaMode m) { return m != AlphaMode::Opaque && m != AlphaMode::Mask; }
@@ -162,6 +163,9 @@ namespace pop_native
 
         bool init(const Options &options, std::string &error);
         int addImage(const Image &image);
+        // new pixels for an image added before (same size), applied at the next upload(); false if it cannot
+        // (unknown index or another size: add a new image instead). Live shadow textures change every frame.
+        bool updateImage(int index, const Image &image);
         int addMaterial(const Material &material);
         int addMesh(Mesh mesh);
         // Kept meshes: geometry that stays on the GPU across reset(true) (the in-game native world sends
