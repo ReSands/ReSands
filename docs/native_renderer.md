@@ -916,3 +916,23 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - Still to read: FUN_004C2E00, FUN_004C48C0, FUN_004C3A40, SetDrawShadowCastersMode, SetShadowCastingEnv,
   UpdateTexProjectionMatrix, the two Blend/Mask functions, FUN_004B59C0's constants; and the P7 driver(s) 3/5/6+.
   Native plan follows from it: (a) render casters into our own shadow texture, (b) redraw receivers with projected UVs.
+- **Manager and projectors in a save** (`game/analysis/shadow/tools/projectors.py <state>`): CJadeShadowManager at
+  scratchpad 0x500: projector pointers +0 (count +0x100, active bitmask +0x110). Projector: lists +0 casters / +0x10
+  receivers / +0x20 blob receivers (16-byte Render entries, ptr + count), shadow buffer +0x40C x +0x410 at fbp +0x42C,
+  strength +0x45C, fade +0x120, mirror flag +0x50, mask/blob textures +0x100/+0x102, flags +0x104/+0x111..+0x115.
+  Save 192521: 9 projectors, 8 active, all 256x256 perspective, strength 0.414-0.422, **lists filled** (e.g. #0: 14
+  casters, 1 receiver), so it can be replayed offline. Lever save 172041: lists already emptied (FUN_004B8080 runs
+  after the draw), so not usable for shadows; look for more saves with filled lists.
+- **The shadow program in the trace of save 192521** (image b720d191 = VU program 6; `vu1replay --only`, decoded by
+  `game/analysis/shadow/tools/p7runs.py`): 2,964 runs, per projector a setup run then casters then receivers. Entries:
+  0x03F0 setup (no output; loads the projector matrices into **registers**: the caster runs read no matrix from VU
+  memory), **0x0750 / 0x0B78 / 0x1008 casters** (three mesh variants; into the 256x256 buffer centred at 2048 by
+  XYOFFSET, the mesh's own UVs, Q = 1, colour (128,128,128, strength x 128 = qw 21 from SetShadowCastingEnv), PRIM
+  0x7C), **0x2058 receivers** (screen space, projective STQ into the shadow texture, colour (128,128,128, A) with A
+  per vertex: depends on qw 21 (128,128,128,128 from FUN_004B59C0), qw 22 (0.03125, 255, 127, ..), qw 23, qw 28 and
+  the projector position at qw 1019, not on normals: a spotlight-like falloff; `CreateSpotLightParam` 0x4C4F80 is the
+  lead). Receiver inputs: positions qw 144+, a 4x4 at qw 1015-1018, rotation qw 1020-1022. (The earlier table's
+  "record 2548 = the shadow-list draw" is a caster run.)
+- Next: decompile CreateSpotLightParam / UpdateTexProjectionMatrix / FUN_004B59C0's constants; derive the receiver
+  STQ and alpha formulas and check them on recorded runs (inprobe --out); then the offline frame: casters into a
+  256x256 texture, receivers redrawn, judged on save 192521.
