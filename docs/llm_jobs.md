@@ -291,7 +291,11 @@ P9 = ELF MPG packet 0x4E338C, 0x13A0 bytes (628 pairs, 563 run in the recorded s
   bits (vudis rounds them).
 - **Hand ports as the end-to-end check:** `known_good/p9_setup`, `p9_init` (the two 4x4 matrix products), `p9_main`
   (RINIT): all pass 498 cases, on the Mac and with MSVC on the PC; a port with one wrong RINIT bit fails all 498.
-- **Qwen test (24 Oct ~21:25):** see below.
+- **Qwen test (24 Oct 21:24-21:46, `--rounds 3`):** 3 of 3 stages passed, 600 of 600 cases each: `p9_d_head` (FMAND +
+  JR) in round 1 (252 s); `p9_loop` in round 2 (round 1's only error: the BAL return value, vi15 = 84 instead of
+  0x420 / 8 = 132, so prompts now state each BAL's value); `p9_c_a` (36 pairs: the curve maths, RNEXT, FTOI, integer
+  stores) in round 3 (round 1 maths ~1% off, round 2 maths right but ISW lanes wrong). ~70 tokens/s, 1-6 min a round.
+  These passes count for the night job. Stop test: "Stop Qwen" mid-round left no python / llama-server, GPU idle.
 - **Night job** `tools/windows/oct24.ps1` (shortcut "Qwen overnight (then shuts down)"): the water's 4 passes as
   planned, then passes **without a deadline**: each unpassed P9 stage in program order (3 rounds), then the P6
   leftovers (6), `--chain` per program once it passes; llama-server checked before every stage (the LlamaServe task
