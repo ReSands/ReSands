@@ -933,6 +933,20 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
   the projector position at qw 1019, not on normals: a spotlight-like falloff; `CreateSpotLightParam` 0x4C4F80 is the
   lead). Receiver inputs: positions qw 144+, a 4x4 at qw 1015-1018, rotation qw 1020-1022. (The earlier table's
   "record 2548 = the shadow-list draw" is a caster run.)
-- Next: decompile CreateSpotLightParam / UpdateTexProjectionMatrix / FUN_004B59C0's constants; derive the receiver
-  STQ and alpha formulas and check them on recorded runs (inprobe --out); then the offline frame: casters into a
-  256x256 texture, receivers redrawn, judged on save 192521.
+- **Receiver constants (FUN_004B59C0, qw = VU address):** 4-7 / 8-11 / 12-15 = gp+0x200 / +0x240 / +0x280 (camera
+  matrices), 16-19 = projector +0x2B0 (tex projection x camera, UpdateTexProjectionMatrix: 0.5-scale/offset of the
+  projector camera +0x130) or +0x2F0 (the same scaled by +0x108/+0x10C), 20 = projector +0x360 (its position),
+  21 = (128,128,128,128), 22 = scratchpad 0x460, 23 = projector +0x3A0 or the caller's (FUN_004C3180: 0x6E1580 =
+  (100, 110, 5.76, -0.000476)), 24-27 = projector +0x270, 28 = caller's direction (0x63FD20/30/40) or projector
+  +0x390, 29 = GIF tag template, 30 = (0, 0x300008D, 0x2000190, 0). **qw 23 = (r0, r1, a, b)** with a = r1^2/(r1^2-r0^2),
+  b = -1/(r1^2-r0^2) (trace: 2.119, 3.469, 1.595, -0.1326; CreateSpotLightParam computes the same pair and a cone
+  term -cos(fov/2), 1/(cos(0.95 fov/2) - cos(fov/2))): a fade a + b d^2, 1 at r0, 0 at r1.
+- **Careful: the VU code at 0x23B0-0x25D0 (reads qw 1019 = projector position, qw 22/23/28, writes alpha = ramp x
+  fade, RGB = 128 x clamp(n . qw28)) is never executed in this trace** (`vu1replay --coverage`). Covered ranges:
+  0x0000-0x0508 (setup), 0x0740-0x0870, 0x0A00-0x0CA8, 0x0D68-0x1130, 0x1410-0x17F0, 0x1BA8-0x2320 (0x1CE8-0x2050 =
+  clipping). The executed receiver loop is still to be found: coverage per entry (receivers = 0x2058, 594 runs) needs a
+  filter in vu1replay (or inprobe per run); then check the formula on recorded runs (inprobe --dump for the inputs,
+  --out for the outputs; data after a run is not the input: buffers are reused). Blend (from the decompile): ALPHA
+  0x46 = Cd (1 - As) on the rendered-caster path (FUN_004C3540), 0x62 = Cd - Cs FIX (FIX = +0x11C x 128) on the
+  blob path; TEX0 = the shadow texture, TCC on, modulate.
+- Then the offline frame: casters into a 256x256 texture, receivers redrawn, judged on save 192521.

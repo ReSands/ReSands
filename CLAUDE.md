@@ -74,7 +74,8 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   buildings as flat grey: fog zones are (max, min, a, b) and the VU1 drivers clamp F to min..max (min 102 = at most
   60% fog); we clamped to 0..255. Fixed (PNF8, fog min/max per draw), offline A/B 191 saves 28 better / 3 worse
   (<= 0.5); **user: palace fix looks good (24 Oct)**. First shadow decompile:
-  `docs/native_renderer.md` "Shadows: first decompile". Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
+  `docs/native_renderer.md` "Shadows: first decompile" (24 Oct midday: render-to-texture shadows; caster and receiver
+  entries of the shadow VU1 program found in the 192521 trace; next = the receivers' executed per-vertex loop). Shadow leads: shadow-list renderer FUN_004B80C0 (redraws meshes with VU1 program P7, image
   b720d191, colour qw 21 = (128,128,128,~53)), CVuManager::DoSetShadowDriver 0x4B5BC0 / FUN_004B7480 (state byte
   0x700000A8, word 0x700000AC = 2); the lever shadow flicker (save 172041) is the judge for the Z side.
   **Order for the next session:** (1) done (above; user check in game); (2) shadows: decompile FUN_004B80C0 + the P7 driver setup, port P7's shadow transform/colour
