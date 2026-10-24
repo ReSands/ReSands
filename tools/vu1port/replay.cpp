@@ -14,6 +14,7 @@
 //   --stage <entry>:<exit>[,<exit>...]: <out> becomes the stage's cases for the port judge (judge.cpp): each
 //   time a run reaches the entry pc, the state there (VuState, vu_task.h) and at the next exit pc reached, and
 //   the packets kicked in between. Boundaries must be clean (no write pending); unclean ones are counted.
+//   --max-cases N (default 4000), --stride N: write every Nth case only.
 //   With --hints <file>: per pc inside the stage, which DIV the visible Q came from, which upper instruction
 //   the visible MAC flags came from, and whether a branch saw a vi value from before the last write.
 #include <algorithm>
@@ -113,8 +114,11 @@ namespace
     {
         kVf = 1, kVi = 2, kAcc = 4, kStore = 8, kKick = 16, kQ = 32, kP = 64, kMacFlags = 128, kClipFlags = 256, kStatusFlags = 512, kBranch = 1024
     };
-    constexpr uint32_t kHarmless = kVf | kVi | kAcc;
     const char *const kPendingNames[] = {"vf", "vi", "acc", "store", "xgkick", "Q", "P", "MAC", "clip", "status", "branch"};
+    // --allow <kinds> adds to these for one program (P9: xgkick, the packet is taken from memory at the XGKICK, so a
+    // transfer in flight changes nothing the judge sees; MAC and status, when the hints show no FMAND reading flags
+    // from before the stage's entry and no status reader exists)
+    uint32_t kHarmless = kVf | kVi | kAcc;
 
     uint32_t pending(const VU1Interpreter &vu)
     {
@@ -150,6 +154,9 @@ namespace
         out.status = s.status;
         out.top = s.top;
         out.pc = s.pc;
+#if VU_TASK_R
+        out.r = s.r;
+#endif
         std::memcpy(out.mem, mem, sizeof out.mem);
     }
 
@@ -272,6 +279,7 @@ int main(int argc, char **argv)
     std::set<uint32_t> stageExits;
     std::string hintsPath;
     long maxCases = 4000;
+    long stride = 1; // --stride N: write every Nth case (spread over the whole trace instead of its start)
     uint64_t cases = 0, uncleanEntry = 0, uncleanExit = 0, unfinished = 0;
     uint32_t pendingEntry = 0, pendingExit = 0; // kinds seen in flight (Pending bits)
     Hints hints;
@@ -302,6 +310,16 @@ int main(int argc, char **argv)
             hintsPath = argv[++i];
         else if (a == "--max-cases" && i + 1 < argc)
             maxCases = std::stol(argv[++i]);
+        else if (a == "--allow" && i + 1 < argc)
+        {
+            std::stringstream kinds(argv[++i]);
+            for (std::string k; std::getline(kinds, k, ',');)
+                for (uint32_t b = 0; b < 11; ++b)
+                    if (k == kPendingNames[b])
+                        kHarmless |= 1u << b;
+        }
+        else if (a == "--stride" && i + 1 < argc)
+            stride = std::max(1L, std::stol(argv[++i]));
     }
     std::ifstream in(argv[1], std::ios::binary);
     std::ofstream out(argv[3], std::ios::binary);
@@ -373,7 +391,7 @@ int main(int argc, char **argv)
             packetSink = &sink;
             hints.reset();
             const auto finish = [&](uint32_t exitFlags) {
-                if (long(cases) < maxCases)
+                if (long(cases) % stride == 0 && long(cases) / stride < maxCases)
                 {
                     const uint32_t head[3] = {0x45534143u /* CASE */, uint32_t(index), flags | exitFlags};
                     out.write(reinterpret_cast<const char *>(head), sizeof head);
@@ -483,7 +501,7 @@ int main(int argc, char **argv)
     if (stageEntry != 0xFFFFFFFF)
         std::fprintf(stderr, "stage %x: %" PRIu64 " cases (%" PRIu64 " written), unclean entries %" PRIu64 ", unclean exits %" PRIu64
                              ", ended inside %" PRIu64 "\n",
-                     stageEntry, cases, std::min<uint64_t>(cases, uint64_t(maxCases)), uncleanEntry, uncleanExit, unfinished);
+                     stageEntry, cases, std::min<uint64_t>((cases + stride - 1) / stride, uint64_t(maxCases)), uncleanEntry, uncleanExit, unfinished);
     for (int side = 0; side < 2 && stageEntry != 0xFFFFFFFF; ++side)
     {
         std::fprintf(stderr, "  in flight at the %s:", side ? "exits" : "entry");

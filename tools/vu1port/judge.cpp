@@ -89,6 +89,10 @@ namespace
             r.add("P: expected %.9g, got %.9g", double(want.p), double(got.p));
         if (bits(want.i) != bits(got.i))
             r.add("I: expected %.9g, got %.9g", double(want.i), double(got.i));
+#if VU_TASK_R
+        if (want.r != got.r)
+            r.add("R: expected 0x%08x, got 0x%08x", want.r, got.r);
+#endif
         if ((want.clip & 0xFFFFFF) != (got.clip & 0xFFFFFF))
             r.add("clip flags: expected 0x%06x, got 0x%06x", want.clip & 0xFFFFFF, got.clip & 0xFFFFFF);
         for (uint32_t w = 0; w < 0x1000; ++w)

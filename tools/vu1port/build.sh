@@ -10,9 +10,12 @@ W=$P/game/analysis/vu1port
 mkdir -p "$W"
 # no FMA contraction: the VU rounds each multiply and add; AddressSanitizer catches stray memory accesses
 JFLAGS="-arch x86_64 -O1 -g -std=c++17 -ffp-contract=off -fsanitize=address -I $P/tools/vu1port"
+# VU_TASK_R=1: programs that use the random-number register (P9): VuState carries R, the replayer is vu1replay_r
+RDEF="" RSUF=""
+if [ "${VU_TASK_R:-0}" = 1 ]; then RDEF="-DVU_TASK_R=1" RSUF="_r"; JFLAGS="$JFLAGS $RDEF"; fi
 if [ -z "${1:-}" ]; then
     INC="-I $R/ps2xRuntime/include -I $R/ps2xIOP/include -I $R/ps2xRuntime/src/lib/vu -I $R/ps2xRuntime/src/lib"
-    clang++ -arch x86_64 -O2 -std=c++20 -msse4.1 $INC -I "$P/tools/vu1port" "$P/tools/vu1port/replay.cpp" -o "$W/vu1replay"
+    clang++ -arch x86_64 -O2 -std=c++20 -msse4.1 $RDEF $INC -I "$P/tools/vu1port" "$P/tools/vu1port/replay.cpp" -o "$W/vu1replay$RSUF"
 else
     clang++ $JFLAGS "$P/tools/vu1port/judge.cpp" "$1" -o "$2"
 fi

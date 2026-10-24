@@ -18,6 +18,9 @@ struct VuState
     uint32_t status;    // status flags
     uint32_t top;       // what XTOP returns
     uint32_t pc;        // byte address: the stage's entry on input; set it to the exit taken on return
+#if VU_TASK_R
+    uint32_t r;         // R, the random-number register (RINIT, RNEXT, RGET, RXOR): 0x3F800000 | 23 random bits
+#endif
     uint8_t mem[0x4000]; // VU1 data memory: 1024 qwords of 16 bytes; LQ/SQ address qword n at mem[16 n]
 };
 

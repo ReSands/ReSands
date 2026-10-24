@@ -5,12 +5,16 @@ tries again. Results: game/analysis/qwen/vu1_<stage>/{port.log, spec.md, attempt
 
 Usage: python3 -I tools/vu1port/port.py <stage> [--url http://127.0.0.1:8033] [--rounds 12] [--spec-only]
        python3 -I tools/vu1port/port.py <stage> --judge <file.cpp>     (judge one file, e.g. a known-good answer)
-       python3 -I tools/vu1port/port.py --chain                        (whole P6 from the passed stages, judged
-                                                                         on whole runs: game/analysis/vu1port/whole.cases)
+       python3 -I tools/vu1port/port.py --chain [p6|p9]                (a whole program from the passed stages, judged
+                                                                         on whole runs: game/analysis/vu1port/whole.cases,
+                                                                         p9_whole.cases)
+Programs: P6 (water, stages p6_*; cases <stage minus "p6_">.cases) and P9 (sprites, stages p9_*; cases <stage>.cases,
+recorded offline from saves: tools/native/src/p9trace.cpp, tools/vu1port/cases_p9.sh).
 """
 import importlib.util
 import os
 import re
+import struct
 import subprocess
 import sys
 import time
@@ -84,6 +88,82 @@ STAGES = {
     'p6_b_tail': dict(entry=0x1dd0, exits=[0xffffffff], ranges=[(0x1dd0, 0x1e08)]),
 }
 
+# P9, the sprite program (ELF MPG packet 0x4E338C, 0x13A0 bytes; tools/overrides/pop_native_live.cpp spriteRecord).
+# MSCALF 0x340 runs the setup (subroutine 0x000) and ends; MSCNT goes on at 0x390: per sprite (loop 0x408-0x4d8)
+# the curve point (subroutine 0xae0), the distance to the nearest curve segment (0x548, two loops), the colour
+# (0xdb0) and the GS strips (0xf50 -> 0x10d8 -> 0x1310, which kicks a full buffer). Stages split at subroutine
+# entries and returns (a caller stage executes its BAL and delay slot, then stops at the subroutine's entry) and
+# where branches enter; exits are pairs the program arrives at (never a delay slot). The cases come from ~130 saves
+# replayed offline (cases_p9.sh: --allow xgkick,MAC,status; no FMAND in these stages reads flags from before its
+# entry, P9 has no status reader, and a kick's packet is taken at the XGKICK). Code 0x148-0x338 (register save /
+# restore routines) is never run. Hand ports in known_good/ for the stages marked so.
+P9_IMAGE = os.path.join(ROOT, 'game', 'analysis', 'p9trace', 'vu1_04994ae7ba41b01f.bin')
+P9_END = 0xffffffff
+STAGES_P9 = {
+    'p9_setup': dict(entry=0x340, exits=[0x000], ranges=[(0x340, 0x378)]),  # hand
+    'p9_init': dict(entry=0x000, exits=[0x380], ranges=[(0x000, 0x140)]),  # hand
+    'p9_end': dict(entry=0x380, exits=[P9_END], ranges=[(0x380, 0x388)]),
+    'p9_main': dict(entry=0x390, exits=[0x408], ranges=[(0x390, 0x400)]),  # hand
+    'p9_loop': dict(entry=0x408, exits=[0xae0], ranges=[(0x408, 0x418)]),
+    'p9_c_a': dict(entry=0xae0, exits=[0xc00], ranges=[(0xae0, 0xbf8)]),
+    'p9_c_b': dict(entry=0xc00, exits=[0xd08], ranges=[(0xc00, 0xd00)]),
+    'p9_c_c': dict(entry=0xd08, exits=[0x420], ranges=[(0xd08, 0xda8)]),
+    'p9_call2': dict(entry=0x420, exits=[0x548], ranges=[(0x420, 0x428)]),
+    'p9_d_head': dict(entry=0x548, exits=[0x430, 0x5c0], ranges=[(0x548, 0x5b8)]),
+    'p9_d_save': dict(entry=0x5c0, exits=[0x640], ranges=[(0x5c0, 0x638)]),
+    'p9_d_loop_a': dict(entry=0x640, exits=[0x748], ranges=[(0x640, 0x740)]),
+    'p9_d_loop_b': dict(entry=0x748, exits=[0x640, 0x858], ranges=[(0x748, 0x850)]),
+    'p9_d_cnt': dict(entry=0x858, exits=[0x880, 0xa68], ranges=[(0x858, 0x878)]),
+    'p9_d_near': dict(entry=0x880, exits=[0x8b8], ranges=[(0x880, 0x8b0)]),
+    'p9_d_l2a': dict(entry=0x8b8, exits=[0x9a8, 0xa50], ranges=[(0x8b8, 0x9a0)]),
+    'p9_d_l2b': dict(entry=0x9a8, exits=[0xa50], ranges=[(0x9a8, 0xa48)]),
+    'p9_d_l2c': dict(entry=0xa50, exits=[0x8b8, 0xa60], ranges=[(0xa50, 0xa58)]),
+    'p9_d_div': dict(entry=0xa60, exits=[0xa68], ranges=[(0xa60, 0xa60)]),
+    'p9_d_tail': dict(entry=0xa68, exits=[0x430], ranges=[(0xa68, 0xad8)]),
+    'p9_call3': dict(entry=0x430, exits=[0xdb0], ranges=[(0x430, 0x438)]),
+    'p9_e_a': dict(entry=0xdb0, exits=[0xe88], ranges=[(0xdb0, 0xe80)]),
+    'p9_e_b': dict(entry=0xe88, exits=[0x440], ranges=[(0xe88, 0xf48)]),
+    'p9_call4': dict(entry=0x440, exits=[0xf50], ranges=[(0x440, 0x448)]),
+    'p9_f_a': dict(entry=0xf50, exits=[0x1028], ranges=[(0xf50, 0x1020)]),
+    'p9_f_b': dict(entry=0x1028, exits=[0x10c0, 0x10d8], ranges=[(0x1028, 0x10b8)]),
+    'p9_g_a': dict(entry=0x10d8, exits=[0x11b0, 0x1210], ranges=[(0x10d8, 0x11a8)]),
+    'p9_g_b': dict(entry=0x11b0, exits=[0x1200, 0x1310], ranges=[(0x11b0, 0x11f8)]),
+    'p9_g_ret1': dict(entry=0x1200, exits=[0x10c0], ranges=[(0x1200, 0x1208)]),
+    'p9_g_c': dict(entry=0x1210, exits=[0x1258], ranges=[(0x1210, 0x1250)]),
+    'p9_g_d': dict(entry=0x1258, exits=[0x12a0, 0x1310], ranges=[(0x1258, 0x1298)]),
+    'p9_g_e': dict(entry=0x12a0, exits=[0x1258, 0x1300, 0x1310], ranges=[(0x12a0, 0x12f8)]),
+    'p9_g_ret2': dict(entry=0x1300, exits=[0x10c0], ranges=[(0x1300, 0x1308)]),
+    'p9_k': dict(entry=0x1310, exits=[0x1200, 0x12a0, 0x1300], ranges=[(0x1310, 0x1398)]),
+    'p9_f_c': dict(entry=0x10c0, exits=[0x450, 0x4d0], ranges=[(0x10c0, 0x10d0)]),
+    'p9_lmid': dict(entry=0x450, exits=[0xf50, 0x4d0], ranges=[(0x450, 0x4c8)]),
+    'p9_lend': dict(entry=0x4d0, exits=[0x408, P9_END], ranges=[(0x4d0, 0x530)]),
+}
+
+PROGRAMS = {
+    'p6': dict(image=IMAGE, stages=STAGES, r=False, first='p6_setup', what='the water renderer', scenes='two water scenes'),
+    'p9': dict(image=P9_IMAGE, stages=STAGES_P9, r=True, first='p9_init', scenes='the sprite scenes of about 130 saves',
+               what='the sprite renderer'),
+}
+ALL_STAGES = {**STAGES, **STAGES_P9}
+
+
+def prog(name):
+    return PROGRAMS[name.split('_')[0]]
+
+
+def case_base(name):
+    """Cases / hints file name: P6's drop the prefix (the files predate P9), P9's keep it."""
+    return name[3:] if name.startswith('p6_') else name
+
+
+def header_for(p):
+    """vu_task.h as the model sees it: the R register only for programs that use it."""
+    text = open(os.path.join(HERE, 'vu_task.h')).read()
+    if p['r']:
+        return re.sub(r'#if VU_TASK_R\n(.*?)#endif\n', r'\1', text, flags=re.S)
+    return re.sub(r'#if VU_TASK_R\n.*?#endif\n', '', text, flags=re.S)
+
+
 PRIMER = r"""## How to read the VU1 code
 Each line is one instruction pair at a byte address (hex): the upper (floating-point) instruction, then the
 lower one. A trailing "E" marks the program's end: the pair after it (its delay slot) still executes, then
@@ -143,9 +223,16 @@ the program stops.
   branch (its delay slot) always executes before the jump. Use goto labels in C++.
 """
 
-TASK = """Translate one stage of a PlayStation 2 VU1 microprogram (the water renderer of Prince of Persia: The Sands
+PRIMER_R = r"""- R, the random-number register (vu.r, 32 bits; always 0x3F800000 | 23 random bits, a float in [1, 2)):
+  RINIT R, vfSf: R = 0x3F800000 | (the lane's bits & 0x7FFFFF). RXOR R, vfSf: R = 0x3F800000 | ((R ^ the lane's
+  bits) & 0x7FFFFF). RNEXT.dest vfT, R: first step R: b = ((R >> 4) ^ (R >> 22)) & 1; R = 0x3F800000 | (((R << 1)
+  ^ b) & 0x7FFFFF); then the masked lanes of vfT get R's bits. RGET.dest vfT, R: the masked lanes get R's bits,
+  R unchanged. All are lower instructions; their results are visible to the next pair.
+"""
+
+TASK = """Translate one stage of a PlayStation 2 VU1 microprogram ({what} of Prince of Persia: The Sands
 of Time) into C++17. Correctness is judged automatically: the judge runs your stage() on {cases} recorded
-states (the real program's state when it reached the stage's entry, in two water scenes) and compares the
+states (the real program's state when it reached the stage's entry, in {scenes}) and compares the
 state at the exit (vf, vi, ACC, Q, P, I, clip flags, data memory, kicked packets) with the original's. Floats
 may differ by at most 4 units in the last place; integers must match exactly.
 
@@ -179,9 +266,11 @@ void stage(VuState &vu). No main(), no other files.
 """
 
 
-def stage_code(ranges, hints):
-    """The stage's disassembly with the replayer's hints on the lines where they matter."""
-    img = open(IMAGE, 'rb').read()
+def stage_code(ranges, hints, image=IMAGE):
+    """The stage's disassembly with the replayer's hints on the lines where they matter. P9's LOI constants are
+    shown with their exact bits (vudis rounds them: 0.333333 is 0x3eaaaaab); P6's prompts stay as they were."""
+    img = open(image, 'rb').read()
+    exact_loi = image != IMAGE
     q, mac, clip, vib = {}, {}, {}, {}
     for line in open(hints):
         f = line.split()
@@ -221,6 +310,10 @@ def stage_code(ranges, hints):
                 notes.append('delay slot of the branch above: executes before the jump, also when it is taken')
             if lower.startswith('LOI') and upper and re.search(r'\b[A-Z]+A?i\.', upper):
                 notes.append('same pair: the upper reads the I loaded before this LOI')
+            if exact_loi and lower.startswith('LOI'):
+                bits = struct.unpack_from('<I', img, pc)[0]
+                line = line.replace(lower, 'LOI 0x%08x (%.9g as float)' % (bits, struct.unpack('<f', struct.pack('<I', bits))[0]))
+                line = re.sub(r'\s+I\s*$', '', line)
             out.append(line.rstrip() + ('   [' + '; '.join(notes) + ']' if notes else ''))
             prev_lower = lower
     return '\n'.join(out)
@@ -253,16 +346,18 @@ def same_pair(upper, lower):
     return '; '.join(notes)
 
 
-def build_judge(cpp, exe):
+def build_judge(cpp, exe, r=False):
     if os.name == 'nt':
         # the PC (inside the MSVC developer environment, tools/windows/qwen-night.ps1): build.sh's flags in
         # MSVC terms (no FMA contraction: /fp:precise; AddressSanitizer)
         obj = os.path.dirname(exe)
-        cmd = ['cl', '/nologo', '/std:c++17', '/EHsc', '/O1', '/Zi', '/fp:precise', '/fsanitize=address', '/I', HERE,
+        cmd = ['cl', '/nologo', '/std:c++17', '/EHsc', '/O1', '/Zi', '/fp:precise', '/fsanitize=address', '/I', HERE] + \
+              (['/DVU_TASK_R=1'] if r else []) + [
                '/Fo' + obj + os.sep, '/Fd' + os.path.join(obj, 'judge.pdb'), os.path.join(HERE, 'judge.cpp'), cpp, '/Fe' + exe]
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=obj)
     else:
-        r = subprocess.run(['bash', os.path.join(HERE, 'build.sh'), cpp, exe], capture_output=True, text=True)
+        r = subprocess.run(['bash', os.path.join(HERE, 'build.sh'), cpp, exe], capture_output=True, text=True,
+                           env=dict(os.environ, VU_TASK_R='1' if r else '0'))
     return r.returncode == 0 and os.path.exists(exe), (r.stdout + r.stderr)
 
 
@@ -270,11 +365,11 @@ def judge(stage, cpp, out_dir):
     exe = os.path.join(out_dir, 'judge_bin' + ('.exe' if os.name == 'nt' else ''))
     if os.path.exists(exe):
         os.remove(exe)
-    ok, log = build_judge(cpp, exe)
+    ok, log = build_judge(cpp, exe, prog(stage)['r'])
     if not ok:
         errs = [l for l in log.splitlines() if 'error' in l][:15]
         return False, 'Your file did not compile:\n' + '\n'.join(errs or log.splitlines()[-15:])
-    r = subprocess.run([exe, os.path.join(WORK, stage[3:] + '.cases')], capture_output=True, text=True, timeout=1200)
+    r = subprocess.run([exe, os.path.join(WORK, case_base(stage) + '.cases')], capture_output=True, text=True, timeout=1200)
     text = (r.stdout + r.stderr).strip()
     if r.returncode == 3 or (r.returncode not in (0, 1) and 'AddressSanitizer' not in text):
         text = 'Your code did not finish (an endless loop, or it crashed); judge exit %d.\n%s' % (r.returncode, text[-3000:])
@@ -295,57 +390,72 @@ def passed_port(name):
 def example_for(name):
     """The example stage: the nearest earlier stage that passed (the same loop's code is the closest
     pattern: 22 Oct), else the hand-ported setup stage."""
-    names = list(STAGES)
+    names = list(prog(name)['stages'])
     for k in range(names.index(name) - 1, -1, -1):
-        if passed_port(names[k]) and os.path.exists(os.path.join(WORK, names[k][3:] + '.hints')):
+        if passed_port(names[k]) and os.path.exists(os.path.join(WORK, case_base(names[k]) + '.hints')):
             return names[k]
-    return 'p6_setup'
+    first = prog(name)['first']
+    return first if first != name and passed_port(first) else 'p6_setup'
 
 
 def spec(name):
-    st = STAGES[name]
+    st = ALL_STAGES[name]
+    p = prog(name)
     ex_name = example_for(name)
-    ex = STAGES[ex_name]
-    hints = os.path.join(WORK, name[3:] + '.hints')
-    cases = os.path.join(WORK, name[3:] + '.cases')
+    ex = ALL_STAGES[ex_name]
+    hints = os.path.join(WORK, case_base(name) + '.hints')
+    cases = os.path.join(WORK, case_base(name) + '.cases')
     n = 0
     with open(cases, 'rb') as f:
         data = f.read()
     n = data.count(b'CASE')  # approximate (magic per case)
     exit_notes = ''
-    if any(e in (0x7e8, 0x1ae8) for e in st['exits']):
+    if name.startswith('p6_') and any(e in (0x7e8, 0x1ae8) for e in st['exits']):
         exit_notes = ('0x%x starts the calls into the polygon clipper: the recorded scenes never reach it; if your code '
                       'does, stop before it.' % [e for e in st['exits'] if e in (0x7e8, 0x1ae8)][0])
-    if st['exits'] in ([0x7d8], [0x1ad8]):
+    if name.startswith('p6_') and st['exits'] in ([0x7d8], [0x1ad8]):
         exit_notes = ('A subroutine: the caller\'s BAL set vi15; the JR vi15 at its end (after its delay slot) returns to '
                       '0x%x, so set vu.pc = vu.vi[15] * 8.' % st['exits'][0])
     slots = [e for e in st['exits'] if any(lo <= e - 8 <= hi for lo, hi in st['ranges']) and
-             re.search(r'\b(B|BAL|IBEQ|IBNE|IBLTZ|IBGTZ|IBLEZ|IBGEZ) ', disasm(open(IMAGE, 'rb').read()[e - 8:e], e - 8)[0][41:])]
+             re.search(r'\b(B|BAL|IBEQ|IBNE|IBLTZ|IBGTZ|IBLEZ|IBGEZ) ', disasm(open(p['image'], 'rb').read()[e - 8:e], e - 8)[0][41:])]
     for e in slots:
         exit_notes += (' Exit 0x%x is also the delay slot of the branch at 0x%x: if that branch is taken, execute 0x%x and '
                        'then continue at the target; if it is not taken, stop before 0x%x (vu.pc = 0x%x; the next stage '
                        'executes it).' % (e, e - 8, e, e, e))
-    if 0xffffffff in st['exits']:
+    if st['exits'] == [0xffffffff]:
         exit_notes = 'The stage ends with the program end (the pair marked E and its delay slot): set vu.pc = 0xffffffff.'
+    elif 0xffffffff in st['exits']:
+        exit_notes += (' If it reaches the program end (the pair marked E, then its delay slot), set vu.pc = 0xffffffff '
+                       'and return.')
+    if name.startswith('p9_'):
+        code_text = stage_code(st['ranges'], hints, p['image'])
+        if re.search(r'\bJR vi\d+', code_text):
+            exit_notes += (' JR viN returns from a subroutine: after its delay slot set vu.pc = vu.vi[N] * 8 (one of the '
+                           'exits above, the caller\'s next pair) and return.')
+        if re.search(r'\bBAL vi\d+', code_text):
+            exit_notes += (' BAL viT, target calls a subroutine that another stage translates: set vi[T] = (address of the '
+                           'pair after the delay slot) / 8, execute the delay slot, then set vu.pc = target and return.')
     return TASK.format(
-        cases=n, header=open(os.path.join(HERE, 'vu_task.h')).read(), primer=PRIMER, name=name, entry=st['entry'],
+        what=p['what'], scenes=p['scenes'],
+        cases=n, header=header_for(p), primer=PRIMER + (PRIMER_R if p['r'] else ''), name=name, entry=st['entry'],
         exits=', '.join('0x%x' % e if e != 0xffffffff else 'the program end' for e in st['exits']), exit_notes=exit_notes,
-        code=stage_code([(lo, hi + 8 if hi + 8 in slots else hi) for lo, hi in st['ranges']], hints),
-        example_code=stage_code(ex['ranges'], os.path.join(WORK, ex_name[3:] + '.hints')),
+        code=stage_code([(lo, hi + 8 if hi + 8 in slots else hi) for lo, hi in st['ranges']], hints, p['image']),
+        example_code=stage_code(ex['ranges'], os.path.join(WORK, case_base(ex_name) + '.hints'), prog(ex_name)['image']),
         example_cpp=open(passed_port(ex_name)).read())
 
 
-def chain():
+def chain(program='p6'):
     """One program from the stages' passing ports: each file inside its own namespace (helpers may share
-    names), a dispatcher on vu.pc. Judged on whole runs (entry 0, exit the program end)."""
-    out = os.path.join(ROOT, 'game', 'analysis', 'qwen', 'vu1_p6_whole')
+    names), a dispatcher on vu.pc. Judged on whole runs (P6: entry 0; P9: the MSCALF run from 0x340 and the
+    MSCNT run from 0x390; to the program end)."""
+    out = os.path.join(ROOT, 'game', 'analysis', 'qwen', 'vu1_%s_whole' % program)
     os.makedirs(out, exist_ok=True)
     src = ['// generated by tools/vu1port/port.py --chain',
            '#include "vu_task.h"'] + ['#include <%s>' % h for h in (
            'algorithm', 'array', 'cfloat', 'climits', 'cmath', 'cstddef', 'cstdint', 'cstdio', 'cstdlib', 'cstring',
            'limits', 'type_traits', 'utility', 'vector')]
     table = []
-    for name, st in STAGES.items():
+    for name, st in PROGRAMS[program]['stages'].items():
         best = passed_port(name)
         if not best:
             print('%s: no passing port yet' % name)
@@ -356,14 +466,14 @@ def chain():
             '        switch (vu.pc)', '        {'] + table + ['        default: return; // no stage starts here', '        }', '}']
     path = os.path.join(out, 'whole.cpp')
     open(path, 'w').write('\n'.join(src) + '\n')
-    ok, report = judge('p6_whole', path, out)
+    ok, report = judge('%s_whole' % program, path, out)
     print(report)
     return 0 if ok else 1
 
 
 def main(argv):
     if argv[0] == '--chain':
-        return chain()
+        return chain(argv[1] if len(argv) > 1 else 'p6')
     name = argv[0]
     opt = lambda k, v: argv[argv.index(k) + 1] if k in argv else v
     # --rounds N: N more rounds on top of those already on disk (until 23 Oct it was the round number to

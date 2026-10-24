@@ -100,6 +100,10 @@ def lower(w, pc):
             return '%s vi%d' % (name, it)
         if name == 'MFP':
             return 'MFP.%s vf%d, P' % (d, ft)
+        if name in ('RINIT', 'RXOR'):
+            return '%s R, vf%d%s' % (name, fs, BC[fsf])
+        if name in ('RGET', 'RNEXT'):
+            return '%s.%s vf%d, R' % (name, d, ft)
         if name.startswith('E') or name == 'WAITQ' or name == 'WAITP':
             return '%s P, vf%d' % (name, fs) if name.startswith('E') else name
         return '%s vf%d, vf%d' % (name, ft, fs)

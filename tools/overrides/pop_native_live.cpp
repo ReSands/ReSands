@@ -78,6 +78,12 @@ namespace vu1_impl
 
     inline thread_local Vu1PacketSink *packetSink = nullptr;
 }
+namespace pop_native_live
+{
+    // offline only (pop_state_frame_vu1 POP_P9_TRACE, tools/native/src/p9trace.cpp): runs a sprite VU run itself and
+    // records it in the runtime's PS2X_VU1_TRACE format, the cases of the P9 port (tools/vu1port); null in the game
+    void (*g_spriteRunHook)(VU1Interpreter &vu, uint8_t *code, uint8_t *data, GS &gs, int32_t pc, uint32_t tops) = nullptr;
+}
 #else
 #define POP_SPRITE_VU1 0
 #endif
@@ -1691,7 +1697,9 @@ namespace pop_native_live
             GS &gs = *reinterpret_cast<GS *>(g_spriteGsStandIn);
             const unsigned csr = _mm_getcsr();
             _mm_setcsr(csr | 0x6000u); // round toward zero, as the runtime runs VU code
-            if (pc >= 0)
+            if (g_spriteRunHook)
+                g_spriteRunHook(*s.vu, s.code.data(), s.data.data(), gs, pc, s.tops);
+            else if (pc >= 0)
                 s.vu->execute(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, uint32_t(pc), s.tops, 0, 1u << 20);
             else
                 s.vu->resume(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, s.tops, 0, 1u << 20);

@@ -87,7 +87,7 @@ endif()
 # sprite path (VU1 program P9 on the interpreter, POP_SPRITE_VU1) runs offline too. The interpreter uses x86
 # intrinsics: on the Mac this target is built for x86_64 (runs under Rosetta).
 if(POP_SOTC_SRC AND POP_RUNTIME_SRC)
-  add_executable(pop_state_frame_vu1 src/state_frame.cpp ${POP_SOTC_SRC}/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp)
+  add_executable(pop_state_frame_vu1 src/state_frame.cpp src/p9trace.cpp) # p9trace.cpp includes the VU1 core
   set_target_properties(pop_state_frame_vu1 PROPERTIES CXX_STANDARD 20)
   target_include_directories(pop_state_frame_vu1 PRIVATE src ${POP_SOTC_SRC}/ps2xRuntime/include ${POP_SOTC_SRC}/ps2xRuntime/src/lib/Kernel
                              ${POP_SOTC_SRC}/ps2xIOP/include ${POP_SOTC_SRC}/ps2xRuntime/src/lib/vu ${POP_SOTC_SRC}/ps2xRuntime/src/lib
