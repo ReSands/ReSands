@@ -395,6 +395,54 @@ namespace pop_native_live
         // +0x1C = the render state flags (blend kind in bits 16-19, 0x10 alpha test, 0x200 no depth
         // write; decoded by pop_native::materialFromGsFlags as SetBlending 0x4B2500 does), +0x10 = its
         // +0x28 (AREF in the top byte); 16 Oct.
+        // Texture index -> bigfile key from the engine's own texture list (TEX_List: count 0x6CBC50, entries at
+        // *0x6CBC58, 16 bytes: key, ..., +10 u16 index), as pop_state_frame reads it, read at draw time. The table
+        // PS2_Texture_Load fills (popTextureKey) went stale for textures loaded mid-level: enemies drawn with
+        // another texture (24 Oct, saves1024b). Positions are cached and re-checked on use; popTextureKey is the
+        // fallback for an index the list does not hold.
+        struct TexListStats
+        {
+            uint64_t lookups = 0, rebuilt = 0, differ = 0, fallback = 0;
+        } g_texListStats;
+        uint32_t textureKey(uint8_t *rdram, uint32_t index)
+        {
+            static std::unordered_map<uint32_t, uint32_t> position; // index -> entry number
+            static uint32_t cachedList = 0, cachedCount = 0;
+            ++g_texListStats.lookups;
+            const uint32_t count = guestAny(rdram, 0x006CBC50u), list = guestAny(rdram, 0x006CBC58u);
+            const auto entryOk = [&](uint32_t pos) { return pos < count && guest16(rdram, list + 16 * pos + 10) == index; };
+            auto it = position.find(index);
+            if (list != cachedList || count != cachedCount || it == position.end() || !entryOk(it->second))
+            {
+                position.clear();
+                cachedList = list;
+                cachedCount = count;
+                ++g_texListStats.rebuilt;
+                if (list && count < 8192)
+                    for (uint32_t i = 0; i < count; ++i)
+                        position[guest16(rdram, list + 16 * i + 10)] = i;
+                it = position.find(index);
+            }
+            const uint32_t registered = popTextureKey(index);
+            if (it == position.end() || !entryOk(it->second) || !guestAny(rdram, list + 16 * it->second))
+            {
+                ++g_texListStats.fallback;
+                return registered;
+            }
+            const uint32_t key = guestAny(rdram, list + 16 * it->second);
+            if (registered && registered != key)
+            {
+                static int logged = 0;
+                if (g_texListStats.differ++ < 1 || logged < 16)
+                {
+                    ++logged;
+                    std::fprintf(stderr, "[pop:native] texture index %u: TEX_List key %08x, PS2_Texture_Load registered %08x (using the list's)\n",
+                                 index, key, registered);
+                }
+            }
+            return key;
+        }
+
         DrawMaterial currentMaterial(uint8_t *rdram)
         {
             DrawMaterial dm;
@@ -403,7 +451,7 @@ namespace pop_native_live
             if (!sub)
                 return dm;
             // word 0: texture index in the low bits, flags in the top byte (0x88/0xB8/0xC0/0xF8.. seen)
-            dm.textureKey = popTextureKey(guestAny(rdram, sub) & 0xFFFFu);
+            dm.textureKey = textureKey(rdram, guestAny(rdram, sub) & 0xFFFFu);
             static int logged = 0;
             if (!dm.textureKey && logged++ < 16)
             {
@@ -1485,7 +1533,7 @@ namespace pop_native_live
                 for (uint32_t k = 0, n = guest8(rdram, entry + 0xC); sub && k < n; ++k)
                     sub = guestAny(rdram, sub + 0x20);
                 g_frameGfx.push_back({guest8(rdram, entry + 6), guestAny(rdram, entry) << 4,
-                                      sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u, g_currentList});
+                                      sub ? textureKey(rdram, guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u, g_currentList});
             }
             g_origGfx(rdram, ctx, runtime);
         }
@@ -2009,7 +2057,7 @@ namespace pop_native_live
             if (g_frameCapturing)
             {
                 const uint32_t sub = guestAny(rdram, 0x70000034u);
-                g_frameOther.push_back({N, sub ? popTextureKey(guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
+                g_frameOther.push_back({N, sub ? textureKey(rdram, guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
                                         getRegU32(ctx, 4), g_currentList});
 #if POP_SPRITE_VU1
                 if (N == 1 && spriteRecord(rdram, ctx))
@@ -2419,7 +2467,7 @@ namespace pop_native_live
                     // flags at 0x70000000 (blend kind 3 with 0x80: GS ALPHA 0x46 = Cd * (1 - As), no
                     // depth write). The pass-3 packet (element +0x2C) uploads V3-16 lightmap UVs (ITOF15,
                     // 1/32768) and V3-32 positions, no colours: the lightmap's alpha darkens the scene.
-                    const uint32_t key = popTextureKey(guestAny(rdram, 0x70000008u) & 0xFFFFu);
+                    const uint32_t key = textureKey(rdram, guestAny(rdram, 0x70000008u) & 0xFFFFu);
                     g_frameLightmap[(uint64_t(element) << 16) | index] = key;
                     const uint32_t packet = guest32(rdram, element + 0x2C) & ~0xFu;
                     auto &batches = g_fromPacket[(uint64_t(element) << 8) | 3];
