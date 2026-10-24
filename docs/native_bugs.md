@@ -141,6 +141,14 @@ until the crash): 33-43 ms, the same reason throughout. N6's capture (200200): l
    interpreter work is thrown away and the GS runs the same draw again. Fix: check `g_world && g_worldLate &&
    worldStateOk` (purity) first, interpret only then. Then profile 202314 to see what the rest is.
 
+**Second session (20:36, log `play_20261024_203615.log`, saves in `game/analysis/saves1024f/`):** the N11 wall
+drew fine at 20:41 (user), which fits A: a fresh process has a different memory history. Save 205204 (user: 30 fps
+again) is a **different case**: the frame stayed native (late native 75, GS 4), the scene was constant (1,229 draws,
+Prince + Farah) but the frame time climbed 21 -> 34 ms across the capture and the log's fps ends at a flat 33 (one
+vsync missed each frame: the frame costs just over 16.7 ms). The 60 fps word (0x66D044) is still 1 in every save.
+Kept meshes reached generation 11 (11 over-budget drops in 16 minutes). Cause unknown: needs a profile at that spot
+(a `-Profile` session, or a save-state boot once conversion after a load exists).
+
 **Not bugs of ours / not triaged:** 201751 = camera X in a fixed view (known, `docs/saves_1021.md`); 202314 =
 crash 1 (fix 3b80b66 built after this session). 201039 = curtain corridor, offline and live agree. 201244 / 201248 =
 torches with halos (game picture only; the halos are not in the offline frame).
