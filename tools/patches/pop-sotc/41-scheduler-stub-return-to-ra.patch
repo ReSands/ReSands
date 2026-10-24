@@ -1,0 +1,45 @@
+From e9c2172c2329a722eb7aa9ad463c084e6ead09f7 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sat, 24 Oct 2026 19:06:01 +0100
+Subject: [PATCH] scheduler: a host function resumed by the scheduler that
+ leaves pc returns to $ra
+
+Stubs and game overrides return without touching pc to mean "return to the caller";
+dispatchGuestBranch turns that into the fallthrough, but when the checkpoint fires at the
+JAL the call is resumed from EeScheduler::run, which dispatched the same pc again forever
+(PoP hang 24 Oct: main thread at pc 0x4C7B40, a skipped draw hook, 100% CPU in run()).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012ykdxyr2QmZs4nHkERuTzq
+---
+ ps2xRuntime/src/lib/Kernel/EeScheduler.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index a2c7a25..3ce0e16 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -402,7 +402,20 @@ void EeScheduler::run()
+             m_guestExecuting.store(true, std::memory_order_release);
+             m_unwinding = false;
+             loadSharedVu0Random(context);
++            const uint32_t dispatchedPc = context.pc;
++            const int dispatchedThread = m_currentThreadId;
++            const size_t dispatchedInvocations = running->invocations.size();
+             function(m_rdram, &context, &m_runtime);
++            // A host function (runtime stub or game override) that returns without touching pc means
++            // "return to the caller": dispatchGuestBranch turns that into the fallthrough for direct calls,
++            // but a call resumed here (the checkpoint fired at its JAL) kept pc at its own entry and was
++            // dispatched again forever. Generated code always sets pc before a normal return, and a checkpoint
++            // inside it sets m_unwinding, so only the stub case is caught.
++            if (!m_unwinding && !m_transferPending && m_currentThreadId == dispatchedThread &&
++                running->invocations.size() == dispatchedInvocations && context.pc == dispatchedPc)
++            {
++                context.pc = getRegU32(&context, 31);
++            }
+             saveSharedVu0Random(context);
+             m_guestExecuting.store(false, std::memory_order_release);
+             m_insideInterrupt = false;
+-- 
+2.54.0 (Apple Git-157)
+
