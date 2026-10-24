@@ -91,11 +91,65 @@ injected, 0 missed, 0 unexpected buffers), so not a missed injection; a stale-ca
 Seen once, for a moment. Hypothesis: a stale injected world picture from an earlier camera (as N3), or a real game
 camera cut. Capture key needed.
 
-## Reported 24 Oct 20:08-20:24 (play session from 19:52, log `play_20261024_195257.log.stderr`), not triaged yet
+## Triage of the 20:08-20:24 reports (24 Oct evening, offline)
+
+Saves, captures and the session log (`play_20261024_195257.log`, in `game\recomp-sotc\` on the PC) copied to
+`game/analysis/saves1024e/`; `score/` = `tools/native/score_saves.sh` (offline native vs the game's picture, `.side.png`),
+`gv/`, `gv30/` = glitchview output, `sheets/` = 5x4 contact sheets of a capture (every 30th frame, ffmpeg tile).
+The session ran **before** the N5 fix (30ef5d5 was built at 20:45). Three groups:
+
+**A. N8, N9, N11: the live path draws an element wrong that offline draws right (stale per-address caches, hypothesis).**
+- N8 (200833): offline has the back wall in shadow; live shows a flat bright panel behind the Prince.
+- N9 (**201124**, not 201024-201039: those show the Prince kicking a *different* wooden door to splinters, drawn
+  right): offline draws the closed wooden door; the live native picture draws it almost fully see-through (the room
+  behind shows; faint door texture in the capture frames).
+- N11 (201642 / 201650): offline draws the tower wall; live draws only its features (arrow slit, window frame) on
+  the background.
+Not texture keys: the session's 16 `texture index 132` warnings are all early (log lines 354-369) and offline reads
+TEX_List the same way. What only the live path has: caches keyed by **element object address** that ReadElement does
+not reset. `readElement` replaces `g_elements[element]` (and the world keys static meshes by its serial, so those are
+fresh), but `g_fromPacket` ((element << 8) | pass: lightmap pass-3 batches, packet-decoded passes), `g_litBatches`
+(lit passes), `g_skinned` and `g_skipped` are never invalidated. When a level section streams in and reuses the memory
+of an unloaded one, a new element gets its base mesh right but its lightmap / lit pass / pass-2 layer / skinned-or-
+skipped status from the old object at that address. Offline runs a fresh process per save, so it never sees this.
+All three bugs are in areas just entered. Fix (planned): in `readElement` erase every per-address cache entry for the
+element (g_skinned, g_skipped, g_fromPacket and g_litBatches for passes 0-7). Check: needs live conversion after a
+save-state load, or a play session through the same spots (201124's door: just after the staircase climb).
+
+**B. N10 (torch saturation with the camera) + save-point glow pop (handoff item 4): the halo is a depth query.**
+The halo pass (FUN_004AA240, per halo from FUN_004ABFC0; prototype AE_ProcessOneHalo) calls FUN_004AB500
+(ProcessLensFlare): it clears the frame alpha in the light's core rectangle, draws the rectangle at the **light's own
+depth** with TEST ZTST GEQUAL (0x50000), writing alpha only where the light is in front of the scene's Z, then
+halves that rectangle repeatedly (bilinear) to one averaged value spread over the halo area. The halo is drawn with
+ALPHA 0x58 = Cs * Ad + Cd, so its brightness is the fraction of the core not hidden by the Z buffer. Our native
+world writes that Z buffer: ~27% of its pixels differ slightly from the VU1's Z, plus POP_NATIVE_WORLD_ZBIAS = 128
+pushes all of it back (more halo passes the test). A light set into a sconce or wall sits within those differences,
+and the outcome changes with the view angle. N2's capture is separate (the game's own fog table). Test (in game,
+one torch, one save point): default vs `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld`. Likely fix: halos query
+the GS-equivalent depth (unbiased native Z; or run the occlusion test natively from the light's position).
+
+**C. N12 (sustained ~30 fps, 20:20-20:24) and N6: the frame falls back to the GS and the fallback costs double.**
+Capture 202128: 16.7 ms per frame until frame ~360, then 27-33 ms from exactly the frame whose record changes to
+`purity ended by shadow +0x5c, late native 0 GS 29-34` (draws 838 -> 1,138: enemies appearing); 202314 (the fight,
+until the crash): 33-43 ms, the same reason throughout. N6's capture (200200): late lists on the GS all along
+(`purity ended by ref +0x2c`), 18-19 ms. Two costs:
+1. A shadow projector goes back to the GS when a receiver has no record: the log's `list entries without records`
+   rises 6,559 -> 9,054 over the slow stretch (the enemies; known gaps: CJIdxMesh entries, blob receivers). Once the
+   shadow is on the GS, every later list (+0x88/+0x98/+0xA8, particles, sprites) is too.
+2. `spriteRecord` runs the P9 VU1 interpreter on every sprite draw **before** checking whether the frame can still
+   be native: in the slow stretch `quads` rose by ~350-390k per log interval while `native` stayed at 45,316. The
+   interpreter work is thrown away and the GS runs the same draw again. Fix: check `g_world && g_worldLate &&
+   worldStateOk` (purity) first, interpret only then. Then profile 202314 to see what the rest is.
+
+**Not bugs of ours / not triaged:** 201751 = camera X in a fixed view (known, `docs/saves_1021.md`); 202314 =
+crash 1 (fix 3b80b66 built after this session). 201039 = curtain corridor, offline and live agree. 201244 / 201248 =
+torches with halos (game picture only; the halos are not in the offline frame).
+
+## Reported 24 Oct 20:08-20:24 (play session from 19:52, log `play_20261024_195257.log` in `game\recomp-sotc\`), triaged above
 
 Saves on the PC in `game\ps2\disc\states\` (each with `.glitch` + `.glitch.txt`; fetch to `game/analysis/`):
 - **N8 wall hue (20:08, save 200833):** a section of wall with a different hue from the rest of the wall.
-- **N9 wooden door fully transparent (20:11, saves 201024 / 201029 / 201039).**
+- **N9 wooden door fully transparent (20:11; the save that shows it is 201124, see the triage).**
 - **N10 torch saturation changes as the camera turns (20:15, saves ~2014xx-2015xx).** User asks whether it shares a
   source with N2 (fog) and the save-point glow (CLAUDE.md handoff item 4). Hypothesis: the GS halo/glow pass
   (FUN_004ABFC0) tests visibility against the depth buffer, which now partly comes from the native world.
