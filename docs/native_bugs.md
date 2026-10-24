@@ -26,6 +26,20 @@ colour, a light-set override or a second pass). Needs a save taken while an enem
 seconds, so a quick-save can hold it; a save-state boot then shows it in `popstate.py --frame`). Priority: highest
 of these (gameplay cue).
 
+Second report (save 200418, 20:04, glitch capture too): the game picture shows the enemies pale grey. Offline
+the save has empty draw lists (0 draws: saved after the game cleared them), so it cannot be judged offline. Next:
+find the code that applies the freeze (dagger "slow" on an enemy) and what it changes per draw.
+
+## N6: sustained frame-rate drop (save 200200, 20:02)
+
+Glitch capture: 60 fps for 3 s, then 51-54 fps steadily (median frame 18.4 ms) while the frame's native draws rise
+from ~1,050 to ~1,450. A heavier scene, not a hitch. Needs a `play.ps1 -Profile` session at that spot.
+
+## N7: flash when the Prince raises the dagger after gathering sand (saves 195613 / 195733)
+
+The glitch captures show nothing unusual in the native world picture (no flagged frames), so the flash is drawn by
+the GS (an effect over the world); possibly the original effect. Check in an emulated session or PCSX2.
+
 ## N2: fog intensity blips when the camera turns (24 Oct)
 
 Area fog jumps between intensities while rotating the camera. Saves 192947 / 193004 (`game/analysis/saves1024c/`)
