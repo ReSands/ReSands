@@ -90,3 +90,24 @@ injected, 0 missed, 0 unexpected buffers), so not a missed injection; a stale-ca
 
 Seen once, for a moment. Hypothesis: a stale injected world picture from an earlier camera (as N3), or a real game
 camera cut. Capture key needed.
+
+## Reported 24 Oct 20:08-20:24 (play session from 19:52, log `play_20261024_195257.log.stderr`), not triaged yet
+
+Saves on the PC in `game\ps2\disc\states\` (each with `.glitch` + `.glitch.txt`; fetch to `game/analysis/`):
+- **N8 wall hue (20:08, save 200833):** a section of wall with a different hue from the rest of the wall.
+- **N9 wooden door fully transparent (20:11, saves 201024 / 201029 / 201039).**
+- **N10 torch saturation changes as the camera turns (20:15, saves ~2014xx-2015xx).** User asks whether it shares a
+  source with N2 (fog) and the save-point glow (CLAUDE.md handoff item 4). Hypothesis: the GS halo/glow pass
+  (FUN_004ABFC0) tests visibility against the depth buffer, which now partly comes from the native world.
+- **N11 wall features drawn but the wall itself missing (20:16, dungeon, save ~201642 / 201650).**
+- **Camera X inverted again in a fixed-camera view (20:18, save ~201751):** the known bug in `docs/saves_1021.md`.
+- **N12 frame rate down to 30 fps (20:21, save ~202014 / 202128).**
+- **Crash 20:24 (save 202314, the minute before):** crash 1 again; fix built (`docs/saves_1021.md`).
+The exact save-to-report mapping above is by time (user's minutes vs save names); check each picture.
+
+## Storage of captures (agreed with the user 24 Oct)
+
+`.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after
+triage, note the finding here and delete the capture once its bug is fixed and checked (or it showed nothing).
+Planned: compress the capture pictures in the background thread when written (next rebuild).
+

@@ -130,6 +130,13 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
      smooth without the native world = its depth fools the halo's visibility test).
   5. **Fight fps:** profile save 184926 (`tools/windows/profile-states.ps1`, or ask for a `-Profile` session);
      the late lists add work per frame (worker 4.4 ms/frame in the earlier log).
+- **HANDOFF 2 (24 Oct ~20:45; start here).** Built on the PC and in the game now (user check pending): the black
+  one-frame flashes fix (N5, 30ef5d5: kept meshes dropped between generations) and the **crash 1 fix** (3b80b66:
+  entry at 0x172844; `docs/saves_1021.md`). Patches 41 + 42 checked in play (no hang since). Next, in order:
+  (1) triage the saves of 20:08-20:24 (`docs/native_bugs.md` "Reported 24 Oct 20:08-20:24": wall hue, transparent
+  door, torch saturation vs camera, wall missing behind its features, 30 fps drop) with `tools/glitchview.py` and
+  `tools/native/score_saves.sh`; (2) compress `.glitch` pictures + delete triaged captures (same doc, "Storage");
+  (3) native conversion after a save-state load. The user plays meanwhile; ask before a rebuild (exe locked).
 - **Native bug list + tooling plan (24 Oct ~20:00): `docs/native_bugs.md`.** N1 slowed enemies not sandy brown
   (highest), N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat. User: fix at milestones,
   not now. **Next: build the glitch capture key, then native conversion after a save-state load** (so I can boot
