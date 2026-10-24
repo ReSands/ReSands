@@ -97,12 +97,15 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   `tools/windows/oct24.ps1` ports the 9 left** (shortcut "Qwen overnight (then shuts down)" retargeted). Details:
   `docs/llm_jobs.md` "24 Oct morning". Details: `docs/llm_jobs.md` "Post-mortem (23 Oct lunch)". The translucents +
   particles work (above) waits until after this.
-- **Water (P6) VU1 port, Qwen overnight from 22 Oct:** the 11 failing stages were split into 19 pieces of 9-20 pairs
-  (+ the two clip checks); the night job `tools/windows/oct22.ps1` runs on the PC alone (judge built with MSVC,
-  llama-server via the LlamaServe task), two passes of 6 rounds, `--chain` if all pass, then shuts the PC down.
-  The user starts it from the PC desktop shortcut "Qwen overnight (then shuts down)"; log `game\jobs\qwen-night.log`,
-  results `game\analysis\qwen\vu1_p6_*` (PASS files). Morning: read the log, re-run what failed (or hand-port it).
-  Details: `docs/llm_jobs.md` "VU1 water program P6" (22 Oct note). Needed for 0.13.
+- **Water (P6) VU1 port (needed for 0.13):** the VU1 water program to C++ in stages, each judged against the
+  runtime's VU1 interpreter on recorded cases (`tools/vu1port/port.py`; passing ports in `game\analysis\qwen\vu1_p6_*\best.cpp`
+  (PASS file) or `tools/vu1port/known_good/`). **Night 24-25 Oct: `tools/windows/oct24.ps1`** (PC desktop shortcut
+  "Qwen overnight (then shuts down)", retargeted 24 Oct), the 9 clip-check pieces left (a_ck_head/loop/cull/sub,
+  b_ck_head/loop/next/cull/sub), passes of 6 rounds until 07:30, `--chain` (whole program, 600 runs) if all pass, then
+  shuts the PC down. Estimate (24 Oct): head/next 1-3 rounds, loop/cull 2-6, the two sub pieces (MAC flags via FMAND)
+  the likeliest to fail. **Morning:** wake the PC, read `game\jobs\qwen-night.log` and the stages' `port.log` /
+  `attempts\roundNN.report.txt`; hand-port whatever still fails (the sub pieces are 28 small pairs); if `--chain` ran,
+  check its result. Details: `docs/llm_jobs.md` "VU1 water program P6" and "24 Oct morning".
 - **Qwen candidates for later nights:** standalone tested decoders (`livePacketBatches`, `skinnedFromPacket`, particle
   quads; judged against the Python decoders on DMA captures) and the character VU1 program (above). User rule: Qwen
   work is overnight only; daytime is Claude + user. GPU skinning only if the profiler asks.

@@ -168,3 +168,8 @@ mode boots the game check for an active display first, so a mistake like this ca
   offline viewer drawing a newer frame format opaque-first while the game window drew in game order. Every input the
   draw had (texture, UV matrix, vertex alpha, GS state) matched the game's DMA chain; the order of the draws did not. When
   a difference only shows offline, diff the offline path's settings against the in-game path first.
+- **When a local model fails the same few cases the same way for many rounds, patch its attempt by hand and judge
+  it before giving it more rounds** (24 Oct, P6 water port). Four stages stuck at "expected 0, got small integer
+  bits" for ~60 rounds over two nights were one rule missing from the spec (the VU reads denormals as zero; these
+  lanes held colour bytes). Retries cannot fix a spec gap; one judged patch found it in minutes. Also: read the
+  reference implementation's float handling (here `ps2_vu1_impl.inl`'s `vnorm`) before writing a spec for it.
