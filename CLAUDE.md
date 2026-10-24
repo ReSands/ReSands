@@ -171,7 +171,8 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 - **Bugs written up, not fixed (user: later), `docs/saves_1021.md`:** camera X reversed in fixed-camera views
   (low priority); a door flickering with a black web (GS output too); **two freezes in combat**: crash 1 = the
   scheduler resuming at return address 0x172844 that has no entry (Ghidra split FUN_00172800's epilogue off at
-  the delay slot of a `jal`; its save was lost), crash 2 = cause unknown, save kept
+  the delay slot of a `jal`; seen again 24 Oct 20:24; **fix built 24 Oct, 3b80b66: entry registered by the
+  override, in-game check pending**), crash 2 = cause unknown, save kept
   (`crash_20261021_210951.state`). Both are needed for roadmap 0.1. Also (22 Oct): once, Alt+F4 did not close
   the game (the bias-0 session; force-killed over SSH; its log ends normally at 59.9 fps); cause unknown, the
   user does not want it chased now. Esc now quits (runtime patch 39; `PS2X_ESC_QUITS=0` turns it off).

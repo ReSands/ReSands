@@ -75,6 +75,13 @@ done): correct the function boundary in the Ghidra export (FUN_00172800 to 0x172
 add an entry at every call's return address; then look for other functions split the same way. Survey other
 PS2 recomp projects first (rule). Related: the nightly check's missing target 0x16AA0C in RPS2::UpdateBuffer.
 
+**Seen again 24 Oct 20:24** (same log line, fight; save `play_20261024_202314.state` a minute before, full dump
+`game/analysis/crash1024/crash.dmp` on the PC). **Fix built 24 Oct (3b80b66), in-game check pending:** the override
+registers FUN_00172840 at 0x172844 too (its first instruction, 0x172840, is the jal's delay slot, a nop, so running
+it from there is the resume). A scan of every function in `functions.csv` for a last instruction that is a call:
+this is the only one in the ELF. Not a full fix for the class: the recompiler should add an entry at every call's
+return address even when it lies in the next function (`docs/upstream_ps2recomp.md`).
+
 ## Crash 2 (21 Oct 21:10, during combat)
 Log `play_20261021_1939.log`: fps 49-58 (a fight), then a quick-save at field 320965 with no "kept as" line and
 nothing after it, so again a freeze, but this time **no `missing-target` line** (cause unknown). The save is kept:
