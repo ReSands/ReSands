@@ -1774,7 +1774,8 @@ namespace pop_native_live
         bool spriteRecord(uint8_t *rdram, R5900Context *ctx)
         {
             SpriteVu &s = g_spriteVu;
-            if (s.broken || getRegU32(ctx, 6) == 0)
+            static const bool off = [] { const char *e = std::getenv("POP_NATIVE_SPRITES"); return e && *e == '0'; }();
+            if (off || s.broken || getRegU32(ctx, 6) == 0)
                 return false; // kind 7: SetParticleEnv and program 4, not read
             if (!s.loaded)
             {
