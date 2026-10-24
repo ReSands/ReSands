@@ -118,7 +118,7 @@ try {
     $pass = 0
     while (((Left $p9).Count -or (Left $p6).Count) -and (Get-Date) -lt $end) {
         $pass++
-        Say "== pass $pass: P9 left $((Left $p9).Count) of $($p9.Count), P6 left $((Left $p6).Count)"
+        Say "== pass ${pass}: P9 left $((Left $p9).Count) of $($p9.Count), P6 left $((Left $p6).Count)"
         foreach ($s in $p9) { Work $s $Rounds9 "P9 pass $pass" }
         Chain 'p9' $p9
         foreach ($s in $p6) { Work $s $Rounds "P6 pass $pass" }
