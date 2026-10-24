@@ -130,6 +130,10 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
      smooth without the native world = its depth fools the halo's visibility test).
   5. **Fight fps:** profile save 184926 (`tools/windows/profile-states.ps1`, or ask for a `-Profile` session);
      the late lists add work per frame (worker 4.4 ms/frame in the earlier log).
+- **Native bug list + tooling plan (24 Oct ~20:00): `docs/native_bugs.md`.** N1 slowed enemies not sandy brown
+  (highest), N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat. User: fix at milestones,
+  not now. **Next: build the glitch capture key, then native conversion after a save-state load** (so I can boot
+  saves with the live path). White-enemy fix 88acfc5 confirmed working (log caught index 163's stale key).
 - **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
   runtime patch 40): frame 1 after a load has no clear sprite, so FRAME at our marker was still the loading screen's
   target = the buffer on screen, and the stale-camera picture was uploaded onto the display. Fix: never inject into
