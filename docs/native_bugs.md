@@ -30,6 +30,13 @@ between native and GS from frame to frame (the purity rule depends on what is on
 for the fog-heavy draws (mist particles, fogged meshes). Test: run with `-NoNativeLate`; if the blip goes, it is
 this. Needs the capture key otherwise.
 
+Second try (saves 194256 / 194309 / 194313, `game/analysis/saves1024d/`): offline native matches the game picture
+in all three (1.14 / 1.54 / 1.26), and the two close saves differ little (far wall luminance 47.0 vs 46.4). The one
+thing that changes between them is the game's own **fog zone 2** (0x70000270 + 2 * 16), recomputed per frame:
+min 24 / 28 / 21, a 292.9 / 286.8 / 298.0, colour 445b78 / 435977 / 465c79; all other zones identical. So the game
+animates that zone with the camera, and the native frame follows it. Open: whether the blip seen in play is this
+(original behaviour; check with `play.ps1 -NoNativeWorld`) or a native/GS switch the saves missed.
+
 ## N3: one-frame flash walking up stairs, as if the environment mesh vanished (24 Oct, not captured)
 
 Hypothesis: a frame whose world picture was not injected or came from a stale camera (the load flash family,
