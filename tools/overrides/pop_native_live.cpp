@@ -209,6 +209,7 @@ namespace pop_native_live
             uint64_t skinGs[3] = {};         // skinned Display calls left to the GS: render state/list, not decoded, texture
             uint64_t litStatic = 0;          // static draws of the lit driver (pass 1/4) left to the GS (see isLitStaticPass)
             uint64_t litNative = 0, envNative = 0; // lit static passes drawn natively: pass 1 lit, pass 2 env map (litDriverPass)
+            uint64_t particles = 0;                // GFX particle draws (FUN_004584C0) drawn natively
         } g_worldStats;
         constexpr uint32_t kWorldMagic = 0x504E5744u; // "PNWD"
         bool worldTextureReady(uint32_t key); // decoded (or decodable) for the frame writer
@@ -282,11 +283,57 @@ namespace pop_native_live
             return f;
         }
 
-        // POP_NATIVE_TRANSLUCENT=1 (23 Oct, being judged): every draw of the lists Display3DElements draws before
+        // POP_NATIVE_LATE=1 (24 Oct, being judged; needs POP_NATIVE_TRANSLUCENT=1): the lists after the shadows too,
+        // +0x88 (with nearly all GFX particles) and +0xA8, but only while the frame is "pure": the picture goes in
+        // where the frame's 3D starts, so every draw left to the GS lands on top of every native one, and a native
+        // late draw keeps the game's order only if no draw before it went to the GS (worldOnGs ends it). Display3DElements:
+        // ... +0x5C, shadows, +0x88, EraseAlphaBuffer, +0x98 (render state 0x44 = alpha only), +0xA8, halos. +0x98
+        // and EraseAlphaBuffer stay on the GS and write only alpha (the glow mask), so they leave the order of the
+        // colours alone; a +0xA8 draw goes native only if it writes neither Z (+0x98 tests against it) nor alpha
+        // (EraseAlphaBuffer would clear it). Census of 203 saves (entries): +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676,
+        // GFX 3,049, sprites 1,128, ref 923, water 76), +0x98 2,526 (mesh/ref), +0xA8 1,189 (all CJIdxMesh); only 37% of
+        // the +0x88 entries come before its first sprite or water draw (both on the GS until 0.13).
+        const bool g_worldLate = [] {
+            const char *e = std::getenv("POP_NATIVE_LATE");
+            return e && *e == '1';
+        }();
+        bool g_worldPure = false; // no draw of this frame has gone to the GS yet (from the marker on)
+        bool lateList(uint32_t list) { return list == 0x88u || list == 0x98u || list == 0xA8u; }
+        struct LateStats
+        {
+            uint64_t frames = 0, pureAtLate = 0, closedInLate = 0; // frames reaching +0x88 pure; purity ended within the late lists
+            uint64_t native = 0, gs = 0;                            // late-list calls (+0x88, +0xA8) drawn natively / on the GS
+            std::map<std::string, uint64_t> closedBy;               // what ended purity first (path and list)
+        } g_lateStats;
+        // a draw call of the open frame goes to the GS: ends the frame's purity (the late lists stay on the GS from now on)
+        void worldOnGs(uint8_t *rdram, const char *path)
+        {
+            if (!g_world || !g_worldOpen)
+                return;
+            if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                ++g_lateStats.gs;
+            if (!g_worldPure)
+                return;
+            if (g_currentList == 0x98u)
+            {
+                // alpha only: harmless unless it writes Z (a later native +0xA8 draw would not be tested against it)
+                const uint32_t sub = guestAny(rdram, 0x70000034u);
+                if (sub && (guestAny(rdram, sub + 4) & 0x200))
+                    return;
+            }
+            g_worldPure = false;
+            if (lateList(g_currentList))
+                ++g_lateStats.closedInLate;
+            char why[48];
+            std::snprintf(why, sizeof why, "%s +0x%x", path, g_currentList);
+            ++g_lateStats.closedBy[why];
+        }
+
+        // POP_NATIVE_TRANSLUCENT=1 (23 Oct): every draw of the lists Display3DElements draws before
         // the shadows (200, +0x2C, +0x3C, +0x68, +0x78, +0x4C; the lightmaps +0x5C are native already), any blend.
         // The picture is an upload that replaces pixels, so only a prefix of the game's order can be native:
-        // the lists after the shadows (+0x88, +0x98, +0xA8, and nearly all GFX particles, in +0x88) wait for
-        // native shadows. Frame alpha needs nothing here: only +0x98 writes it (EraseAlphaBuffer runs before it).
+        // the lists after the shadows wait for POP_NATIVE_LATE (above). Frame alpha needs nothing here: only +0x98
+        // writes it (EraseAlphaBuffer runs before it).
         bool worldStateOk(uint8_t *rdram)
         {
             static const bool translucent = [] {
@@ -297,11 +344,19 @@ namespace pop_native_live
                 return false;
             const bool opaqueList = g_currentList == 200u || g_currentList == 0x2Cu || g_currentList == 0x3Cu;
             const bool prefixList = opaqueList || g_currentList == 0x68u || g_currentList == 0x78u || g_currentList == 0x4Cu;
-            if (!(translucent ? prefixList : opaqueList))
+            const bool late = translucent && g_worldLate && g_worldPure && (g_currentList == 0x88u || g_currentList == 0xA8u);
+            if (!(translucent ? prefixList || late : opaqueList))
                 return false;
             const uint32_t sub = guestAny(rdram, 0x70000034u);
             if (!sub)
                 return false;
+            if (late && g_currentList == 0xA8u)
+            {
+                // neither Z (flag 0x200 = no depth write) nor alpha (FBMSK as currentMaterial computes it)
+                const uint32_t flags = guestAny(rdram, sub + 4);
+                const bool alpha = (flags & 0x60) == 0x40 || (flags & 0x28);
+                return (flags & 0x200) && !alpha;
+            }
             if (translucent)
                 return true;
             const uint32_t flags = guestAny(rdram, sub + 4);
@@ -1035,6 +1090,9 @@ namespace pop_native_live
                 const DrawMaterial &m = worldMaterial(r);
                 if (!m.textureKey || !worldTextureReady(m.textureKey))
                 {
+                    static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+                    if (whyLog)
+                        std::fprintf(stderr, "[pop:world] no texture: key %08x list +0x%x flags %08x\n", m.textureKey, m.list, m.flags);
                     ++g_worldStats.noTexture;
                     ++g_worldStats.kept;
                     return false;
@@ -1139,7 +1197,12 @@ namespace pop_native_live
                 }
             }
             if (worldOk && worldFinish(worldRecs, worldBase))
+            {
+                if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                    ++g_lateStats.native;
                 return;
+            }
+            worldOnGs(rdram, "ref");
             g_origRefDisplay(rdram, ctx, runtime);
         }
 
@@ -1356,9 +1419,32 @@ namespace pop_native_live
                             DrawMaterial dm = currentMaterial(rdram);
                             dm.hasUvm = false; // particle program (VU 4): sprite-sheet UVs of its own
                             g_frameRefs.emplace_back(std::move(bs), std::make_pair(model, dm));
+                            // POP_NATIVE_WORLD with POP_NATIVE_LATE: drawn natively, the call skipped; FUN_004584C0 leaves
+                            // the particle driver index at 0x70000080 (0 billboards, 1 oriented: read by the next SetParticleEnv)
+                            std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+                            if (g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {}))
+                            {
+                                const uint32_t driver = billboard ? 0u : 1u;
+                                std::memcpy(getMemPtr(rdram, 0x70000080u), &driver, 4);
+                                ++g_worldStats.particles;
+                                if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                                    ++g_lateStats.native;
+                                return;
+                            }
                         }
                     }
                 }
+            }
+            if (g_world && g_worldOpen)
+            {
+                // to the GS only if it draws anything (FUN_004584C0 sums the generators' counts first)
+                const uint32_t element = getRegU32(ctx, 4), p1 = guestAny(rdram, element + 0x14), P = p1 ? guestAny(rdram, p1) : 0;
+                const uint32_t gens = P ? guestAny(rdram, P + 0x28) : 0;
+                uint32_t total = 0;
+                for (uint32_t g = 0, n = gens ? guestAny(rdram, gens + 4) : 0; g < n && g < 64; ++g)
+                    total += guest16(rdram, guestAny(rdram, gens) + g * 0xD0 + 0xC2);
+                if (total)
+                    worldOnGs(rdram, "gfx");
             }
             g_origParticles(rdram, ctx, runtime);
         }
@@ -1498,10 +1584,16 @@ namespace pop_native_live
                         // POP_NATIVE_WORLD: one mesh, no chain
                         std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
                         if (g_world && worldStateOk(rdram) && worldFinish(recs, {}))
+                        {
+                            if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                                ++g_lateStats.native;
                             return;
+                        }
                     }
                 }
             }
+            static const char *const kPath[4] = {"idx", "sprite", "water", "list18"};
+            worldOnGs(rdram, kPath[N]);
             g_other[N].original(rdram, ctx, runtime);
         }
 
@@ -2054,6 +2146,8 @@ namespace pop_native_live
             {
                 if (pass == 3)
                     ++g_worldStats.lightmaps;
+                if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                    ++g_lateStats.native;
                 for (const uint32_t palette : worldPalettes)
                     worldReplayDriver(rdram, palette);
                 return; // like a stub: leave pc, the dispatcher returns to the caller
@@ -2071,6 +2165,7 @@ namespace pop_native_live
                                  sub ? guestAny(rdram, sub + 4) : 0u, guest8(rdram, 0x70000038u), guestAny(rdram, 0x70000044u));
                 }
             }
+            worldOnGs(rdram, pass == 3 ? "lightmap" : "mesh");
             g_origDisplay(rdram, ctx, runtime);
         }
     }
@@ -2903,7 +2998,26 @@ namespace pop_native_live
         void listRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_currentList = getRegU32(ctx, 4) - g_drawManager;
+            if (g_world && g_worldOpen && g_currentList == 0x88u && g_worldPure)
+                ++g_lateStats.pureAtLate;
             g_origListRender(rdram, ctx, runtime);
+        }
+
+        // GS draws the frame's purity (POP_NATIVE_LATE) has to know about besides the list paths: FUN_004B80C0(list,
+        // mode) draws a shadow projector's casters or receivers on the GS (every path of FUN_004C2400 but a native
+        // FUN_004C3540); FUN_004BDC80 (the shadow manager, between lists +0x78 and +0x4C when both +0x68 and +0x78
+        // hold entries; not read yet: taken as drawing)
+        PS2Runtime::RecompiledFunction g_origShadowList = nullptr, g_origShadowZ = nullptr;
+        void shadowList(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (guestAny(rdram, getRegU32(ctx, 4) + 4))
+                worldOnGs(rdram, "shadow");
+            g_origShadowList(rdram, ctx, runtime);
+        }
+        void shadowZ(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            worldOnGs(rdram, "FUN_004BDC80");
+            g_origShadowZ(rdram, ctx, runtime);
         }
 
         // live window: empties everything one frame's capture collected, for the next frame
@@ -2984,6 +3098,7 @@ namespace pop_native_live
             g_frameCapturing = true;
             g_worldMarked = true;
             g_worldOpen = true;
+            g_worldPure = true;
         }
 
         // the frame's DMA kick (0x4A2C80) from PS2_Flip: the frame's native draws go to pop_native_world
@@ -3013,6 +3128,22 @@ namespace pop_native_live
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
                                  (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic,
                                  (unsigned long long)g_worldStats.litNative, (unsigned long long)g_worldStats.envNative);
+                ++g_lateStats.frames;
+                if (g_worldLate && g_worldStats.frames % 300 == 0)
+                {
+                    std::string top;
+                    std::vector<std::pair<uint64_t, std::string>> by;
+                    for (const auto &[why, n] : g_lateStats.closedBy)
+                        by.emplace_back(n, why);
+                    std::sort(by.rbegin(), by.rend());
+                    for (size_t i = 0; i < by.size() && i < 5; ++i)
+                        top += (i ? ", " : "") + by[i].second + " " + std::to_string(by[i].first);
+                    std::fprintf(stderr, "[pop:world] late lists: frames %llu, pure at +0x88 %llu, ended within %llu; calls native %llu, GS %llu; "
+                                         "particles native %llu; ended by: %s\n",
+                                 (unsigned long long)g_lateStats.frames, (unsigned long long)g_lateStats.pureAtLate,
+                                 (unsigned long long)g_lateStats.closedInLate, (unsigned long long)g_lateStats.native,
+                                 (unsigned long long)g_lateStats.gs, (unsigned long long)g_worldStats.particles, top.c_str());
+                }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu\n",
                                  (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
@@ -3302,6 +3433,12 @@ namespace pop_native_live
                          {0x004B7B80u, lmRender, &g_origLmRender},
                          {0x004A2C80u, worldKick, &g_origKick},
                          {g_other[0].address, otherDisplay<0>, &g_other[0].original},
+                         {g_other[1].address, otherDisplay<1>, &g_other[1].original},
+                         {g_other[2].address, otherDisplay<2>, &g_other[2].original},
+                         {g_other[3].address, otherDisplay<3>, &g_other[3].original},
+                         {0x004584C0u, particles, &g_origParticles},
+                         {0x004B80C0u, shadowList, &g_origShadowList},
+                         {0x004BDC80u, shadowZ, &g_origShadowZ},
                          {kShadowRtt, shadowRtt, &g_origShadowRtt}};
             for (const auto &h : hooks)
                 if (!(*h.original = runtime.lookupFunction(h.address)))

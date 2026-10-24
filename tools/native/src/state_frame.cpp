@@ -57,6 +57,7 @@ namespace
     }
 
     void noop(uint8_t *, R5900Context *, PS2Runtime *) {}
+    void gfxEntry(uint8_t *, R5900Context *ctx, PS2Runtime *);
 
     // CElementList::Render (0x4B9440) over one list: entries of 16 bytes at *list, count at list + 4.
     void renderList(uint8_t *, R5900Context *ctx, PS2Runtime *)
@@ -118,8 +119,8 @@ namespace
                 call(0x00469C00u, ctx);
                 break;
             case 7:
-            case 8: // CJadeSpriteElement
-                setArgs(*ctx, uint32_t(word) * 16, matrix, kind == 8);
+            case 8: // CJadeSpriteElement: element table *(0x6E1598) + u16 * 0x20 (CElementList::Render)
+                setArgs(*ctx, rd32(0x006E1598u) + uint32_t(word & 0xFFFF) * 0x20, matrix, kind == 8);
                 call(0x004C6200u, ctx);
                 break;
             case 9: // CJMeshElement::Display(element, matrix index, pass)
@@ -132,9 +133,12 @@ namespace
                 break;
             case 11:
                 break;
-            default: // GFX (FUN_00458FC0, entry pointer)
+            default: // GFX (FUN_00458FC0, entry pointer; the world mode does not hook it: replayed directly)
                 setArgs(*ctx, e);
-                call(0x00458FC0u, ctx);
+                if (g_hooks.count(0x00458FC0u))
+                    call(0x00458FC0u, ctx);
+                else
+                    gfxEntry(nullptr, ctx, nullptr);
                 break;
             }
         }
@@ -494,6 +498,13 @@ int main(int argc, char **argv)
                      (unsigned long long)ws.skipped, (unsigned long long)ws.noTexture, (unsigned long long)ws.notRecorded,
                      (unsigned long long)ws.posed, (unsigned long long)ws.drivers, (unsigned long long)ws.skinGs[0],
                      (unsigned long long)ws.skinGs[1], (unsigned long long)ws.skinGs[2]);
+        const auto &ls = pop_native_live::g_lateStats;
+        std::string by;
+        for (const auto &[why, n] : ls.closedBy)
+            by += " " + why + " " + std::to_string(n) + ";";
+        std::fprintf(stderr, "[state] late lists: pure at +0x88 %llu, ended within %llu, calls native %llu, GS %llu, particles native %llu; ended by:%s\n",
+                     (unsigned long long)ls.pureAtLate, (unsigned long long)ls.closedInLate, (unsigned long long)ls.native,
+                     (unsigned long long)ls.gs, (unsigned long long)ws.particles, by.empty() ? " -" : by.c_str());
         return 0;
     }
     // two Display3DElements calls: the first starts the capture and replays the lists, the second writes
