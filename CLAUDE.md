@@ -61,8 +61,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
      save boots walk away from it): the halo pass (FUN_004ABFC0, GS)
      tests visibility against Z that partly comes from the native world (biased by ZBIAS 128). Test: default vs
      `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld` at one torch and one save point. Save point partly drawn in a fight
-     (125417): GS-only looks the same, which only rules out the native renderer (game code, VU and GS emulation are
-     shared). User doubts it is original: check against an independent reference (PS2 longplay video, PCSX2).
+     (125417): **closed 25 Oct**, a PS2 playthrough video shows the same (sand glow only, column fades in over the fight).
+     A GS reference (an old GSdx plugin build fed our GIF stream, est. a few days) deferred to 0.2 (user asked).
   6. **N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat.**
   7. **N5 black one-frame flashes**: fix 30ef5d5 built 24 Oct; confirm none in the 25 Oct play log, then close.
   8. **Small ones:** `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the whole runtime.

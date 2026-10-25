@@ -194,6 +194,9 @@ Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (
   all off, screenshots at ~0/3/7/11 s): **the GS-only boot shows the same** (cloud, no column, still none at 11 s). So
   not the native renderer at that moment; most likely the game's own behaviour during a fight (not confirmed from the
   code; the column's fade is still to be found). 125331 (save point completely missing) not A/B'd.
+  **Closed 25 Oct:** a PS2 playthrough video (user) shows the save point in a fight as the sand glow on the floor
+  with no column, the column fading in over the fight: original behaviour. (The GS-only A/B alone could not show this:
+  game code, VU and GS emulation are shared by both runs.)
 
 ## Storage of captures (agreed with the user 24 Oct)
 
