@@ -80,13 +80,28 @@ namespace pop_assets
             if (pal == p.records.end())
                 return false;
             size_t pp, dp;
-            if (!imageData(p, pal->second.first, pal->second.first + pal->second.second, 1024, pp) ||
-                !imageData(p, off, off + 0x200, size_t(w) * h, dp))
-                return false;
-            const uint8_t *buf = p.d + dp, *palette = p.d + pp;
             out.width = w;
             out.height = h;
             out.rgba.assign(size_t(w) * h * 4, 0);
+            if (!imageData(p, pal->second.first, pal->second.first + pal->second.second, 1024, pp) ||
+                !imageData(p, off, off + 0x200, size_t(w) * h, dp))
+            {
+                // 4 bits per pixel (a GFX particle, 250004ec, 25 Oct): the image sent as PSMT4 at its own size (w x h
+                // / 2 bytes, linear, low nibble first; the GS swizzles on write), a 16-colour palette (8x2, 64 bytes)
+                if (!imageData(p, pal->second.first, pal->second.first + pal->second.second, 64, pp) ||
+                    !imageData(p, off, off + 0x200, size_t(w) * h / 2, dp))
+                    return false;
+                for (size_t i = 0; i < size_t(w) * h; ++i)
+                {
+                    const uint32_t c = (p.d[dp + i / 2] >> (4 * (i & 1))) & 0xF;
+                    uint8_t *o = &out.rgba[i * 4];
+                    const uint8_t *e = p.d + pp + c * 4;
+                    o[0] = e[0], o[1] = e[1], o[2] = e[2];
+                    o[3] = static_cast<uint8_t>(std::min(255, e[3] * 2));
+                }
+                return true;
+            }
+            const uint8_t *buf = p.d + dp, *palette = p.d + pp;
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x)
                 {
