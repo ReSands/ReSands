@@ -114,6 +114,8 @@ namespace pop_hdtex
 
 namespace pop_native_live
 {
+    void onBigfileLookup(uint32_t key); // below: load a world pack once
+
     namespace
     {
         constexpr uint32_t kReadElement = 0x004C9500u;
@@ -2779,6 +2781,30 @@ namespace pop_native_live
         std::unordered_set<uint32_t> g_liveSent;                       // texture keys the viewer already has
         std::unordered_set<uint32_t> g_worldSent;                      // POP_NATIVE_WORLD: keys pop_native_world has
         std::unordered_set<uint32_t> g_worldMissing;                   // keys not decodable yet (retried each frame)
+        // A save-state load looks nothing up in the bigfile, so no world pack loads (onBigfileLookup): a texture
+        // missing from the loaded packs loads the pack tools/packindex.py's index names for it (as pop_state_frame
+        // does; POP_PACKINDEX, default game/analysis/packindex.txt from the disc folder). Loads in the background:
+        // the draws wait on the GS until it is in.
+        void loadPackFor(uint32_t key)
+        {
+            static const std::unordered_map<uint32_t, uint32_t> packOf = [] {
+                std::unordered_map<uint32_t, uint32_t> m;
+                const char *env = std::getenv("POP_PACKINDEX");
+                if (FILE *f = std::fopen(env && *env ? env : "../../analysis/packindex.txt", "r"))
+                {
+                    unsigned tex, pack;
+                    while (std::fscanf(f, "%x %x", &tex, &pack) == 2)
+                        m.emplace(tex, pack); // the first pack listed for a texture
+                    std::fclose(f);
+                }
+                std::fprintf(stderr, "[pop:native] pack index: %zu texture keys\n", m.size());
+                return m;
+            }();
+            const auto it = packOf.find(key);
+            if (it != packOf.end())
+                onBigfileLookup(it->second);
+        }
+
         bool worldTextureReady(uint32_t key)
         {
             if (g_liveImages.count(key))
@@ -2789,6 +2815,7 @@ namespace pop_native_live
             if (!findTexture(key, img))
             {
                 g_worldMissing.insert(key);
+                loadPackFor(key);
                 return false;
             }
             g_liveImages.emplace(key, std::move(img));
@@ -3764,7 +3791,8 @@ namespace pop_native_live
 #if POP_SPRITE_VU1
                     std::fprintf(stderr, "[pop:world] sprites (P9 %s): draws %llu, native %llu, quads %llu, not replayed %llu; VU runs %llu, "
                                          "handed to the interpreter %llu\n",
-                                 g_spriteVu.usePort ? "port" : "on the interpreter", (unsigned long long)g_spriteStats.draws,
+                                 !g_spriteVu.loaded ? "not loaded yet" : g_spriteVu.usePort ? "port" : "on the interpreter",
+                                 (unsigned long long)g_spriteStats.draws,
                                  (unsigned long long)g_spriteStats.native, (unsigned long long)g_spriteStats.quads,
                                  (unsigned long long)g_spriteStats.failed, (unsigned long long)g_spriteStats.runs,
                                  (unsigned long long)g_spriteStats.interpreted);
