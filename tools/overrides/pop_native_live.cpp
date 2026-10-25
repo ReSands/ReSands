@@ -2533,11 +2533,11 @@ namespace pop_native_live
                                              at[0] / nv, at[1] / nv, at[2] / nv);
                             const uint32_t set = guestAny(rdram, 0x700004F0u) + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
                             std::fprintf(stderr,
-                                         "[pop:skin] el %08x idx %u pass %u batches %zu normals %zu | set %u amb %08x n %u pt %u | const %u %08x | "
+                                         "[pop:skin] el %08x idx %u pass %u batches %zu normals %zu | set %u amb %08x n %u pt %u | const %u %08x la %u %02x | "
                                          "lit %d amb %.0f %.0f %.0f lights %d | mean colour %.3f %.3f %.3f\n",
                                          element, index, pass, sk->second.size(), withNormals, guestAny(rdram, 0x70000088u) & 0xFF,
                                          guestAny(rdram, set + 4), guest8(rdram, set + 8), guest8(rdram, set + 1), guest8(rdram, 0x70000039u),
-                                         guestAny(rdram, 0x7000003Cu), int(light.valid), double(light.amb[0]), double(light.amb[1]),
+                                         guestAny(rdram, 0x7000003Cu), guest8(rdram, 0x7000003Au), guest8(rdram, 0x70000040u), int(light.valid), double(light.amb[0]), double(light.amb[1]),
                                          double(light.amb[2]), light.count, nv ? mean[0] / nv : 0, nv ? mean[1] / nv : 0, nv ? mean[2] / nv : 0);
                             static int setDumps = 0;
                             if (setDumps++ < 3)
