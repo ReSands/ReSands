@@ -1912,6 +1912,9 @@ namespace pop_native_live
                     return false;
             }
             ++g_spriteStats.draws;
+            // the world frame already went back to the GS: its native records are not drawn, so do not interpret
+            if (g_world && !(g_worldLate && worldStateOk(rdram)))
+                return false;
             const uint32_t element = getRegU32(ctx, 4), index = getRegU32(ctx, 5) & 0xFFFF;
             const uint32_t gso = guestAny(rdram, 0x00675148u), cam = guestAny(rdram, 0x006749F0u + 0x110u);
             const uint32_t pool = guestAny(rdram, 0x70000260u), model = pool + (guest16(rdram, 0x70000090u)) * 0x40u, disp = pool + index * 0x40u;
@@ -2197,6 +2200,15 @@ namespace pop_native_live
             const uint32_t element = getRegU32(ctx, 4);
             const uint32_t data = guest32(rdram, getRegU32(ctx, 5)) & (kRam - 1);
             ++g_stats.read;
+            // a new element at this address (a streamed-in section reusing an unloaded one's memory): forget what
+            // was kept for the old one (N8/N9/N11: its lightmap, lit pass or skinned status drawn on the new one)
+            g_skipped.erase(element);
+            g_skinned.erase(element);
+            for (uint64_t pass = 0; pass < 8; ++pass)
+            {
+                g_fromPacket.erase((uint64_t(element) << 8) | pass);
+                g_litBatches.erase((uint64_t(element) << 8) | pass);
+            }
             pop_assets::Pack pack;
             pack.d = rdram;
             pack.len = kRam;
