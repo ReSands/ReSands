@@ -302,3 +302,50 @@ P9 = ELF MPG packet 0x4E338C, 0x13A0 bytes (628 pairs, 563 run in the recorded s
   has a 24-hour limit). Shuts down only if everything passes. **Cancel at any time with the desktop shortcut
   "Stop Qwen"** (`tools/windows/qwen-stop.ps1`: ends the job and llama-server, never shuts down); every round is on
   disk as it finishes, so the next run resumes.
+
+## Night of 24-25 Oct results; P6 and P9 finished by hand (25 Oct 2026)
+
+Night job `oct24.ps1`, 21:47-10:19 (stopped by the user with "Stop Qwen"). Qwen passed 32 of the 37 P9 stages and
+1 more P6 piece (`a_ck_cull`); 6 rounds without progress on the rest.
+- **Two P6 pieces could never pass (harness bug).** In variant B's clip check a CLIP sits 1-3 pairs before the
+  borders 0x19c8 / 0x19f0 in every case, and the case snapshot took the *visible* clip flags (before that CLIP
+  lands) while Q was already taken as landed: `b_ck_loop` expected a CLIP result its code never makes, `b_ck_next`
+  one fewer than its code makes (each "got" was the next case's "expected"). 26-28 rounds each over two nights.
+  `b_ck_head` had "passed" by computing the CLIP and then setting `vu.clip = 0` before returning (judge gaming).
+  Fix (`replay.cpp` snapshot): clip flags as landed (`m_workingClip`), like Q; the cutter counts clip reads that
+  would see older flags than the landed ones (`clip flags read before a CLIP in flight at the entry landed`; none
+  in P6). Recut, then **every earlier attempt re-judged: b_ck_head 13 of 14 attempts pass (only the cheat fails),
+  b_ck_next passed in round 1, b_ck_loop in round 2.** Lesson: when a stage fails for many rounds on one value,
+  check what is in flight at its borders before blaming the model.
+- **Hand ports** (`known_good/`, all first try): `p6_a_ck_head` (174 cases), `p9_c_b` (600), `p9_d_save` (596),
+  `p9_d_loop_b` (598), `p9_f_a` (599), `p9_f_b` (599). Qwen's misses were ordinary: wrong MAC lane bits for the
+  FMAND tests, ITOF applied to float bits, ISW lanes packed.
+- **Whole programs:** `port.py --chain p9` **PASS 598 whole runs**, `--chain p6` **PASS 600**.
+- **Speed** (`judge --time N`, built with `VU1_TIMING=1 build.sh`: -O2, no sanitizer; x86 on the Mac under
+  Rosetta, both sides alike): P9 ~27 us per run vs ~5 ms in the interpreter (`vu1replay_r` over the 2,984 runs:
+  15 s), ~190x; P6 ~3 us vs ~1.8 ms. To be measured in the game.
+- A scan of every passed port for constant writes to clip / MAC / Q at the end found only the `b_ck_head` cheat.
+
+## VU1 character program P4 for Qwen, 25 Oct 2026 (set up; the night job `oct25.ps1`)
+
+Why: the next candidate after the water (CLAUDE.md); P4 = image 31829861c88dc716, the skinned, lit character meshes
+(`docs/native_renderer.md` "Point lights decoded"). The judge harness is the P6/P9 one; new:
+- **Stage borders by tool, not by hand.** `vu1replay --cutscan <file> --hints <file>` records per pc, over all runs:
+  the kinds in flight before it, whether it is ever a delay slot, and whether it lies between a MAC flag write and
+  its FM* reader, or after a later clip write than the one an FC* reader sees (clip flags are landed in the
+  snapshot, so only that case is wrong). `tools/vu1port/cutscan.py <image> <scans>` builds basic blocks, makes every
+  run start (0, the pair after each E pair's delay slot), subroutine entry, return point and branch target from
+  another stage an entry, joins fall-through blocks and blocks that may not start a stage into their predecessor,
+  and cuts at most 16 pairs: **79 stages, 695 pairs, every entry safe** (the first proposal had two loops of 33-34
+  pairs only because the clip rule was as strict as the MAC one).
+- **Cases:** `tools/vu1port/cases_p4.sh` from the three play traces that ran P4 (091049, 091734, 192521: 4,836
+  runs), at most 600 per stage spread over the traces; `p4_whole.cases` from each run start to the program end;
+  the script ends with a border check (no "(!)" kind, no early clip read).
+- **Primer:** WAITQ added (a no-op for a port). JR / BAL notes now for every program after P6.
+- **Hand port** `known_good/p4_0000` (the MSCAL entry) as the first example and end-to-end check.
+- **Branches never taken in the traces** (e.g. 0x38 IBGTZ to 0x58, the dispatcher's 0x2ae0) are not exits; a port
+  returns with that pc, so the game integration must fall back to the interpreter when the chain stops at a pc
+  without a stage (true of P9 and P6 too).
+- **Night job** `tools/windows/oct25.ps1` (desktop shortcut "Qwen overnight (until Stop Qwen)", now pointing at
+  it): passes over the unpassed P4 stages, 3 rounds each, `--chain p4` once all pass; ends by itself after two
+  passes in a row with no new pass, then shuts the PC down. "Stop Qwen" cancels as before.

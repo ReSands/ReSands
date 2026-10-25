@@ -10,6 +10,8 @@ W=$P/game/analysis/vu1port
 mkdir -p "$W"
 # no FMA contraction: the VU rounds each multiply and add; AddressSanitizer catches stray memory accesses
 JFLAGS="-arch x86_64 -O1 -g -std=c++17 -ffp-contract=off -fsanitize=address -I $P/tools/vu1port"
+# VU1_TIMING=1: an optimised judge without the sanitizer, for judge --time
+if [ "${VU1_TIMING:-0}" = 1 ]; then JFLAGS="-arch x86_64 -O2 -std=c++17 -ffp-contract=off -I $P/tools/vu1port"; fi
 # VU_TASK_R=1: programs that use the random-number register (P9): VuState carries R, the replayer is vu1replay_r
 RDEF="" RSUF=""
 if [ "${VU_TASK_R:-0}" = 1 ]; then RDEF="-DVU_TASK_R=1" RSUF="_r"; JFLAGS="$JFLAGS $RDEF"; fi

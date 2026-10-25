@@ -5,11 +5,12 @@ tries again. Results: game/analysis/qwen/vu1_<stage>/{port.log, spec.md, attempt
 
 Usage: python3 -I tools/vu1port/port.py <stage> [--url http://127.0.0.1:8033] [--rounds 12] [--spec-only]
        python3 -I tools/vu1port/port.py <stage> --judge <file.cpp>     (judge one file, e.g. a known-good answer)
-       python3 -I tools/vu1port/port.py --chain [p6|p9]                (a whole program from the passed stages, judged
+       python3 -I tools/vu1port/port.py --chain [p6|p9|p4]             (a whole program from the passed stages, judged
                                                                          on whole runs: game/analysis/vu1port/whole.cases,
-                                                                         p9_whole.cases)
-Programs: P6 (water, stages p6_*; cases <stage minus "p6_">.cases) and P9 (sprites, stages p9_*; cases <stage>.cases,
-recorded offline from saves: tools/native/src/p9trace.cpp, tools/vu1port/cases_p9.sh).
+                                                                         p9_whole.cases, p4_whole.cases)
+Programs: P6 (water, stages p6_*; cases <stage minus "p6_">.cases), P9 (sprites, stages p9_*; cases <stage>.cases,
+recorded offline from saves: tools/native/src/p9trace.cpp, tools/vu1port/cases_p9.sh) and P4 (characters, stages p4_*;
+cases <stage>.cases from three play traces: tools/vu1port/cases_p4.sh).
 """
 import importlib.util
 import os
@@ -139,12 +140,107 @@ STAGES_P9 = {
     'p9_lend': dict(entry=0x4d0, exits=[0x408, P9_END], ranges=[(0x4d0, 0x530)]),
 }
 
+# P4, the character program (image 31829861c88dc716; docs/native_renderer.md: the skinned, lit meshes): MSCAL 0 runs
+# the set-up and the lighting subroutine (0x1990 or 0x1b20, JR vi15) and ends; MSCNT runs go on after each E pair and
+# reach the dispatcher 0x1890, which branches on the batch's vertex format (vi10) to one of five loops (0x6a8, 0xa50,
+# 0x1518, 0x3078, 0x3530), each transforming and lighting a batch and kicking it; the loops at 0x3078 / 0x3530 call
+# the subroutine 0x3b28 (JR vi11). Stages from tools/vu1port/cutscan.py over the cut scans of three traces
+# (play_20261017_091049 / 091734, play_20261022_192521: 4,836 runs, 25 Oct): entries only where, on every visit,
+# nothing but vf / vi / ACC writes, Q, MAC / status / clip flags or an XGKICK is in flight, never in a delay slot,
+# and never between a MAC flag write and its FM* reader, nor between a clip write and a later clip write its FC*
+# reader does not see; at most 16 pairs. Cases: tools/vu1port/cases_p4.sh.
+P4_IMAGE = os.path.join(ROOT, 'game', 'analysis', 'vu1trace', 'vu1_31829861c88dc716.bin')
+P4_END = 0xffffffff
+STAGES_P4 = {
+    'p4_0000': dict(entry=0x0, exits=[0x5a0], ranges=[(0x0, 0x50)]),  # 11 pairs
+    'p4_05a0': dict(entry=0x5a0, exits=[0x5e8, 0x1990], ranges=[(0x5a0, 0x5d0)]),  # 7 pairs
+    'p4_05d8': dict(entry=0x5d8, exits=[0x5f8], ranges=[(0x5d8, 0x5e0)]),  # 2 pairs
+    'p4_05e8': dict(entry=0x5e8, exits=[0x1b20], ranges=[(0x5e8, 0x5f0)]),  # 2 pairs
+    'p4_05f8': dict(entry=0x5f8, exits=[P4_END], ranges=[(0x5f8, 0x600)]),  # 2 pairs
+    'p4_0608': dict(entry=0x608, exits=[0x688], ranges=[(0x608, 0x680)]),  # 16 pairs
+    'p4_0688': dict(entry=0x688, exits=[0x1890], ranges=[(0x688, 0x6a0)]),  # 4 pairs
+    'p4_06a8': dict(entry=0x6a8, exits=[0x728], ranges=[(0x6a8, 0x720)]),  # 16 pairs
+    'p4_0728': dict(entry=0x728, exits=[0x778], ranges=[(0x728, 0x770)]),  # 10 pairs
+    'p4_0778': dict(entry=0x778, exits=[0x7f8], ranges=[(0x778, 0x7f0)]),  # 16 pairs
+    'p4_07f8': dict(entry=0x7f8, exits=[0x878, 0x8b8], ranges=[(0x7f8, 0x870)]),  # 16 pairs
+    'p4_0878': dict(entry=0x878, exits=[0x778, P4_END], ranges=[(0x878, 0x8a0)]),  # 6 pairs
+    'p4_08a8': dict(entry=0x8a8, exits=[0x608], ranges=[(0x8a8, 0x8b0)]),  # 2 pairs
+    'p4_08b8': dict(entry=0x8b8, exits=[0x9c0], ranges=[(0x8b8, 0x8f0)]),  # 8 pairs
+    'p4_09c0': dict(entry=0x9c0, exits=[0x878], ranges=[(0x9c0, 0x9c8)]),  # 2 pairs
+    'p4_0a50': dict(entry=0xa50, exits=[0xad0], ranges=[(0xa50, 0xac8)]),  # 16 pairs
+    'p4_0ad0': dict(entry=0xad0, exits=[0xb50], ranges=[(0xad0, 0xb48)]),  # 16 pairs
+    'p4_0b50': dict(entry=0xb50, exits=[0xbd0], ranges=[(0xb50, 0xbc8)]),  # 16 pairs
+    'p4_0bd0': dict(entry=0xbd0, exits=[0xc08], ranges=[(0xbd0, 0xc00)]),  # 7 pairs
+    'p4_0c08': dict(entry=0xc08, exits=[0xc80, 0xcd8], ranges=[(0xc08, 0xc78)]),  # 15 pairs
+    'p4_0c80': dict(entry=0xc80, exits=[0xcd8], ranges=[(0xc80, 0xcd0)]),  # 11 pairs
+    'p4_0cd8': dict(entry=0xcd8, exits=[0xd58], ranges=[(0xcd8, 0xd50)]),  # 16 pairs
+    'p4_0d58': dict(entry=0xd58, exits=[0xda0, 0xde0], ranges=[(0xd58, 0xd98)]),  # 9 pairs
+    'p4_0da0': dict(entry=0xda0, exits=[0xc08, P4_END], ranges=[(0xda0, 0xdc8)]),  # 6 pairs
+    'p4_0dd0': dict(entry=0xdd0, exits=[0x608], ranges=[(0xdd0, 0xdd8)]),  # 2 pairs
+    'p4_0de0': dict(entry=0xde0, exits=[0xee8], ranges=[(0xde0, 0xe18)]),  # 8 pairs
+    'p4_0ee8': dict(entry=0xee8, exits=[0xda0], ranges=[(0xee8, 0xf08)]),  # 5 pairs
+    'p4_1518': dict(entry=0x1518, exits=[0x1598], ranges=[(0x1518, 0x1590)]),  # 16 pairs
+    'p4_1598': dict(entry=0x1598, exits=[0x15f0], ranges=[(0x1598, 0x15e8)]),  # 11 pairs
+    'p4_15f0': dict(entry=0x15f0, exits=[0x1670], ranges=[(0x15f0, 0x1668)]),  # 16 pairs
+    'p4_1670': dict(entry=0x1670, exits=[0x16a0, 0x16e0], ranges=[(0x1670, 0x1698)]),  # 6 pairs
+    'p4_16a0': dict(entry=0x16a0, exits=[0x15f0, P4_END], ranges=[(0x16a0, 0x16c8)]),  # 6 pairs
+    'p4_16d0': dict(entry=0x16d0, exits=[0x1980], ranges=[(0x16d0, 0x16d8)]),  # 2 pairs
+    'p4_16e0': dict(entry=0x16e0, exits=[0x17e8], ranges=[(0x16e0, 0x16e8)]),  # 2 pairs
+    'p4_17e8': dict(entry=0x17e8, exits=[0x16a0], ranges=[(0x17e8, 0x17f8)]),  # 3 pairs
+    'p4_1890': dict(entry=0x1890, exits=[0x6a8, 0xa50, 0x1518, 0x3078, 0x3530], ranges=[(0x1890, 0x18f8)]),  # 14 pairs
+    'p4_1980': dict(entry=0x1980, exits=[0x608], ranges=[(0x1980, 0x1988)]),  # 2 pairs
+    'p4_1990': dict(entry=0x1990, exits=[0x1a10], ranges=[(0x1990, 0x1a08)]),  # 16 pairs
+    'p4_1a10': dict(entry=0x1a10, exits=[0x1a90], ranges=[(0x1a10, 0x1a88)]),  # 16 pairs
+    'p4_1a90': dict(entry=0x1a90, exits=[0x1b00], ranges=[(0x1a90, 0x1af8)]),  # 14 pairs
+    'p4_1b00': dict(entry=0x1b00, exits=[0x5d8, 0x5f8], ranges=[(0x1b00, 0x1b18)]),  # 4 pairs
+    'p4_1b20': dict(entry=0x1b20, exits=[0x1ba0], ranges=[(0x1b20, 0x1b98)]),  # 16 pairs
+    'p4_1ba0': dict(entry=0x1ba0, exits=[0x1c10], ranges=[(0x1ba0, 0x1c08)]),  # 14 pairs
+    'p4_1c10': dict(entry=0x1c10, exits=[0x5d8, 0x5f8], ranges=[(0x1c10, 0x1c28)]),  # 4 pairs
+    'p4_3078': dict(entry=0x3078, exits=[0x30f8], ranges=[(0x3078, 0x30f0)]),  # 16 pairs
+    'p4_30f8': dict(entry=0x30f8, exits=[0x3178], ranges=[(0x30f8, 0x3170)]),  # 16 pairs
+    'p4_3178': dict(entry=0x3178, exits=[0x3b28], ranges=[(0x3178, 0x31a0)]),  # 6 pairs
+    'p4_31a8': dict(entry=0x31a8, exits=[0x31b8], ranges=[(0x31a8, 0x31b0)]),  # 2 pairs
+    'p4_31b8': dict(entry=0x31b8, exits=[0x3238], ranges=[(0x31b8, 0x3230)]),  # 16 pairs
+    'p4_3238': dict(entry=0x3238, exits=[0x3b28], ranges=[(0x3238, 0x3288)]),  # 11 pairs
+    'p4_3290': dict(entry=0x3290, exits=[0x32b0, 0x3300], ranges=[(0x3290, 0x32a8)]),  # 4 pairs
+    'p4_32b0': dict(entry=0x32b0, exits=[0x31b8, P4_END], ranges=[(0x32b0, 0x32e8)]),  # 8 pairs
+    'p4_32f0': dict(entry=0x32f0, exits=[0x1980], ranges=[(0x32f0, 0x32f8)]),  # 2 pairs
+    'p4_3300': dict(entry=0x3300, exits=[0x3408], ranges=[(0x3300, 0x3308)]),  # 2 pairs
+    'p4_3408': dict(entry=0x3408, exits=[0x32b0], ranges=[(0x3408, 0x3420)]),  # 4 pairs
+    'p4_3530': dict(entry=0x3530, exits=[0x35b0], ranges=[(0x3530, 0x35a8)]),  # 16 pairs
+    'p4_35b0': dict(entry=0x35b0, exits=[0x3630], ranges=[(0x35b0, 0x3628)]),  # 16 pairs
+    'p4_3630': dict(entry=0x3630, exits=[0x36a0], ranges=[(0x3630, 0x3698)]),  # 14 pairs
+    'p4_36a0': dict(entry=0x36a0, exits=[0x3b28], ranges=[(0x36a0, 0x36b8)]),  # 4 pairs
+    'p4_36c0': dict(entry=0x36c0, exits=[0x36e8], ranges=[(0x36c0, 0x36e0)]),  # 5 pairs
+    'p4_36e8': dict(entry=0x36e8, exits=[0x3730, 0x37e8], ranges=[(0x36e8, 0x3728)]),  # 9 pairs
+    'p4_3730': dict(entry=0x3730, exits=[0x37b0], ranges=[(0x3730, 0x37a8)]),  # 16 pairs
+    'p4_37b0': dict(entry=0x37b0, exits=[0x3800], ranges=[(0x37b0, 0x37e0)]),  # 7 pairs
+    'p4_37e8': dict(entry=0x37e8, exits=[0x3800], ranges=[(0x37e8, 0x37f8)]),  # 3 pairs
+    'p4_3800': dict(entry=0x3800, exits=[0x3b28], ranges=[(0x3800, 0x3860)]),  # 13 pairs
+    'p4_3868': dict(entry=0x3868, exits=[0x3890, 0x38e0], ranges=[(0x3868, 0x3888)]),  # 5 pairs
+    'p4_3890': dict(entry=0x3890, exits=[0x36e8, P4_END], ranges=[(0x3890, 0x38c8)]),  # 8 pairs
+    'p4_38d0': dict(entry=0x38d0, exits=[0x1980], ranges=[(0x38d0, 0x38d8)]),  # 2 pairs
+    'p4_38e0': dict(entry=0x38e0, exits=[0x39e8], ranges=[(0x38e0, 0x38e8)]),  # 2 pairs
+    'p4_39e8': dict(entry=0x39e8, exits=[0x3890], ranges=[(0x39e8, 0x3a00)]),  # 4 pairs
+    'p4_3b28': dict(entry=0x3b28, exits=[0x3d80, 0x3f88], ranges=[(0x3b28, 0x3b40)]),  # 4 pairs
+    'p4_3d80': dict(entry=0x3d80, exits=[0x3dc8, 0x3e48], ranges=[(0x3d80, 0x3dc0)]),  # 9 pairs
+    'p4_3dc8': dict(entry=0x3dc8, exits=[0x3e48, 0x3f88], ranges=[(0x3dc8, 0x3e40)]),  # 16 pairs
+    'p4_3e48': dict(entry=0x3e48, exits=[0x3ea8], ranges=[(0x3e48, 0x3ea0)]),  # 12 pairs
+    'p4_3ea8': dict(entry=0x3ea8, exits=[0x3ed8, 0x3ee0], ranges=[(0x3ea8, 0x3ed0)]),  # 6 pairs
+    'p4_3ed8': dict(entry=0x3ed8, exits=[0x3ee0], ranges=[(0x3ed8, 0x3ed8)]),  # 1 pairs
+    'p4_3ee0': dict(entry=0x3ee0, exits=[0x3f58], ranges=[(0x3ee0, 0x3f50)]),  # 15 pairs
+    'p4_3f58': dict(entry=0x3f58, exits=[0x3ea8, 0x3f88], ranges=[(0x3f58, 0x3f80)]),  # 6 pairs
+    'p4_3f88': dict(entry=0x3f88, exits=[0x31a8, 0x3290, 0x36c0, 0x3868], ranges=[(0x3f88, 0x3fb0)]),  # 6 pairs
+}
+
 PROGRAMS = {
     'p6': dict(image=IMAGE, stages=STAGES, r=False, first='p6_setup', what='the water renderer', scenes='two water scenes'),
     'p9': dict(image=P9_IMAGE, stages=STAGES_P9, r=True, first='p9_init', scenes='the sprite scenes of about 130 saves',
                what='the sprite renderer'),
+    'p4': dict(image=P4_IMAGE, stages=STAGES_P4, r=False, first='p4_0000', what='the character renderer (skinned, lit meshes)',
+               scenes='three recorded play sessions'),
 }
-ALL_STAGES = {**STAGES, **STAGES_P9}
+ALL_STAGES = {**STAGES, **STAGES_P9, **STAGES_P4}
 
 
 def prog(name):
@@ -152,7 +248,7 @@ def prog(name):
 
 
 def case_base(name):
-    """Cases / hints file name: P6's drop the prefix (the files predate P9), P9's keep it."""
+    """Cases / hints file name: P6's drop the prefix (the files predate P9), the others keep it."""
     return name[3:] if name.startswith('p6_') else name
 
 
@@ -218,6 +314,7 @@ the program stops.
   forms, OPMULA, OPMSUB) set, per written lane, a zero bit and a sign bit; unwritten lanes 0. Zero bits:
   x = 8, y = 4, z = 2, w = 1; sign bits: x = 0x80, y = 0x40, z = 0x20, w = 0x10. FMAND viT, viS: viT = mac & viS;
   FMOR: mac | viS; FMEQ: mac == viS. The marked line says which instruction's flags a reader sees.
+- WAITQ waits until a DIV / SQRT / RSQRT in flight has delivered Q: nothing to do in C++ (compute Q at once).
 - Branches: B target; BAL viT, target (viT = (address of the pair after the delay slot) / 8); JR viS (jump to
   viS * 8); IBEQ / IBNE viT, viS, target; IBLTZ / IBGTZ / IBLEZ / IBGEZ viS, target. The pair after a
   branch (its delay slot) always executes before the jump. Use goto labels in C++.
@@ -427,7 +524,7 @@ def spec(name):
     elif 0xffffffff in st['exits']:
         exit_notes += (' If it reaches the program end (the pair marked E, then its delay slot), set vu.pc = 0xffffffff '
                        'and return.')
-    if name.startswith('p9_'):
+    if not name.startswith('p6_'):
         code_text = stage_code(st['ranges'], hints, p['image'])
         if re.search(r'\bJR vi\d+', code_text):
             exit_notes += (' JR viN returns from a subroutine: after its delay slot set vu.pc = vu.vi[N] * 8 (one of the '

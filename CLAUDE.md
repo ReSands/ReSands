@@ -152,37 +152,26 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
 - **Open notes:** trouser flicker not seen lately (watch). Torch save `game/analysis/saves1023/st/` (point lights in
   sets 0/1): offline native vs game 4.73, the Prince matches; point lights near a fire still to be looked at in game.
   The -Fast rebuild once recompiled the whole runtime (~2,200 objects): find why.
-- **Qwen candidate after the water job:** the whole character VU1 program (image 31829861, 2,048 lines) to C++, judged
-  on the trace of save 192521 (`game/analysis/vu1trace/`, `tools/windows/vu1trace.ps1`).
-- **Qwen night 22-23 Oct: 9 of 21 P6 pieces passed; post-mortem done (23 Oct lunch).** Mostly harness losses: 34% of
-  rounds thought for all 32k tokens and wrote no code (now a 16k thinking budget, tested), and `--rounds` was absolute,
-  so b_check/a_check got 0-1 rounds (now relative); an example with wrong MAC sign bits fixed. **Night 23-24 Oct:
-  13 of 21; 24 Oct morning: 6 more fixed by hand from Qwen's attempts** (the a_g2 "expected 0" shape = VU float
-  normalisation, missing from the primer, now in it), **the two checks split into 12 pieces (3 by hand); tonight
-  `tools/windows/oct24.ps1` ports the 9 left, then P9**. Details:
-  `docs/llm_jobs.md` "24 Oct morning". Details: `docs/llm_jobs.md` "Post-mortem (23 Oct lunch)". The translucents +
-  particles work (above) waits until after this.
-- **Sprite (P9) VU1 port for Qwen: set up 24 Oct evening** (the sprite interpreter is the fps cost in busy scenes).
-  Cases from ~130 saves offline (`tools/vu1port/cases_p9.sh`, no game boot), 37 stages, R register in the harness,
-  3 hand ports pass (`known_good/p9_*`). **Tonight's `tools/windows/oct24.ps1` runs the water pieces, then P9 with no
-  deadline** (shortcut "Qwen overnight (until Stop Qwen)"; the user cancels with the shortcut **"Stop Qwen"**; rounds
-  are kept, the next run resumes; shuts down only if everything passes). Morning: `game\jobs\qwen-night.log`, the
-  stages' PASS files; passed stages then go into the game in place of `spriteRun`. Details: `docs/llm_jobs.md`
-  "VU1 sprite program P9".
-- **Water (P6) VU1 port (needed for 0.13):** the VU1 water program to C++ in stages, each judged against the
-  runtime's VU1 interpreter on recorded cases (`tools/vu1port/port.py`; passing ports in `game\analysis\qwen\vu1_p6_*\best.cpp`
-  (PASS file) or `tools/vu1port/known_good/`). **Night 24-25 Oct: `tools/windows/oct24.ps1`** (PC desktop shortcut
-  "Qwen overnight (until Stop Qwen)"), the 9 clip-check pieces left (a_ck_head/loop/cull/sub,
-  b_ck_head/loop/next/cull/sub), 4 passes of 6 rounds, `--chain` (whole program, 600 runs) if all pass, then P9 (above)
-  with no deadline. Estimate (24 Oct): head/next 1-3 rounds, loop/cull 2-6, the two sub pieces (MAC flags via FMAND)
-  the likeliest to fail. **Morning:** wake the PC, read `game\jobs\qwen-night.log` and the stages' `port.log` /
-  `attempts\roundNN.report.txt`; hand-port whatever still fails (the sub pieces are 28 small pairs); if `--chain` ran,
-  check its result. Details: `docs/llm_jobs.md` "VU1 water program P6" and "24 Oct morning".
-- **Before the next Qwen job (after P6):** build in the ReAgent learnings (bounded evidence requests, a bulk
+- **P9 sprites + P6 water VU1 ports: DONE (25 Oct), both pass the whole-program judge** (`port.py --chain p9`:
+  598 whole runs; `--chain p6`: 600). Night 24-25 Oct: Qwen 32 of 37 P9 stages + `p6_a_ck_cull`; the rest by hand
+  (`known_good/`: p9_c_b, d_save, d_loop_b, f_a, f_b, p6_a_ck_head). Two P6 pieces were unpassable: the case snapshot
+  took clip flags before an in-flight CLIP landed (fixed in `replay.cpp`; re-judged, Qwen's round-1/2 attempts pass;
+  the passed `b_ck_head` was a cheat, replaced). Speed on the Mac: P9 ~27 us per run vs ~5 ms interpreted (~190x),
+  P6 ~3 us vs ~1.8 ms. **Next (daytime): P9 into the game in place of `spriteRun`** (chain of
+  `game/analysis/qwen/vu1_p9_*/best.cpp` + `known_good/p9_*`; fall back to the interpreter when the chain stops at a
+  pc with no stage: branches never seen in the traces), then measure fight fps; P6 waits for the native water (0.13).
+  Details: `docs/llm_jobs.md` "Night of 24-25 Oct results".
+- **Character VU1 program P4 for Qwen: set up 25 Oct; tonight `tools/windows/oct25.ps1`** (PC desktop shortcut
+  "Qwen overnight (until Stop Qwen)"; cancel with "Stop Qwen"). 79 stages from the new `tools/vu1port/cutscan.py`
+  (borders only where nothing unsafe is in flight), cases from three play traces (`tools/vu1port/cases_p4.sh`),
+  `known_good/p4_0000` as the example. Ends by itself when all pass (then `--chain p4`) or after two passes with no
+  new pass, then shuts down. **Morning:** `game\jobs\qwen-night.log`, copy `game\analysis\qwen\vu1_p4_*` to the Mac,
+  hand-port what failed, `--chain p4`. Details: `docs/llm_jobs.md` "VU1 character program P4".
+- **Before the next non-VU1 Qwen job:** build in the ReAgent learnings (bounded evidence requests, a bulk
   Ghidra JSON export with `jalr`/constant-address refs, save-state global values, recorded cases as judge):
   `docs/llm_jobs.md` "ReAgent + ghidra-bridge".
 - **Qwen candidates for later nights:** standalone tested decoders (`livePacketBatches`, `skinnedFromPacket`, particle
-  quads; judged against the Python decoders on DMA captures) and the character VU1 program (above). User rule: Qwen
+  quads; judged against the Python decoders on DMA captures). User rule: Qwen
   work is overnight only; daytime is Claude + user. GPU skinning only if the profiler asks.
 - **Bugs written up, not fixed (user: later), `docs/saves_1021.md`:** camera X reversed in fixed-camera views
   (low priority); a door flickering with a black web (GS output too); **two freezes in combat**: crash 1 = the

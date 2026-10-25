@@ -15,6 +15,10 @@
 //   time a run reaches the entry pc, the state there (VuState, vu_task.h) and at the next exit pc reached, and
 //   the packets kicked in between. Boundaries must be clean (no write pending); unclean ones are counted.
 //   --max-cases N (default 4000), --stride N: write every Nth case only.
+//   --cutscan <file> (with --hints): no cases; per pc of the replayed runs, what is in flight before it (Pending
+//   bits, union over all visits), whether it is ever a delay slot, whether it lies between a MAC / clip flag write
+//   and the FM* / FC* reader of those flags, visits; the hints then cover the whole program.
+//   tools/vu1port/cutscan.py picks stage borders from both.
 //   With --hints <file>: per pc inside the stage, which DIV the visible Q came from, which upper instruction
 //   the visible MAC flags came from, and whether a branch saw a vi value from before the last write.
 #include <algorithm>
@@ -118,7 +122,8 @@ namespace
     // --allow <kinds> adds to these for one program (P9: xgkick, the packet is taken from memory at the XGKICK, so a
     // transfer in flight changes nothing the judge sees; MAC and status, when the hints show no FMAND reading flags
     // from before the stage's entry and no status reader exists)
-    uint32_t kHarmless = kVf | kVi | kAcc;
+    // clip flags in flight are landed by snapshot(); the cutter counts the reads that would see them too early
+    uint32_t kHarmless = kVf | kVi | kAcc | kClipFlags;
 
     uint32_t pending(const VU1Interpreter &vu)
     {
@@ -150,7 +155,10 @@ namespace
         out.p = s.p;
         out.i = s.i;
         out.mac = s.mac;
-        out.clip = s.clip;
+        // clip flags likewise, as they are once the CLIPs in flight land (m_workingClip): a port applies a CLIP at
+        // once. Until 25 Oct this took the visible flags, so P6's b_ck_loop / b_ck_next (a CLIP 1-3 pairs before
+        // their boundaries in every case) could not pass and b_ck_head passed by clearing the flags it had set
+        out.clip = vu.m_workingClip & 0xFFFFFFu;
         out.status = s.status;
         out.top = s.top;
         out.pc = s.pc;
@@ -277,11 +285,22 @@ int main(int argc, char **argv)
     bool twice = false, coverage = false;
     uint32_t stageEntry = 0xFFFFFFFF;
     std::set<uint32_t> stageExits;
-    std::string hintsPath;
+    std::string hintsPath, cutscanPath;
+    std::map<uint32_t, uint32_t> scanPending; // --cutscan: pc -> Pending bits seen before it
+    std::map<uint32_t, uint64_t> scanVisits;
+    std::set<uint32_t> scanDelay;            // pcs reached as a delay slot
+    // pcs between a MAC / clip flag write and the FM* / FC* reader that reads it: a stage starting there would
+    // read flags from before its entry
+    std::set<uint32_t> scanSplitsFlags;
+    std::vector<uint32_t> scanPath;          // this run's pcs in order
+    std::map<uint32_t, size_t> scanLast;     // pc -> its last index in scanPath
+    std::vector<size_t> scanClipWrites;      // scanPath indices of CLIP / FCSET
     long maxCases = 4000;
     long stride = 1; // --stride N: write every Nth case (spread over the whole trace instead of its start)
     uint64_t cases = 0, uncleanEntry = 0, uncleanExit = 0, unfinished = 0;
     uint32_t pendingEntry = 0, pendingExit = 0; // kinds seen in flight (Pending bits)
+    std::set<uint64_t> entryClips;               // CLIPs in flight at the current case's entry (issue cycles)
+    uint64_t earlyClipReads = 0;
     Hints hints;
     std::map<uint32_t, uint64_t> covered; // pc -> runs that execute it
     for (int i = 4; i < argc; ++i)
@@ -308,6 +327,12 @@ int main(int argc, char **argv)
         }
         else if (a == "--hints" && i + 1 < argc)
             hintsPath = argv[++i];
+        else if (a == "--cutscan" && i + 1 < argc)
+        {
+            cutscanPath = argv[++i];
+            if (stageEntry == 0xFFFFFFFF)
+                stageEntry = 0xFFFFFFFE; // the stepping loop, no stage
+        }
         else if (a == "--max-cases" && i + 1 < argc)
             maxCases = std::stol(argv[++i]);
         else if (a == "--allow" && i + 1 < argc)
@@ -390,6 +415,9 @@ int main(int argc, char **argv)
             sink.forward = false;
             packetSink = &sink;
             hints.reset();
+            scanPath.clear();
+            scanLast.clear();
+            scanClipWrites.clear();
             const auto finish = [&](uint32_t exitFlags) {
                 if (long(cases) % stride == 0 && long(cases) / stride < maxCases)
                 {
@@ -411,7 +439,39 @@ int main(int argc, char **argv)
                 kicks.clear();
             };
             const auto visit = [&](uint32_t pc) {
-                hints.before(vu, pc, inside && !hintsPath.empty());
+                hints.before(vu, pc, (inside || !cutscanPath.empty()) && !hintsPath.empty());
+                if (!cutscanPath.empty())
+                {
+                    uint32_t lower;
+                    std::memcpy(&lower, code.data() + pc, 4);
+                    const uint32_t op = lower >> 25;
+                    const bool macReader = op == 0x18 || op == 0x1A || op == 0x1B;
+                    const bool clipReader = op == 0x10 || op == 0x12 || op == 0x13 || op == 0x1C;
+                    const uint32_t src = macReader ? hints.macSource : clipReader ? hints.clipSource : 0xFFFFFFFF;
+                    scanPath.push_back(pc);
+                    if (src != 0xFFFFFFFF && scanLast.count(src))
+                    {
+                        // MAC flags: the snapshot holds the visible flags, so no stage may start between the write and
+                        // its reader. Clip flags: the snapshot holds them as landed, which is what the reader sees until
+                        // the next clip write (CLIP, FCSET) after the source; only a start after that one is wrong
+                        size_t from = scanLast[src] + 1;
+                        if (clipReader)
+                        {
+                            auto w = std::upper_bound(scanClipWrites.begin(), scanClipWrites.end(), scanLast[src]);
+                            from = w == scanClipWrites.end() ? scanPath.size() : *w + 1;
+                        }
+                        for (size_t k = from; k < scanPath.size(); ++k)
+                            scanSplitsFlags.insert(scanPath[k]);
+                    }
+                    const auto &dec = vu.getDecodedInstructionPairForPc(code.data(), 0x4000, nullptr, pc);
+                    if (dec.upperUsage.writesClip || dec.lowerUsage.writesClip)
+                        scanClipWrites.push_back(scanPath.size() - 1);
+                    scanLast[pc] = scanPath.size() - 1;
+                    scanPending[pc] |= pending(vu);
+                    ++scanVisits[pc];
+                    if (vu.m_state.branchPending)
+                        scanDelay.insert(pc);
+                }
                 if (inside && stageExits.count(pc) && !vu.m_state.branchPending)
                 {
                     const bool ok = clean(vu, &pendingExit);
@@ -421,6 +481,10 @@ int main(int argc, char **argv)
                 }
                 if (!inside && pc == stageEntry && !vu.m_state.branchPending)
                 {
+                    entryClips.clear();
+                    for (const auto &f : vu.m_flagPipeline)
+                        if (f.valid && f.writesClip)
+                            entryClips.insert(f.issueCycle);
                     const bool ok = clean(vu, &pendingEntry);
                     uncleanEntry += !ok;
                     flags = ok ? 0u : 1u;
@@ -431,6 +495,18 @@ int main(int argc, char **argv)
                 }
                 if (inside)
                 {
+                    if (!entryClips.empty())
+                    {
+                        // a clip-flag reader while a CLIP from before the entry is still in flight reads older
+                        // flags than the snapshot's (landed) ones: such a boundary cannot be judged
+                        bool still = false;
+                        for (const auto &f : vu.m_flagPipeline)
+                            still |= f.valid && f.writesClip && entryClips.count(f.issueCycle);
+                        if (!still)
+                            entryClips.clear();
+                        else if (vu.getDecodedInstructionPairForPc(code.data(), 0x4000, nullptr, pc).lowerUsage.readsClip)
+                            ++earlyClipReads;
+                    }
                     uint32_t lower;
                     std::memcpy(&lower, code.data() + pc, 4);
                     if ((lower & 0xFE0007FFu) == 0x800006FCu) // XGKICK is
@@ -502,6 +578,18 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "stage %x: %" PRIu64 " cases (%" PRIu64 " written), unclean entries %" PRIu64 ", unclean exits %" PRIu64
                              ", ended inside %" PRIu64 "\n",
                      stageEntry, cases, std::min<uint64_t>((cases + stride - 1) / stride, uint64_t(maxCases)), uncleanEntry, uncleanExit, unfinished);
+    if (!cutscanPath.empty())
+    {
+        std::ofstream c(cutscanPath);
+        for (const auto &[pc, bits] : scanPending)
+        {
+            c << std::hex << pc << ' ' << bits << ' ' << (scanDelay.count(pc) ? 1 : 0) << ' ' << (scanSplitsFlags.count(pc) ? 1 : 0)
+              << std::dec << ' ' << scanVisits[pc] << '\n';
+        }
+    }
+    if (stageEntry < 0xFFFFFFFE && earlyClipReads)
+        std::fprintf(stderr, "  clip flags read before a CLIP in flight at the entry landed: %" PRIu64 " times (move the entry)\n",
+                     earlyClipReads);
     for (int side = 0; side < 2 && stageEntry != 0xFFFFFFFF; ++side)
     {
         std::fprintf(stderr, "  in flight at the %s:", side ? "exits" : "entry");

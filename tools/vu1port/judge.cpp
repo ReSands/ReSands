@@ -1,7 +1,9 @@
 // The judge of a VU1 stage port (vu_task.h): runs stage() on every case recorded by
 // `vu1replay --stage` and compares with the interpreter's result.
 //
-//   judge <cases> [--ulps N] [--report N] [--quiet]
+//   judge <cases> [--ulps N] [--report N] [--quiet] [--time N]
+// --time N: after judging, run every case N more times and print the mean time per stage() call (build the
+// judge with -O2 and no sanitizer for this: VU1_TIMING=1 build.sh).
 // Exact: the exit pc, vi registers, clip flags, XGKICK count. Within N units in the last place (default 4):
 // vf, ACC, Q, P, I, and every 32-bit word of the data memory and of the kicked packets (integers in them
 // must then be within N as well: GS coordinates come from float conversions). MAC and status flags are
@@ -152,17 +154,21 @@ int main(int argc, char **argv)
     }
     uint64_t tol = 4;
     int reportCases = 3;
+    int timeRuns = 0;
     for (int i = 2; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--ulps") && i + 1 < argc)
             tol = std::strtoull(argv[++i], nullptr, 10);
         else if (!std::strcmp(argv[i], "--report") && i + 1 < argc)
             reportCases = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--time") && i + 1 < argc)
+            timeRuns = std::atoi(argv[++i]);
     }
     std::thread(watchdog).detach();
     std::ifstream f(argv[1], std::ios::binary);
     auto in = std::make_unique<VuState>(), want = std::make_unique<VuState>(), got = std::make_unique<VuState>();
     int n = 0, failed = 0, shown = 0;
+    std::vector<std::unique_ptr<VuState>> inputs; // kept for --time
     std::string out;
     for (;;)
     {
@@ -192,6 +198,8 @@ int main(int argc, char **argv)
         Report r;
         compare(*want, *got, kicks, tol, r);
         ++n;
+        if (timeRuns > 0)
+            inputs.push_back(std::make_unique<VuState>(*in));
         if (r.lines)
         {
             ++failed;
@@ -208,6 +216,23 @@ int main(int argc, char **argv)
     {
         std::printf("no cases\n");
         return 2;
+    }
+    if (timeRuns > 0)
+    {
+        const unsigned csr = _mm_getcsr();
+        _mm_setcsr(csr | 0x6000u);
+        double ns = 0;
+        for (const auto &c : inputs)
+            for (int k = 0; k < timeRuns; ++k)
+            {
+                *got = *c;
+                g_kicks.clear();
+                const auto t0 = std::chrono::steady_clock::now();
+                stage(*got);
+                ns += double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+            }
+        _mm_setcsr(csr);
+        std::printf("time: %.0f ns per run (%d cases x %d)\n", ns / (double(inputs.size()) * timeRuns), n, timeRuns);
     }
     if (!failed)
     {
