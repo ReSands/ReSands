@@ -332,13 +332,14 @@ namespace pop_native_live
         // Palettes changed in memory (N1, 25 Oct): effects recolour a texture by rewriting its palette and
         // re-uploading it (GAO_ModifierSfx_UpdateMaterialPalette 0x421100: the dagger's slow blends an enemy's
         // palette towards sand), while the packs hold the disc palette. A 256-colour texture whose palette in
-        // memory differs is decoded with that one for the frame, under a key kPaletteKey + n (inside the shadow
-        // key range: sent with its pixels every frame). TEX_List_GetTexture 0x44FA00 / GetPalette 0x44F940:
-        // entries of 16 bytes (+10 index, +0xF bit 5 = in use); texture +4 palette index, +8 flags (0x40:
-        // paletted); palette +4 colours (+0x60 when its +8 has 0x40), 256-colour when (+8 & 0x41) is 0 or 0x40.
+        // memory differs is decoded with that one for the frame, under the key kPaletteKey + its texture index
+        // (inside the shadow key range: sent with its pixels every frame, the renderer updates its image).
+        // TEX_List_GetTexture 0x44FA00 / GetPalette 0x44F940: entries of 16 bytes (+10 index, +0xF bit 5 = in use);
+        // texture +4 palette index, +8 flags (0x40: paletted); palette +4 colours (+0x60 when its +8 has 0x40),
+        // 256-colour when (+8 & 0x41) is 0 or 0x40.
         constexpr uint32_t kPaletteKey = 0xFE5D8000u;
-        std::vector<pop_native::Image> g_framePaletteImages;
-        std::unordered_map<uint32_t, uint32_t> g_framePaletteKeys; // texture index -> key used this frame
+        std::unordered_map<uint32_t, pop_native::Image> g_framePaletteImages; // texture index -> recoloured this frame
+        std::unordered_map<uint32_t, uint32_t> g_framePaletteKeys;            // texture index -> key used this frame
         uint32_t texListEntry(uint8_t *rdram, uint32_t countAddr, uint32_t listAddr, uint32_t index)
         {
             const uint32_t count = guestAny(rdram, countAddr), list = guestAny(rdram, listAddr);
@@ -363,28 +364,28 @@ namespace pop_native_live
             const uint32_t pflags = pal ? guest8(rdram, pal + 8) & 0x41 : 1;
             if (pal && (pflags == 0 || pflags == 0x40) && guestAny(rdram, pal + 4))
             {
-                static std::unordered_map<uint32_t, std::vector<uint8_t>> disc; // key -> pack palette (empty: none)
+                // the pack's palette, kept once found (after a save-state load the packs load on texture misses)
+                static std::unordered_map<uint32_t, std::vector<uint8_t>> disc;
                 auto it = disc.find(key);
                 if (it == disc.end())
                 {
                     std::vector<uint8_t> bytes;
-                    const auto packs = loadedPacks();
-                    for (const auto &p : packs)
+                    for (const auto &p : loadedPacks())
                         if (p->index.records.count(key) && pop_assets::texturePalette(p->index, key, bytes))
                             break;
-                    if (bytes.empty() && packs.empty())
-                        return g_framePaletteKeys[index] = key; // packs not loaded yet: look again next frame
+                    if (bytes.empty())
+                        return g_framePaletteKeys[index] = key;
                     it = disc.emplace(key, std::move(bytes)).first;
                 }
                 const uint8_t *ram = getConstMemPtr(rdram, guestAny(rdram, pal + 4) + (pflags == 0x40 ? 0x60 : 0));
-                if (!it->second.empty() && std::memcmp(ram, it->second.data(), 1024) != 0)
+                if (index < 0x8000 && std::memcmp(ram, it->second.data(), 1024) != 0)
                 {
                     pop_native::Image img;
                     for (const auto &p : loadedPacks())
                         if (p->index.records.count(key) && pop_assets::decodeTexture(p->index, key, img, ram))
                         {
-                            result = kPaletteKey + uint32_t(g_framePaletteImages.size());
-                            g_framePaletteImages.push_back(std::move(img));
+                            result = kPaletteKey + index;
+                            g_framePaletteImages[index] = std::move(img);
                             break;
                         }
                 }
@@ -3401,7 +3402,7 @@ namespace pop_native_live
                         img = g_frameShadowImages[m.textureKey - kShadowKey];
                         found = true;
                     }
-                    else if (m.textureKey - kPaletteKey < g_framePaletteImages.size())
+                    else if (m.textureKey - kPaletteKey < 0x8000u && g_framePaletteImages.count(m.textureKey - kPaletteKey))
                     {
                         img = g_framePaletteImages[m.textureKey - kPaletteKey]; // recoloured this frame (never cached)
                         found = true;
