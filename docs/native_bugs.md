@@ -244,3 +244,10 @@ Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (
 triage, note the finding here and delete the capture once its bug is fixed and checked (or it showed nothing).
 Planned: compress the capture pictures in the background thread when written (next rebuild).
 
+**Clear-out 25 Oct evening (user asked):** kept `.glitch` captures only for bugs still open or on watch: 200200 (N6),
+200833 (N8), 201642 / 201650 (N11), 202128 (N12); the others deleted on both machines (`.glitch.txt` kept). States
+deleted: near-duplicates (several saves seconds apart in the same spot: kept every save the docs name, else the last of
+the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 214002 / 214005), closed-bug extras
+125331, 134528, 135513, 135609, the N1 capture saves (`n1_*`, `n1cap_*`), and the Mac's exact copies (`game/states_pc/`,
+`prof1019b/`, the `in/` and `ref/` copies). Freed 7.6 GB on the PC (left: 10.6 GB), 8.2 GB on the Mac.
+

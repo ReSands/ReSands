@@ -54,7 +54,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   (cause unknown; act only on a reproduced freeze; no speculative emulated-sound fixes). `docs/saves_1021.md`.
 - **Next (agreed order):** 0.13 native effects: water (P6), halos, light shafts, flashes; then retry `-NativeLate`
   (if the glow still pops with halos/glow native, dig into the depth handoff: `docs/native_bugs.md` "Save-point pop").
-  Small ones on the side: `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the
+  Small ones on the side: `.glitch` compression (triaged captures deleted 25 Oct, `docs/native_bugs.md` "Storage"); why a `-Fast` rebuild once recompiled the
   whole runtime; Esc did not quit one session (25 Oct 14:59, killed). Lower: rewind at 30 fps (not reproduced), fight
   fps (save boots ~49-58 fps), camera X reversed in fixed views, door flicker with a black web, trouser flicker,
   torch point lights, audio bugs (for 0.3), Alt+F4 once did not close the game.
