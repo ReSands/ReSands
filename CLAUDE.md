@@ -94,7 +94,22 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.
-- **HANDOFF (24 Oct ~19:00; start here after the context clear).** In-game session 18:41-18:53 on the late-lists
+- **HANDOFF 3 (25 Oct ~12:20; START HERE, supersedes HANDOFF 1-2 below).** Done this session (all on the PC, in
+  game): P9 port in place of the sprite interpreter (42d8fbc; user played 11:53: fights 50-60 fps, 180k P9 runs, 0
+  handovers); native renderer after save-state loads (fe36fe5 packindex pack loading, 604e051 4-bit textures); see
+  "Save-state boots run the native renderer" below. **Next: native shadow receivers for the entries without records**
+  (CJIdxMesh entries, blob receivers +0x20 / FUN_004C2E00; `docs/native_renderer.md` "Native shadows", N12 in
+  `docs/native_bugs.md`). Judge in game, not offline: the saves' shadow lists are empty offline (the game empties
+  them after drawing; checked again on 115837/115853: offline they end at `mesh +0x98`, in game at `shadow +0x5c`).
+  Loop: edit -> `game\jobs\stnative.ps1` on the PC (start-job; -Fast build, then 45 s boots of 184926 / 115837 /
+  115853 with R1 held; prints fps + world/late/shadow/sprite counters; logs `game\recomp-sotc\stnative_<save>.log`);
+  add `POP_NATIVE_WORLD_WHY=1` to its env for per-call reasons (`game\jobs\stwhy.ps1` is the 30 s variant). Goal:
+  `list entries without records` -> 0 and `ended by: shadow +0x5c` gone on 115837/115853; then the user checks the
+  save-point glow (115837: glow missing with many enemies on screen) in play. Copies on the Mac:
+  `game/analysis/saves1025/` (the two saves, their .glitch.txt, the stnative logs, play log 115307). Ask before
+  boots (TV). Still open from before: N1 (slowed enemies not sandy brown), N2-N4, N8-N11 caches, rewind at 30 fps
+  (115853 did not reproduce the drop in a 45 s boot), crash 2.
+- **HANDOFF (24 Oct ~19:00).** In-game session 18:41-18:53 on the late-lists
   build (042b0b1, before sprites): clouds and torch smoke fine; fights at 47-56 fps for a minute or more (log
   `game/analysis/saves1024b/play_20261024_184116.log`), save of a slow fight `saves1024b/play_20261024_184926.state`;
   **then a hang at the end of a fight** (fps 0, audio stuttering; one thread 15484 at 100% CPU, the others idle).
