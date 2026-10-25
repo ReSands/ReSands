@@ -166,6 +166,9 @@ boundary that test depth (the +0x98 glow mask, the halos) test against native Z 
 or the GS's exact Z depending on which side drew the save point's parts, so the glow flips with the camera. The pop
 goes away for good when the passes after the late lists are native too (halos/glow, 0.13 / 0.2).
 Also seen: Esc did not quit the second session (killed with taskkill).
+**Decision (user, 25 Oct):** late lists back on the GS by default (`play.ps1 -NativeLate` opts in; 065fc09); revisit if
+0.13 (native halos/glow) does not fix it. Fps cost: none. Fight saves, R1 held, 45 s (`game/jobs/latefps.ps1`, 3
+samples each): 184926 49.7 (GS) vs 49.5 (native), 115837 53.7 vs 46.2, 115853 58.2 vs 56.3.
 
 25 Oct: tried with the torch saves 201244 / 201248 (`game/jobs/n10halo.ps1`, default / ZBIAS 0 / GS only): the game
 resumes and the Prince walks away from the torch, so no shot has the torch in view. Needs the in-game test.

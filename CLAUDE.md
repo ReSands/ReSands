@@ -56,12 +56,9 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   3. **N8/N9/N11 stale per-address caches**: fix 3664837 built 25 Oct (ReadElement drops the element's entries);
      in-game check pending (201124's door after the staircase climb).
   4. **N1 slowed enemies not sandy brown: closed 25 Oct** (palette rewritten in memory; `recolouredKey`).
-  5. **N10 + save-point glow pop** (torch/glow brightness changes as the camera turns; needs the user at a torch:
-     save boots walk away from it): the halo pass (FUN_004ABFC0, GS)
-     tests visibility against Z that partly comes from the native world (biased by ZBIAS 128). Test: default vs
-     `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld` at one torch and one save point. Save point partly drawn in a fight
-     (125417): **closed 25 Oct**, a PS2 playthrough video shows the same (sand glow only, column fades in over the fight).
-     A GS reference (an old GSdx plugin build fed our GIF stream, est. a few days) deferred to 0.2 (user asked).
+  5. **N10 + save-point glow pop**: the save-point pop came from the native late lists (user in-motion checks
+     25 Oct); they are on the GS by default now (`-NativeLate` opts in, no fps cost); revisit if 0.13 does not fix it.
+     N10 (torch brightness changing with the camera) may be the same: check at a torch in the next play session.
   6. **N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat.**
   7. **N5 black one-frame flashes**: fix 30ef5d5 built 24 Oct; confirm none in the 25 Oct play log, then close.
   8. **Small ones:** `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the whole runtime.
