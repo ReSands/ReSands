@@ -1,5 +1,5 @@
 # Play the game on the PC: the pop-sotc play build at 60 fps (POP_60FPS=1), no time limit.
-# Usage: tools\windows\play.ps1 [-Fps30] [-Profile] [-NoNativeWorld] [-NoNativeCharacters] [-NoNativeTranslucent] [-NoNativeShadows] [-NoNativeLate] [-Env 'A=1;B=2']
+# Usage: tools\windows\play.ps1 [-Fps30] [-Profile] [-NoNativeWorld] [-NoNativeCharacters] [-NoNativeTranslucent] [-NoNativeShadows] [-NativeLate] [-Env 'A=1;B=2']
 #        The static world is drawn by the native Vulkan renderer (POP_NATIVE_WORLD=1, renderer step 1, in game
 #        since 22 Oct); -NoNativeWorld leaves it all to the emulated GS. The opaque characters are native too
 #        (POP_NATIVE_CHARACTERS=1, renderer step 2, judged in game by the user 22 Oct); -NoNativeCharacters
@@ -8,9 +8,10 @@
 #        -NoNativeTranslucent leaves them to the GS.
 #        The projected shadows are native too (POP_NATIVE_SHADOWS=1; user check in game 24 Oct: floors right, lever
 #        flicker gone); -NoNativeShadows leaves them to the GS.
-#        The lists after the shadows (+0x88, +0xA8) and the GFX particles are native too while no earlier draw of the
-#        frame went to the GS (POP_NATIVE_LATE=1; offline A/B over 203 saves 24 Oct, 18.07 -> 17.58; in-game check
-#        pending); -NoNativeLate leaves them to the GS.
+#        The lists after the shadows (+0x88, +0xA8) and the GFX particles stay on the GS by default since 25 Oct:
+#        drawn natively (-NativeLate, POP_NATIVE_LATE=1, only while no earlier draw of the frame went to the GS) they
+#        made the save point's glow pop as the camera turned (docs/native_bugs.md); revisit once halos/glow are
+#        native (0.13).
 #        -Fps30 plays at the original 30 fps (to recheck something seen at 60).
 #        -Profile: every kept quick-save also gets a profile of the seconds before it (see below); costs a
 #        little speed itself, so it is a separate shortcut.
@@ -24,7 +25,7 @@
 # game is closed, each new .prof is symbolized to <name>.report.txt with this build's linker map.
 # Esc, Alt+F4 or closing the window quits (Esc: runtime patch 39; PS2X_ESC_QUITS=0 turns it off). Avoid F9 (quick-load).
 # Log: game\recomp-sotc\play_<date>_<time>.log, written when the game window is closed.
-param([switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [switch]$NoNativeCharacters, [switch]$NoNativeTranslucent, [switch]$NoNativeShadows, [switch]$NoNativeLate, [string]$Env = '', [switch]$Shortcuts)
+param([switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [switch]$NoNativeCharacters, [switch]$NoNativeTranslucent, [switch]$NoNativeShadows, [switch]$NativeLate, [string]$Env = '', [switch]$Shortcuts)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 
@@ -45,7 +46,7 @@ if ($Shortcuts) {
 
 $fps = $(if ($Fps30) { '0' } else { '1' })
 $name = "play_$(Get-Date -Format 'yyyyMMdd_HHmmss')" # seconds: two boots in one minute overwrote a log (23 Oct)
-& "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });POP_NATIVE_CHARACTERS=$(if ($NoNativeCharacters) { '0' } else { '1' });POP_NATIVE_TRANSLUCENT=$(if ($NoNativeTranslucent) { '0' } else { '1' });POP_NATIVE_SHADOWS=$(if ($NoNativeShadows) { '0' } else { '1' });POP_NATIVE_LATE=$(if ($NoNativeLate) { '0' } else { '1' });$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
+& "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });POP_NATIVE_CHARACTERS=$(if ($NoNativeCharacters) { '0' } else { '1' });POP_NATIVE_TRANSLUCENT=$(if ($NoNativeTranslucent) { '0' } else { '1' });POP_NATIVE_SHADOWS=$(if ($NoNativeShadows) { '0' } else { '1' });POP_NATIVE_LATE=$(if ($NativeLate) { '1' } else { '0' });$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
 
 $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"
 foreach ($prof in Get-ChildItem "$Root\game\ps2\disc\states\play_*.prof" -ErrorAction SilentlyContinue) {

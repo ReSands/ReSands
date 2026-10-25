@@ -41,9 +41,9 @@ Older status blocks and handoffs 1-4: `docs/history.md` (last moved: "Moved from
 Keep this section short: finished work goes to the topic docs, old status blocks to `docs/history.md`.
 
 - **Where we are.** Native renderer between roadmap 0.12 and 0.13, all on by default in `play.ps1` (desktop shortcut
-  "PoP 60 fps"; `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows/-NoNativeLate` turn parts
-  off): static world, lit statics, characters, translucents, shadows, the lists after the shadows (+0x88/+0xA8,
-  particles), sprites via the P9 port. User session 25 Oct 12:46: ~60 fps, every shadow projector native. Native
+  "PoP 60 fps"; `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows` turn parts
+  off): static world, lit statics, characters, translucents, shadows, sprites via the P9 port. The lists after the
+  shadows (+0x88/+0xA8, particles) are back on the GS since 25 Oct (save-point pop; `-NativeLate` turns them on). User session 25 Oct 12:46: ~60 fps, every shadow projector native. Native
   rendering works after a save-state load (packs via `packindex.txt`). Details: `docs/native_renderer.md`.
 - **Agreed order (user, 25 Oct):** (1) 0.12 done: shadow receivers fixed (N12, e5ba9a5; the 25 Oct play log: all projectors native); (2) **now:
   the bug sweep below**; (3) then 0.13 (native water P6, halos, light shafts, flashes).
