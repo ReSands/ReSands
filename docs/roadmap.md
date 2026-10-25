@@ -13,6 +13,20 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the emulated GS output
   of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats
   differ, so residual differences must be measured and explained).
+- **Hardware reference (idea, user 25 Oct 2026; tool for 0.2, not investigated yet):** a real PS2 as ground truth for
+  "is this original?" and as the true reference for `tools/livecmp.py`. Not whole save states (emulator snapshots
+  cannot be restored on a console). (a) GS replay (days, estimate): a PS2SDK homebrew player, loaded over ethernet
+  with ps2link/ps2client, loads a frame's VRAM + GS registers (`tools/popstate.py`) and its GS packets
+  (`PS2X_GS_TRACE`), draws them on the real GS and reads the framebuffer back (GS local->host transfer): exact
+  digital pixels, before the display circuit (circuit merge and interlace modelled from the registers; a capture card
+  only if the analogue output matters). Packets come from our recomp, so this checks the GS stage only. (b) DMA chain
+  replay (1-2 weeks, estimate): the frame's chain (`tools/statechain.py`) + VU1 microcode + VU1 memory through the
+  real VIF1/VU1, which also checks our VU1 recomp; the player must sit in RAM the chain does not use. Native frames
+  are still scored with a tolerance (Vulkan vs GS rasterisation). Hardware: any region (homebrew bypasses the disc
+  region lock, the GS is the same chip), a model that runs FreeMcBoot with ethernet (fat + network adapter, or a
+  slim); a fat or early slim is the safest reference (later slims have a merged/revised GS; no known rendering
+  differences, unverified). First step: survey PS2 homebrew GS test tools (none found on 25 Oct beyond PCSX2's own
+  dump replay), then try (a) on save 145139 (save point pop).
 - **0.3 = native sound + native PS2 movie decoder:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2
   emulation); a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; replaces
   the 13 Oct plan to adapt ps2-web-recomp's IPU). Reference: GT4Recomp's frame pacing + audio rate control
