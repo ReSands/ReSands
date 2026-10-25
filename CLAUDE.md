@@ -55,9 +55,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
      emulated sound speculatively (native sound replaces it); only act on a reproduced freeze. Needed for 0.1.
   3. **N8/N9/N11 stale per-address caches**: fix 3664837 built 25 Oct (ReadElement drops the element's entries);
      in-game check pending (201124's door after the staircase climb).
-  4. **N1 slowed enemies not sandy brown: fixed 25 Oct** (the slow rewrites the enemy texture's palette in memory;
-     native now decodes paletted textures with the RAM palette when it differs, `recolouredKey`; `docs/native_bugs.md`).
-     User saw it in a save-state boot; cold-boot check pending.
+  4. **N1 slowed enemies not sandy brown: closed 25 Oct** (palette rewritten in memory; `recolouredKey`).
   5. **N10 + save-point glow pop** (torch/glow brightness changes as the camera turns; needs the user at a torch:
      save boots walk away from it): the halo pass (FUN_004ABFC0, GS)
      tests visibility against Z that partly comes from the native world (biased by ZBIAS 128). Test: default vs

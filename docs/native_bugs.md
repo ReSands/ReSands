@@ -50,7 +50,7 @@ when its flags have 0x40) differs from the pack's is decoded with the RAM palett
 `recoloured texture <key> ...`. Ruled out on the way: lighting / constant colour (native reads the game's constant
 colour correctly; a fix there, 8732934, was reverted), skinned pass 2 (none). First live try failed: the "no pack
 palette" result was cached before the enemy's pack had loaded (packs load late after a state load), and per-frame
-keys changed meaning between frames. Pending: the user's cold-boot check (fade back to normal colours too).
+keys changed meaning between frames. **Closed 25 Oct**: the user confirmed slowed enemies render properly from a cold boot.
 
 ## N6: sustained frame-rate drop (save 200200, 20:02)
 
@@ -152,6 +152,21 @@ pushes all of it back (more halo passes the test). A light set into a sconce or 
 and the outcome changes with the view angle. N2's capture is separate (the game's own fog table). Test (in game,
 one torch, one save point): default vs `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld`. Likely fix: halos query
 the GS-equivalent depth (unbiased native Z; or run the occlusion test natively from the light's position).
+**Save-point pop, 25 Oct (saves 145139 / 145142, `game/analysis/saves1025d/`): caused by the native late lists.**
+The user judged it in motion at 145139: GS only (all native off) no pop; all native but `-NoNativeLate` no pop
+("perfect"); all native with `POP_NATIVE_WORLD_ZBIAS=0` still fading a little, much less than default. (My earlier
+"GS-only pops too" came from screenshots and was wrong.) Facts: the frame's one halo is the moon (world 32.4, -295.2,
+83.9; core 8x8 px at the moon, depth ~5,600; its 256 px quad washes over the column). The flare test
+`GFX_i_Flare_TestDepth` (0x466CC0) asks the driver for depth with request 0x1B, but `PS2_l_Request` (0x4B4F40) only
+handles 0x16 (ReloadPalette) and 1 (fog), so that test is geometric only. Offline world-mode depth at the moon core is
+far (~1,450) with or without late lists. Live, the late lists start pure in nearly every frame and end inside +0x88 at
+a GFX draw (~18 native calls, the rest GS; `[pop:world] late lists` line): the translucent lists are depth sorted, so
+the camera moves draws across that native/GS boundary. Working explanation (not proven per draw): GS draws after the
+boundary that test depth (the +0x98 glow mask, the halos) test against native Z (biased, slightly different precision)
+or the GS's exact Z depending on which side drew the save point's parts, so the glow flips with the camera. The pop
+goes away for good when the passes after the late lists are native too (halos/glow, 0.13 / 0.2).
+Also seen: Esc did not quit the second session (killed with taskkill).
+
 25 Oct: tried with the torch saves 201244 / 201248 (`game/jobs/n10halo.ps1`, default / ZBIAS 0 / GS only): the game
 resumes and the Prince walks away from the torch, so no shot has the torch in view. Needs the in-game test.
 Note for screenshot jobs: `-Shots` counts fields from boot, and the counter jumps to the save's field at the load,
