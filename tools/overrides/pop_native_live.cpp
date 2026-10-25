@@ -2130,6 +2130,14 @@ namespace pop_native_live
         }
 #endif
 
+        // native shadows (below): which records each Display call added, so a shadow list entry finds its geometry
+        void noteRecords(uint64_t key, size_t n0, size_t n1, size_t n2);
+        // CJIdxMesh::Display(mesh, matrix index) has no pass argument; bit 60 keeps its keys apart from the others
+        inline uint64_t idxCallKey(uint32_t mesh, uint32_t index)
+        {
+            return (uint64_t(1) << 60) | (uint64_t(mesh) << 16) | (index & 0xFFFF);
+        }
+
         template <int N>
         void otherDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -2167,6 +2175,7 @@ namespace pop_native_live
                     if (!batches.empty())
                     {
                         g_frameRefs.emplace_back(std::move(batches), std::make_pair(model, currentMaterial(rdram)));
+                        noteRecords(idxCallKey(mesh, index), g_frameDraws.size(), g_framePosed.size(), g_frameRefs.size() - 1);
                         // POP_NATIVE_WORLD: one mesh, no chain
                         std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
                         if (g_world && worldStateOk(rdram) && worldFinish(recs, {}))
@@ -2907,6 +2916,8 @@ namespace pop_native_live
         struct ShadowStats
         {
             uint64_t projectors = 0, nativeProjectors = 0, mirror = 0, casters = 0, casterTris = 0, receivers = 0, receiverTris = 0, culled = 0, noGeometry = 0;
+            // why: entries without records (CJIdxMesh, mesh/ref, other kinds), receivers whose base went to the GS
+            uint64_t missIdx = 0, missMesh = 0, missOther = 0, baseOnGs = 0;
         } g_shadowStats;
 
         // world position of a record's vertex (row vectors: model is column-major object -> world)
@@ -2966,12 +2977,22 @@ namespace pop_native_live
             uint64_t word;
             std::memcpy(&word, getConstMemPtr(rdram, entry), 8);
             const uint32_t kind = (guest8(rdram, entry + 6) & 0x3F) >> 2, index = uint32_t((word << 26) >> 54);
-            if (kind != 9 && kind != 10)
-                return false; // 4 (CJIdxMesh) not recorded yet
-            const uint32_t pass = guest8(rdram, entry + 0xD) & 0xF;
-            const auto it = g_frameByCall.find((uint64_t(uint32_t(word) << 4) << 16) | index | (uint64_t(pass) << 56));
-            if (it == g_frameByCall.end())
+            uint64_t key;
+            if (kind == 4) // FUN_004B80C0: CJIdxMesh::Display(*(0x6DF870) + low 16 bits x 4, index)
+                key = idxCallKey(guestAny(rdram, 0x006DF870u) + uint32_t(word & 0xFFFF) * 4u, index);
+            else if (kind == 9 || kind == 10)
+                key = (uint64_t(uint32_t(word) << 4) << 16) | index | (uint64_t(guest8(rdram, entry + 0xD) & 0xF) << 56);
+            else
+            {
+                ++g_shadowStats.missOther;
                 return false;
+            }
+            const auto it = g_frameByCall.find(key);
+            if (it == g_frameByCall.end())
+            {
+                ++(kind == 4 ? g_shadowStats.missIdx : g_shadowStats.missMesh);
+                return false;
+            }
             for (const RecordRange &r : it->second)
                 for (size_t i = r.first; i < r.first + r.count; ++i)
                 {
@@ -3081,6 +3102,8 @@ namespace pop_native_live
                 ++g_shadowStats.receivers;
                 for (const auto &[batches, model, native] : geo)
                 {
+                    if (!native)
+                        ++g_shadowStats.baseOnGs;
                     allNative = allNative && native;
                     // the projector position in object space (the VU setup: (P - W.t) . W's axes)
                     float local[3];
@@ -3799,10 +3822,13 @@ namespace pop_native_live
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
-                    std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu\n",
+                    std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu "
+                                         "(idx %llu, mesh/ref %llu, other kinds %llu), receiver bases on the GS %llu\n",
                                  (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
                                  (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.receivers,
-                                 (unsigned long long)g_shadowStats.noGeometry);
+                                 (unsigned long long)g_shadowStats.noGeometry, (unsigned long long)g_shadowStats.missIdx,
+                                 (unsigned long long)g_shadowStats.missMesh, (unsigned long long)g_shadowStats.missOther,
+                                 (unsigned long long)g_shadowStats.baseOnGs);
             }
             g_origKick(rdram, ctx, runtime);
         }
