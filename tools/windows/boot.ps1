@@ -59,7 +59,8 @@ if ($Shots) {
     $env:PS2X_SCREENSHOT_FIELDS = $Shots
     $env:PS2X_SCREENSHOT_DIR = "$R\screens"
 }
-$env:POP_INPUT = $PadInput
+# (a POP_INPUT given in -Env stays: this line used to clear it, so -Env 'POP_INPUT=...' never pressed anything)
+if ($PadInput -or -not $restoreEnv.ContainsKey('POP_INPUT')) { $env:POP_INPUT = $PadInput }
 # The override's async GS needs its GIF tap, which would bypass a runtime's own GS pipeline
 # (the SotC fork has one), so only the original setup (game\recomp) uses it.
 $async = $Play -and -not $NoAsyncGs -and ($Out -eq 'game\recomp')
