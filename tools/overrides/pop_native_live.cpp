@@ -58,11 +58,12 @@ namespace pop_live_client // pop_live_client.cpp: the live native window's frame
 #include <unordered_set>
 #include <vector>
 
-// Sprites (CJadeSpriteElement, list kind 8) are placed by VU1 program P9; until it is ported to C++ the native path
-// runs it on the runtime's VU1 interpreter (pop-sotc: its source sits next to the runner directory this file is
-// copied to; offline, pop_state_frame_vu1 defines POP_SPRITE_VU1). The interpreter hands XGKICK packets to the
-// thread's packet sink (vu1_impl::packetSink, an inline variable of ps2_vu1_impl.inl, declared here identically);
-// with forward = false they never reach the GS.
+// Sprites (CJadeSpriteElement, list kind 8) are placed by VU1 program P9: its C++ port (tools/vu1port/ported/p9.cpp,
+// judged against the interpreter on whole runs), with the runtime's VU1 interpreter as the fallback at a pc no
+// stage of the port starts at (pop-sotc: the interpreter's source sits next to the runner directory this file is
+// copied to; offline, pop_state_frame_vu1 defines POP_SPRITE_VU1). Both hand XGKICK packets to the thread's packet
+// sink (vu1_impl::packetSink, an inline variable of ps2_vu1_impl.inl, declared here identically); with forward =
+// false they never reach the GS.
 #if defined(POP_SPRITE_VU1) || __has_include("../lib/vu/ps2_vu1_impl.inl")
 #undef POP_SPRITE_VU1
 #define POP_SPRITE_VU1 1
@@ -77,6 +78,15 @@ namespace vu1_impl
     };
 
     inline thread_local Vu1PacketSink *packetSink = nullptr;
+}
+#define VU_TASK_R 1 // P9 uses R (VuState carries it)
+#include "../../../../../../tools/vu1port/vu_gif.h"
+#include "../../../../../../tools/vu1port/ported/p9.cpp"
+// the port's XGKICK: the packet as the interpreter's transfer would send it (the judge compares the two)
+void xgkick(VuState &vu, uint32_t qwordAddress)
+{
+    if (vu1_impl::Vu1PacketSink *sink = vu1_impl::packetSink)
+        sink->packets.push_back(vuGifPacket(vu.mem, qwordAddress));
 }
 namespace pop_native_live
 {
@@ -1650,17 +1660,22 @@ namespace pop_native_live
         // ones only a colour (TOP+7) and their sprites (count TOP+100, 3 qw each from TOP+101), so the VU data memory
         // and the program's position carry over from draw to draw: one interpreter and one data image for all.
         // Output: GS sprites split into 32-pixel strips; each strip becomes a quad unprojected through +0x200.
+        // The port (POP_NATIVE_P9=0: the interpreter only) keeps the registers in `port`; its data memory is the one
+        // both run on. A run from 0x340 ends at the E bit at 0x380, so the packet's MSCNT goes on at 0x390; the
+        // port does not report where other runs end (pc 0xffffffff), the interpreter does.
         struct SpriteVu
         {
             std::unique_ptr<VU1Interpreter> vu;
-            std::vector<uint8_t> code, data;
-            uint32_t tops = 0, cl = 4, wl = 4;
-            bool loaded = false, broken = false;
+            std::unique_ptr<VuState> port;
+            std::vector<uint8_t> code;
+            uint32_t tops = 0, cl = 4, wl = 4, next = 0xFFFFFFFFu;
+            bool loaded = false, broken = false, usePort = false;
+            uint8_t *data() { return port->mem; }
         } g_spriteVu;
         alignas(16) unsigned char g_spriteGsStandIn[64]; // the GS reference execute() wants; never touched (forward = false)
         struct SpriteStats
         {
-            uint64_t draws = 0, native = 0, quads = 0, failed = 0;
+            uint64_t draws = 0, native = 0, quads = 0, failed = 0, runs = 0, interpreted = 0;
         } g_spriteStats;
 
         bool spriteLoadProgram(uint8_t *rdram)
@@ -1686,24 +1701,72 @@ namespace pop_native_live
                 return false;
             }
             g_spriteVu.vu = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
-            g_spriteVu.data.assign(0x4000, 0);
+            g_spriteVu.port = std::make_unique<VuState>();
+            std::memset(g_spriteVu.port.get(), 0, sizeof(VuState));
+            g_spriteVu.port->vf[0][3] = 1.0f;
+            const char *e = std::getenv("POP_NATIVE_P9");
+            g_spriteVu.usePort = !g_spriteRunHook && !(e && *e == '0'); // the P9 trace records interpreter runs
             return true;
         }
 
-        // one VU run: from `pc` (MSCAL/MSCALF) or on from where the last one ended (MSCNT, pc < 0)
-        void spriteRun(int32_t pc)
+        // the port's registers to the interpreter and back (stage borders: nothing in flight)
+        void spriteToInterpreter(const VuState &v, VU1State &i)
+        {
+            std::memcpy(i.vf, v.vf, sizeof i.vf);
+            std::memcpy(i.vi, v.vi, sizeof i.vi);
+            std::memcpy(i.acc, v.acc, sizeof i.acc);
+            i.q = v.q, i.p = v.p, i.i = v.i, i.r = v.r, i.mac = v.mac, i.clip = v.clip, i.status = v.status;
+        }
+        void spriteFromInterpreter(const VU1State &i, VuState &v)
+        {
+            std::memcpy(v.vf, i.vf, sizeof v.vf);
+            std::memcpy(v.vi, i.vi, sizeof v.vi);
+            std::memcpy(v.acc, i.acc, sizeof v.acc);
+            v.q = i.q, v.p = i.p, v.i = i.i, v.r = i.r, v.mac = i.mac, v.clip = i.clip, v.status = i.status;
+        }
+
+        // one VU run: from `pc` (MSCAL/MSCALF) or on from where the last one ended (MSCNT, pc < 0); false = the
+        // port cannot tell where to go on (the sprites then stay on the GS for the session)
+        bool spriteRun(int32_t pc)
         {
             SpriteVu &s = g_spriteVu;
             GS &gs = *reinterpret_cast<GS *>(g_spriteGsStandIn);
             const unsigned csr = _mm_getcsr();
             _mm_setcsr(csr | 0x6000u); // round toward zero, as the runtime runs VU code
-            if (g_spriteRunHook)
-                g_spriteRunHook(*s.vu, s.code.data(), s.data.data(), gs, pc, s.tops);
+            ++g_spriteStats.runs;
+            if (s.usePort)
+            {
+                VuState &v = *s.port;
+                const uint32_t entry = pc >= 0 ? uint32_t(pc) : s.next;
+                if (entry == 0xFFFFFFFFu)
+                {
+                    _mm_setcsr(csr);
+                    std::fprintf(stderr, "[pop:native] sprite program: MSCNT after a run the port cannot place; sprites stay on the GS\n");
+                    return false;
+                }
+                v.pc = entry;
+                v.top = s.tops;
+                vu1_p9::run(v);
+                s.next = entry == 0x340 ? 0x390u : 0xFFFFFFFFu;
+                if (v.pc != 0xFFFFFFFFu)
+                {
+                    // a pc no stage starts at (a branch the traces never took): the interpreter takes the run over
+                    if (g_spriteStats.interpreted++ < 8)
+                        std::fprintf(stderr, "[pop:native] sprite program: no port stage at pc 0x%x (run from 0x%x); interpreter\n", v.pc, entry);
+                    spriteToInterpreter(v, s.vu->state());
+                    s.vu->execute(s.code.data(), 0x4000, s.data(), 0x4000, gs, nullptr, v.pc, s.tops, 0, 1u << 20);
+                    spriteFromInterpreter(s.vu->state(), v);
+                    s.next = s.vu->state().pc;
+                }
+            }
+            else if (g_spriteRunHook)
+                g_spriteRunHook(*s.vu, s.code.data(), s.data(), gs, pc, s.tops);
             else if (pc >= 0)
-                s.vu->execute(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, uint32_t(pc), s.tops, 0, 1u << 20);
+                s.vu->execute(s.code.data(), 0x4000, s.data(), 0x4000, gs, nullptr, uint32_t(pc), s.tops, 0, 1u << 20);
             else
-                s.vu->resume(s.code.data(), 0x4000, s.data.data(), 0x4000, gs, nullptr, s.tops, 0, 1u << 20);
+                s.vu->resume(s.code.data(), 0x4000, s.data(), 0x4000, gs, nullptr, s.tops, 0, 1u << 20);
             _mm_setcsr(csr);
+            return true;
         }
 
         // VIF codes of one DMA packet (source chain, TTE: each tag's upper 64 bits are two VIF codes; CALL / RET nest)
@@ -1765,7 +1828,7 @@ namespace pop_native_live
                     {
                         const uint32_t dest = (vu + (k / s.wl) * s.cl + k % s.wl) & 0x3FF;
                         uint32_t v[4];
-                        std::memcpy(v, s.data.data() + dest * 16, 16);
+                        std::memcpy(v, s.data() + dest * 16, 16);
                         const uint8_t *sv = src + size_t(k) * bytesPer;
                         for (uint32_t c = 0; c < comps; ++c)
                         {
@@ -1782,7 +1845,7 @@ namespace pop_native_live
                         }
                         if (comps == 1)
                             v[1] = v[2] = v[3] = v[0];
-                        std::memcpy(s.data.data() + dest * 16, v, 16);
+                        std::memcpy(s.data() + dest * 16, v, 16);
                     }
                     i += wordsIn;
                     continue;
@@ -1809,10 +1872,12 @@ namespace pop_native_live
                         return false; // STMOD add / accumulate: not used here
                     break;
                 case 0x14: case 0x15:
-                    spriteRun(int32_t(imm) * 8);
-                    break;
                 case 0x17:
-                    spriteRun(-1);
+                    if (!spriteRun(cmd == 0x17 ? -1 : int32_t(imm) * 8))
+                    {
+                        s.broken = true;
+                        return false;
+                    }
                     break;
                 case 0x20:
                     ++i;
@@ -1868,7 +1933,7 @@ namespace pop_native_live
                 const uint32_t packet = guestAny(rdram, element + 4 * slot) & 0x7FFFFFFFu;
                 if (!guestAny(rdram, element + 4 * slot))
                     break;
-                uint8_t *d = s.data.data();
+                uint8_t *d = s.data();
                 std::memcpy(d + 0 * 16, getConstMemPtr(rdram, model), 64);
                 std::memcpy(d + 4 * 16, getConstMemPtr(rdram, gso + 0x200u), 64);
                 std::memcpy(d + 8 * 16, getConstMemPtr(rdram, gso + 0x240u), 64);
@@ -3697,9 +3762,12 @@ namespace pop_native_live
                                  (unsigned long long)g_lateStats.closedInLate, (unsigned long long)g_lateStats.native,
                                  (unsigned long long)g_lateStats.gs, (unsigned long long)g_worldStats.particles, top.c_str());
 #if POP_SPRITE_VU1
-                    std::fprintf(stderr, "[pop:world] sprites (P9 on the interpreter): draws %llu, native %llu, quads %llu, not replayed %llu\n",
-                                 (unsigned long long)g_spriteStats.draws, (unsigned long long)g_spriteStats.native,
-                                 (unsigned long long)g_spriteStats.quads, (unsigned long long)g_spriteStats.failed);
+                    std::fprintf(stderr, "[pop:world] sprites (P9 %s): draws %llu, native %llu, quads %llu, not replayed %llu; VU runs %llu, "
+                                         "handed to the interpreter %llu\n",
+                                 g_spriteVu.usePort ? "port" : "on the interpreter", (unsigned long long)g_spriteStats.draws,
+                                 (unsigned long long)g_spriteStats.native, (unsigned long long)g_spriteStats.quads,
+                                 (unsigned long long)g_spriteStats.failed, (unsigned long long)g_spriteStats.runs,
+                                 (unsigned long long)g_spriteStats.interpreted);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)

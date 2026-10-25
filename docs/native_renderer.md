@@ -1063,3 +1063,16 @@ the runtime's own VU1 interpreter (`spriteRecord` in `pop_native_live.cpp`):
   lattice +0x88 mesh that now goes native because the frame stays pure longer); 1,128 of 1,128 draws replayed.
 - Not sprites: the big light halos and streaks around glowing pickups are the after-effects pass (FUN_004ABFC0),
   still on the GS.
+
+### The P9 port in place of the interpreter (25 Oct)
+
+P9 is ported (Qwen + hand stages, `docs/llm_jobs.md` "Night of 24-25 Oct results"). `port.py --chain p9` writes
+`tools/vu1port/ported/p9.cpp`: every stage port inlined in its own namespace inside `vu1_p9`, `vu1_p9::run()` the
+dispatcher on vu.pc (judged on 598 whole runs). `pop_native_live.cpp` includes it; `spriteRun` keeps the registers
+in a `VuState` whose `mem` is the one data image the VIF replay and the interpreter both use. MSCNT goes on at 0x390
+after a run from 0x340 (the setup ends at the E bit at 0x380; the port reports other ends only as 0xffffffff, and the
+traces have no MSCNT after them: if one comes, the sprites go back to the GS for the session, logged). At a pc no
+stage starts at, the registers go to the interpreter (`VU1Interpreter::state()`, stage borders have nothing in
+flight), it finishes the run, and they come back. `POP_NATIVE_P9=0` = interpreter only; the offline P9 trace
+(`POP_P9_TRACE`) always uses the interpreter. Offline A/B over the 236 saves of the P9 traces: all native frames
+byte-identical with and without the port, 630 sprite elements / 75,009 quads, no handover.

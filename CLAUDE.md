@@ -158,14 +158,14 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   (`known_good/`: p9_c_b, d_save, d_loop_b, f_a, f_b, p6_a_ck_head). Two P6 pieces were unpassable: the case snapshot
   took clip flags before an in-flight CLIP landed (fixed in `replay.cpp`; re-judged, Qwen's round-1/2 attempts pass;
   the passed `b_ck_head` was a cheat, replaced). Speed on the Mac: P9 ~27 us per run vs ~5 ms interpreted (~190x),
-  P6 ~3 us vs ~1.8 ms. **Next (daytime): P9 into the game in place of `spriteRun`** (`tools/overrides/pop_native_live.cpp`
-  `spriteRecord`). The chained program `port.py --chain p9` writes is `game/analysis/qwen/vu1_p9_whole/whole.cpp`
-  (each stage's port in its own namespace + a dispatcher on vu.pc; the stage ports are `game/analysis/qwen/vu1_p9_*/best.cpp`,
-  merged on the Mac from the PC's copy on 25 Oct, and `tools/vu1port/known_good/p9_*`; game/ is not in git, so the
-  game build needs them copied or generated into the overrides). Fall back to the interpreter when the chain stops at
-  a pc with no stage (branches never seen in the traces). Then speed: in-game fps in a busy sprite/fight scene with
-  and without (save `saves1024b/play_20261024_184926.state` = the slow fight; profiler `play.ps1 -Profile`), and the
-  Mac numbers (`judge --time`, `VU1_TIMING=1 build.sh`). P6 waits for the native water (0.13).
+  P6 ~3 us vs ~1.8 ms. **P9 port in the game's sprite path (25 Oct, built offline, PC build + in-game check pending):**
+  `port.py --chain p9` now writes the self-contained `tools/vu1port/ported/p9.cpp` (stage ports inlined, in git),
+  included by `pop_native_live.cpp`; `spriteRun` runs it, the interpreter takes over at a pc no stage starts at
+  (log `[pop:native] sprite program: no port stage at pc ..`); `POP_NATIVE_P9=0` = interpreter only. Offline A/B
+  over the 236 traced saves: native frames byte-identical to the interpreter's, 0 handovers. Next: `-Fast` PC
+  build, then speed: in-game fps in a busy sprite/fight scene with `POP_NATIVE_P9=0` and without (save
+  `saves1024b/play_20261024_184926.state` = the slow fight; profiler `play.ps1 -Profile`; the 300-frame
+  `[pop:world] sprites (P9 port)` log line counts VU runs and handovers). P6 waits for the native water (0.13).
   Details: `docs/llm_jobs.md` "Night of 24-25 Oct results".
 - **Character VU1 program P4 for Qwen: set up 25 Oct; tonight `tools/windows/oct25.ps1`** (P4 = the characters' first
   pass: transform + per-vertex lighting from the light block, and the env-map mode; the native renderer already draws
