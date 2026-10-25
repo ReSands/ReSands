@@ -30,7 +30,9 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **Clean-up (user, 18 Oct; part of 1.0):** a final housekeeping pass over our own code (overrides, native renderer,
   tools, runtime patches; not the generated code) for human readability, possibly with a stronger model (e.g. Fable).
   Before it: write a short style guide (naming, file size, comment style, hook layout), with id Software's GPL Doom 3
-  source as the style reference (style, not code); freeze golden outputs (byte-identical `pop_state_frame` frames for
+  source as the style reference (style, not code; starting checklist: Table 2, the DOOM 3 BFG C++ conventions, in
+  `lemiur/Game-Decompilation-Skill-For-Claude` `.claude/skills/decomp-code-rules/references/style-defaults.md`, read
+  25 Oct 2026; no licence, so reference only, our own wording); freeze golden outputs (byte-identical `pop_state_frame` frames for
   every test save, nightly checks, movie/ADPCM/audio reference outputs). During it: behaviour-preserving changes only,
   small commits per subsystem, all golden checks after each; comments keep their evidence (move long histories to
   `docs/`, never drop the why); decide which `POP_*` debug switches stay. After it: a short playtest by the user
