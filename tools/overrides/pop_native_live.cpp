@@ -374,7 +374,12 @@ namespace pop_native_live
                         if (p->index.records.count(key) && pop_assets::texturePalette(p->index, key, bytes))
                             break;
                     if (bytes.empty())
+                    {
+                        static int missed = 0;
+                        if (missed++ < 20)
+                            std::fprintf(stderr, "[pop:native] paletted texture %08x (index %u): no pack palette (yet)\n", key, index);
                         return g_framePaletteKeys[index] = key;
+                    }
                     it = disc.emplace(key, std::move(bytes)).first;
                 }
                 const uint8_t *ram = getConstMemPtr(rdram, guestAny(rdram, pal + 4) + (pflags == 0x40 ? 0x60 : 0));
@@ -385,6 +390,10 @@ namespace pop_native_live
                         if (p->index.records.count(key) && pop_assets::decodeTexture(p->index, key, img, ram))
                         {
                             result = kPaletteKey + index;
+                            static uint64_t made = 0;
+                            if (++made <= 20 || made % 600 == 0)
+                                std::fprintf(stderr, "[pop:native] recoloured texture %08x (index %u, %ux%u): palette changed in memory (%llu so far)\n",
+                                             key, index, img.width, img.height, (unsigned long long)made);
                             g_framePaletteImages[index] = std::move(img);
                             break;
                         }

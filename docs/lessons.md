@@ -187,3 +187,9 @@ mode boots the game check for an active display first, so a mistake like this ca
   `POP_INPUT` given through `-Env`, so every "R1 held" fight boot ran without blocking (the Prince died in a
   300 s crash-1 check). The override logs `[pop:input] <button> at <t> s` for each press: grep for it in every job
   that relies on scripted input.
+- **A few screenshots cannot show a short-lived effect is absent; the user's eyes with clock times can (25 Oct).**
+  For N1 I called "no tint" from two frames per boot (one of them the load dialog) and later from single frames that
+  fell after the slow ended. The user noted the times the tint showed, and the job log's run start times mapped them
+  to runs (GS-only: yes; native: no). Log each run's start time, and for a visual check take many frames or ask
+  the user to note times. Also: when native and GS differ, look for game code that edits data in memory (palettes,
+  textures) that native reads from the disc instead.

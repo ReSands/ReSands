@@ -36,6 +36,22 @@ of (start, duration, factor) per object and pass the blended factor to FUN_001BE
 The tint is not found yet. A scripted boot (184926, long triangle at 7 s, `game/jobs/n1slow.ps1`) slowed nobody, so
 the input still needed is a quick-save taken by hand while an enemy is slowed (with its draw lists filled).
 
+**Found and fixed 25 Oct (957ae46 + follow-up; user saw the sandy enemy in a native save-state boot at 14:45).**
+User saves 134636 / 134815 (`game/analysis/saves1025c/`). The user noted the clock times the tint showed: only in the
+GS-only boots, never native (the screenshots had missed it: two frames per run, see `docs/lessons.md`). The slow is
+`FUN_00377E40` (from FUN_00271B00): time scale via FX_Freeze_Add plus an SFX modifier (FUN_00271440 sets its
+fade-in / hold / fade-out, FUN_0038A640 starts it: state +0x28C = 1, 4 = stop). That modifier recolours the
+enemy's texture through `GAO_ModifierSfx_UpdateMaterialPalette` (0x421100): it **rewrites the texture's 256-colour
+palette in memory** (each colour blended towards sand by its luminance) and re-uploads it (driver vtable +0x2C,
+op 0x16). Native decoded textures from the packs only, so it drew the disc palette. Fix: `recolouredKey`
+(`pop_native_live.cpp`): a paletted texture whose palette in RAM (TEX_List texture +4 -> palette entry +4, +0x60
+when its flags have 0x40) differs from the pack's is decoded with the RAM palette each frame under key
+`kPaletteKey + texture index` (shadow key range: resent with pixels, updated in place). Log:
+`recoloured texture <key> ...`. Ruled out on the way: lighting / constant colour (native reads the game's constant
+colour correctly; a fix there, 8732934, was reverted), skinned pass 2 (none). First live try failed: the "no pack
+palette" result was cached before the enemy's pack had loaded (packs load late after a state load), and per-frame
+keys changed meaning between frames. Pending: the user's cold-boot check (fade back to normal colours too).
+
 ## N6: sustained frame-rate drop (save 200200, 20:02)
 
 Glitch capture: 60 fps for 3 s, then 51-54 fps steadily (median frame 18.4 ms) while the frame's native draws rise
