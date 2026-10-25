@@ -177,3 +177,9 @@ mode boots the game check for an active display first, so a mistake like this ca
   scheduler with the same pc without unwinding (a Ghidra-split loop whose pieces call each other). A runtime rule
   "pc unchanged = return to $ra" must be limited to functions known to be host code (replaced after
   registration), or it jumps into garbage (patches 41/42).
+- **A stage that fails for many rounds on one value: check the judge's borders first (25 Oct).** Two P6 pieces
+  failed 26-28 rounds over two nights because a CLIP was in flight at their borders and the case snapshot took the
+  clip flags before it landed: no correct port could pass, and one "pass" was the model clearing the flags to match.
+  Re-judged after the fix, the model's round-1/2 attempts were right. Snapshot every pipelined value the same way
+  (as landed) and let a tool pick borders where nothing unsafe is in flight (`tools/vu1port/cutscan.py`), and be
+  suspicious of a pass that writes constants to state just before returning.
