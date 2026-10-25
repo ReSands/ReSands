@@ -4,6 +4,12 @@ Rendering bugs seen in play with the native renderer on. Plan (user, 24 Oct): no
 list at each milestone (first pass when 0.12 is done, before the 0.13 effects). Each entry: what was seen, evidence,
 hypothesis (marked as such), status.
 
+**Status after the 25 Oct sweep.** Closed: N1 (palette in memory, `recolouredKey`), N2 fog blips and N10 torch
+brightness and the save-point pop (late lists back on the GS; user in-motion checks 25 Oct), N5 (41 over-budget
+generation switches in the 25 Oct sessions, no black flash), N9 (user saw the door right). Parked until they recur
+(the user captures a save then): N3 stairs flash, N4 combat camera teleport. Watch in long sessions: N8 wall hue,
+N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
+
 ## Tooling first (agreed 24 Oct)
 
 1. **Glitch capture (built 24 Oct evening, not yet used in play):** every kept quick-save (Select / F5) also writes

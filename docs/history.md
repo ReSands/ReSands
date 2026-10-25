@@ -667,3 +667,50 @@ Sound and PS2 movies are in scope too (user, 14 Oct): eventually native sound (n
 - **Open items carried over:** audio bugs (a quiet/missing track in one fight, Prince-Farah in-engine dialogue out
   of sync, sound slows with the frame rate). Known limits: save-state boots have no sound (the native renderer works after a load since 25 Oct);
    runtime screenshots come out as the game in a corner.
+
+
+## Status block moved from CLAUDE.md on 25 Oct 2026 evening (bug sweep in progress)
+
+Older status blocks and handoffs 1-4: `docs/history.md` (last moved: "Moved from CLAUDE.md on 25 Oct 2026 afternoon").
+Keep this section short: finished work goes to the topic docs, old status blocks to `docs/history.md`.
+
+- **Where we are.** Native renderer between roadmap 0.12 and 0.13, all on by default in `play.ps1` (desktop shortcut
+  "PoP 60 fps"; `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows` turn parts
+  off): static world, lit statics, characters, translucents, shadows, sprites via the P9 port. The lists after the
+  shadows (+0x88/+0xA8, particles) are back on the GS since 25 Oct (save-point pop; `-NativeLate` turns them on). User session 25 Oct 12:46: ~60 fps, every shadow projector native. Native
+  rendering works after a save-state load (packs via `packindex.txt`). Details: `docs/native_renderer.md`.
+- **Agreed order (user, 25 Oct):** (1) 0.12 done: shadow receivers fixed (N12, e5ba9a5; the 25 Oct play log: all projectors native); (2) **now:
+  the bug sweep below**; (3) then 0.13 (native water P6, halos, light shafts, flashes).
+- **Bug sweep, in this order** (details per bug in `docs/native_bugs.md`, crashes in `docs/saves_1021.md`):
+  1. **Crash 1** (scheduler resuming at 0x172844): fix 3b80b66; 25 Oct a 300 s R1 fight from 202314 ran clean.
+     Close after a long user fight session without it. Needed for 0.1.
+  2. **Crash 2**: cause unknown. 25 Oct: the save's threads look healthy and it runs on when loaded (no freeze), so
+     it needs something a save-state boot lacks (sound is a guess, not evidence). User decision 25 Oct: do not fix the
+     emulated sound speculatively (native sound replaces it); only act on a reproduced freeze. Needed for 0.1.
+  3. **N8/N9/N11 stale per-address caches**: fix 3664837 built 25 Oct (ReadElement drops the element's entries);
+     in-game check pending (201124's door after the staircase climb).
+  4. **N1 slowed enemies not sandy brown: closed 25 Oct** (palette rewritten in memory; `recolouredKey`).
+  5. **N10 + save-point glow pop**: the save-point pop came from the native late lists (user in-motion checks
+     25 Oct); they are on the GS by default now (`-NativeLate` opts in, no fps cost); revisit if 0.13 does not fix it.
+     N10 (torch brightness changing with the camera) may be the same: check at a torch in the next play session.
+  6. **N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat.**
+  7. **N5 black one-frame flashes**: fix 30ef5d5 built 24 Oct; confirm none in the 25 Oct play log, then close.
+  8. **Small ones:** `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the whole runtime.
+  Also open, lower: rewind at 30 fps (not reproduced), fight fps (save boots ~49-53 fps: worker ~5 ms, GS thread waits
+  ~4.8 ms; profile 184926 / 115837), camera X reversed in fixed views, door flicker with a black web, trouser flicker
+  (watch), torch point lights in game, audio bugs (quiet/missing fight track, dialogue out of sync, sound slows with
+  the frame rate), Alt+F4 once did not close the game.
+- **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
+  184926 / 115837 / 115853; R1 held only since 25 Oct: boot.ps1 used to clear an -Env POP_INPUT, 2160f01; prints fps + world/late/shadow/sprite counters; logs
+  `game\recomp-sotc\stnative_<save>.log`), watched with `tools/windows/watch-job.sh` under Monitor. A/B of one save
+  with native on vs off + screenshots: `game\jobs\glowab.ps1` (edit the save name). Save-state boots have no sound and
+  miss long-session bugs (N8-N11); those need the user's play sessions. Before any boot: TV on (ask), and the user's
+  game closed (`taskkill /f /pid`, confirm with `tasklist`).
+- **Saves.** On the PC in `game\ps2\disc\states\`; copies on the Mac: `game/analysis/saves1025/` (115837, 115853),
+  `saves1025b/` (125052 chasm reference, 125331 / 125417 save point in a fight, play log 124621),
+  `saves1024b/play_20261024_184926.state` (slow fight). Letterbox (panorama) saves are wanted: they show far geometry.
+- **Qwen tonight:** P4 character VU1 program, `tools/windows/oct25.ps1` (shortcut "Qwen overnight (until Stop
+  Qwen)"; shuts the PC down). Morning: `game\jobs\qwen-night.log`, copy `game\analysis\qwen\vu1_p4_*` to the Mac,
+  hand-port the failures, `port.py --chain p4`. `docs/llm_jobs.md` "VU1 character program P4"; before the next
+  non-VU1 Qwen job, build in the ReAgent learnings (same doc).
+- **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image.
