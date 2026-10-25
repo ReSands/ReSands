@@ -94,7 +94,14 @@ Older status blocks: `docs/history.md` (last one moved: "Moved from CLAUDE.md on
   blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
   world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
   the GFX particles. Each step offline first, then a user check in game.
-- **HANDOFF 3 (25 Oct ~12:20; START HERE, supersedes HANDOFF 1-2 below).** Done this session (all on the PC, in
+- **HANDOFF 4 (25 Oct afternoon; START HERE).** Order agreed with the user: finish 0.12 (shadow receivers + in-game
+  checks), then a bug sweep (crash 1 check, crash 2, N1-N4, N8-N11 caches, N10 glow), then 0.13. **Shadow receivers
+  (N12) fixed (e5ba9a5):** the "entries without records" were pass-1 entries of an element with no pass-1 packet
+  (draw nothing); 115837/115853 now native to +0x98 in ~2,095 of 2,100 frames, fps unchanged (~49/~53). CJIdxMesh
+  entries now matched too. Blob receivers / mirror projectors still on the GS (none in these saves). Details:
+  `docs/native_renderer.md` "Native shadows". **Next:** user check in play (save-point glow with many enemies; the
+  late lists in general), then the bug sweep. Open question: why fps did not rise (worker ~5 ms, GS thread waits ~4.8 ms).
+- **HANDOFF 3 (25 Oct ~12:20; superseded by HANDOFF 4).** Done this session (all on the PC, in
   game): P9 port in place of the sprite interpreter (42d8fbc; user played 11:53: fights 50-60 fps, 180k P9 runs, 0
   handovers); native renderer after save-state loads (fe36fe5 packindex pack loading, 604e051 4-bit textures); see
   "Save-state boots run the native renderer" below. **Next: native shadow receivers for the entries without records**

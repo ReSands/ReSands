@@ -135,7 +135,10 @@ until the crash): 33-43 ms, the same reason throughout. N6's capture (200200): l
 (`purity ended by ref +0x2c`), 18-19 ms. Two costs:
 1. A shadow projector goes back to the GS when a receiver has no record: the log's `list entries without records`
    rises 6,559 -> 9,054 over the slow stretch (the enemies; known gaps: CJIdxMesh entries, blob receivers). Once the
-   shadow is on the GS, every later list (+0x88/+0x98/+0xA8, particles, sprites) is too.
+   shadow is on the GS, every later list (+0x88/+0x98/+0xA8, particles, sprites) is too. **Fixed 25 Oct (e5ba9a5):**
+   the entries were pass-1 entries of an element with no pass-1 packet (they draw nothing); saves 115837/115853 now
+   stay native to +0x98 in ~2,095 of 2,100 frames (`docs/native_renderer.md` "Entries without records"). In-game
+   check (save-point glow with many enemies) pending.
 2. `spriteRecord` runs the P9 VU1 interpreter on every sprite draw **before** checking whether the frame can still
    be native: in the slow stretch `quads` rose by ~350-390k per log interval while `native` stayed at 45,316. The
    interpreter work is thrown away and the GS runs the same draw again. Fix: check `g_world && g_worldLate &&

@@ -1004,6 +1004,16 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - **In game (24 Oct, normal boot, TV):** ~59-60 fps, every projector native (1,132 of 1,132 in the first minutes, no
   list entry without records); **user: shadows look right on the floors, the lever flicker is gone.** Now on by default
   in `play.ps1` (`-NoNativeShadows` = off). The stats line printed every frame in that build (fixed: every 300).
+- **Entries without records (25 Oct, N12): entries that draw nothing.** Saves 115837 / 115853 (many enemies, a save
+  point): ~1.8 shadow-list entries per frame had no records, so ~40% of projectors and every later list went to the GS.
+  All of them were element 01522420 (matrix 135/136), pass 1, **without a pass-1 packet** (+0x24 = 0): Display draws
+  nothing for it, in the shadow pass too, so the entry now counts as empty geometry (`entries that draw nothing` in the
+  stats line) instead of a miss. stnative boots: frames pure at +0x88 175 -> 2,095 (115837) and 112 -> 2,098 (115853),
+  late calls native 4,300 -> 140,061 / 0 -> 69,210; misses 0; fps unchanged (~49 / ~53; worker ~5 ms per frame,
+  GS thread waits ~4.8 ms). CJIdxMesh entries (kind 4) now find their records too (the CJIdxMesh hook notes them
+  under `idxCallKey`; none appeared in these saves). The stats line splits misses: idx / mesh/ref / other kinds /
+  call without records (the first 8 logged as `[pop:shadow] entry without records`) and receiver bases on the GS.
+  Blob receivers (+0x20, FUN_004C2E00) need a blob texture (+0x102 != -1): none in these saves, still on the GS.
 - Was "not yet": live / in-game (shadow images change every frame, so the PNF6/7 texture-by-key cache needs an in-place
   image update; then skip FUN_004C3540 when every receiver's base is native, clearing both lists as FUN_004B8080
   does), blob receivers (+0x20 list, FUN_004C2E00 path), mirror projectors, CJIdxMesh entries, FUN_004C2C40.
