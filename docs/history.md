@@ -472,3 +472,198 @@ Sound and PS2 movies are in scope too (user, 14 Oct): eventually native sound (n
   native run (2 saves + menu each), traces in `game\analysis\loadtrace\{gs,native}`; compare the 8 fields after each load. Torch save
   `game/analysis/saves1023/st/` (point lights in sets 0/1): offline native vs game 4.73, the Prince matches. The -Fast rebuild recompiled the whole runtime (~2,200 objects): find why.
 
+
+## Moved from CLAUDE.md on 25 Oct 2026 afternoon (status blocks 22-25 Oct and handoffs 1-4; verbatim)
+
+- **Renderer step 1 (native static world, roadmap 0.11) done and in daily use (22 Oct).** `POP_NATIVE_WORLD=1`,
+  now on by default in `tools\windows\play.ps1` (the only desktop shortcut, "PoP 60 fps"; `-NoNativeWorld`
+  turns it off). The static draws skip their DMA, a worker draws them in Vulkan, a GS host hook (runtime patch
+  38) writes picture + Z into the GS buffers where the frame's 3D starts; the GS draws everything else on top.
+  In game: 857 elements converted, ~400 native draws per frame, ~60 fps, 3.4 ms per frame; world there at once
+  and through camera changes after the ZMSK fix (bd89bd4); shadows over the world flicker less with the depth
+  bias `POP_NATIVE_WORLD_ZBIAS=128` (the default; 0 = off). **Test it from a normal boot (title -> memory card):
+  save-state boots never run ReadElement, so nothing is converted.** Details and numbers:
+  `docs/native_renderer.md` "Native world in the game window".
+- **Renderer step 2, characters: done and in daily use (22 Oct evening).** `POP_NATIVE_CHARACTERS=1`, on by default
+  in `play.ps1` (`-NoNativeCharacters` turns it off): opaque CPU-posed characters join the world frame, their
+  Display calls are skipped with the VU1 driver switches replayed. In game ~59.9 fps, user: fixed after the light-set
+  fix (the Prince's white flash = a junk light vector; `DoSetSkinLightEnv`'s typed path decompiled). Point lights in
+  character lighting: falloff measured from the VU1 program's own output (`tools/vu1port/lightprobe.cpp`; built on the
+  PC, not yet seen in game). Details: `docs/native_renderer.md` "Native characters in the game window".
+- **Static world audit + sword: done and checked in game (22 Oct night).** The sword (element 0x00B395B0) is a lit
+  static mesh: pass 1 carries normals at VU 0x83 (pass 0 colours); the converter drew it with normals as colours
+  (in game: reddish-brown, not missing; the "missing" sword was the offline frame). Census of 196 saves
+  (`tools/staticcensus.py`) + world accounting: lit static passes stay on the GS; V4-32-position objects
+  (mirror-room puzzle pieces) decode from memory; instanced pass 2 had a shared dedupe key; packetless refs end
+  the chain. Undecoded calls 3,629 -> 1,044, all explained (lit pass 1 = step 2; pass-2 layers of V4-32 objects).
+  User check (memory-card slot 04, the fountain after the mirror room): sword silver, mirror room right, ~60 fps.
+  Details: `docs/native_renderer.md` "Static world audit". Memory-card slots: header +4 = play time (s), +0x10 =
+  save-point key; copies in `game/analysis/memcard/`.
+- **Lit statics native: done and checked in game (22 Oct ~22:00; user: sword right, mirrors no longer flicker after the object-space fix 3937445).**
+  Pass 1 = character lighting (P4), pass 2 = env map from FUN_004B6D80's matrix, driver from the game's table (0x700000B0);
+  elements and instanced refs; `POP_NATIVE_NOLIT=1` = old behaviour. Offline: 204040 13.04 -> 11.28, 204108 5.02 -> 4.23;
+  the mirror room's gold frames, rings and faceted mirrors now drawn; the sword silver-blue with env highlights. In game:
+  memory-card slot 04 checked. Small leftovers (save 214633): centre faceted mirror greyer, one hexagon facet darker. Details:
+  `docs/native_renderer.md` "Lit statics measured".
+- **NEXT (plan changed 23 Oct evening, user agreed): native shadows, then the lists after them + particles.** Why:
+  the injected picture replaces pixels, so only a prefix of the game's draw order can be native, and the shadows sit
+  between the lightmaps (+0x5C) and +0x88/+0x98/+0xA8, where nearly all GFX particles are (`docs/native_renderer.md`
+  "Translucents before the shadows"). Done first: `POP_NATIVE_TRANSLUCENT=1` (lists before the shadows, any blend;
+  now **on by default in `play.ps1`** (`-NoNativeTranslucent` = off; 23 Oct night). The cloud "bug" of save 21_202624 was
+  the offline judge: `pop_native_view --frame` drew PNF7 frames opaque-first, so the clouds landed on the opaque horizon
+  band the game draws after them; the game window was always in game order. Viewer fixed; A/B over 201 saves 19.24 ->
+  18.23 (108 better, 14 worse = letterboxed cutscenes). **User check in game (24 Oct): clouds fine**; it showed distant
+  buildings as flat grey: fog zones are (max, min, a, b) and the VU1 drivers clamp F to min..max (min 102 = at most
+  60% fog); we clamped to 0..255. Fixed (PNF8, fog min/max per draw), offline A/B 191 saves 28 better / 3 worse
+  (<= 0.5); **user: palace fix looks good (24 Oct)**.
+  **Native shadows: done and checked in game (24 Oct afternoon; user: shadows right on the floors, lever flicker
+  gone).** `POP_NATIVE_SHADOWS=1`, **on by default in `play.ps1`** (`-NoNativeShadows` = off). The receiver loop of the shadow VU1 program (0x1D98) decoded and checked against the
+  interpreter (alpha within 1 on 32,940 vertices); the shadow buffer is the alpha of the displayed frame. A hook on
+  FUN_004C3540 rasterises the casters into a 256x256 alpha image per projector and redraws the receivers from the
+  frame's own records (same mesh + model matrix as the base, so the GEQUAL test sees its exact depth). In world mode a
+  projector goes native only if all its receivers' bases are native (then FUN_004C3540 is skipped, its lists emptied).
+  Save 192521: the Prince's shadow in place and shape, floor x 0.67 vs the game's ~0.74 (game edge a bit softer).
+  A/B over 204 saves: only 3 hold filled shadow lists (the game empties them after drawing), all 3 better, none worse;
+  so the judge was the game. Details: `docs/native_renderer.md` "Native shadows".
+  **Lists after the shadows: built, offline-judged, in-game check pending (24 Oct afternoon).** `POP_NATIVE_LATE=1`,
+  **on by default in `play.ps1`** (`-NoNativeLate` = off): +0x88/+0xA8 and the GFX particles go native while no
+  earlier draw of the frame went to the GS (otherwise the order would break); +0x98 (alpha-only) stays on the GS.
+  Offline 203 saves 18.07 -> 17.58 (54 better, 7 worse <= 0.30). Main limit: sprites (VU1 places them along a curve;
+  0.13). Details: `docs/native_renderer.md` "Lists after the shadows".
+  **Order for the next session:** (1) done; (2) shadows done (in game, ~60 fps, every projector native in the
+  first session); left out so far: mirror projectors,
+  blob receivers (+0x20 / FUN_004C2E00), CJIdxMesh entries, FUN_004C2C40's fog fade; (3) open the
+  world to +0x88/+0x98/+0xA8 in the game's order (watch the frame alpha: EraseAlphaBuffer runs before +0x98) with
+  the GFX particles. Each step offline first, then a user check in game.
+- **HANDOFF 4 (25 Oct afternoon; START HERE).** Order agreed with the user: finish 0.12 (shadow receivers + in-game
+  checks), then a bug sweep (crash 1 check, crash 2, N1-N4, N8-N11 caches, N10 glow), then 0.13. **Shadow receivers
+  (N12) fixed (e5ba9a5):** the "entries without records" were pass-1 entries of an element with no pass-1 packet
+  (draw nothing); 115837/115853 now native to +0x98 in ~2,095 of 2,100 frames, fps unchanged (~49/~53). CJIdxMesh
+  entries now matched too. Blob receivers / mirror projectors still on the GS (none in these saves). Details:
+  `docs/native_renderer.md` "Native shadows". **Next:** user check in play (save-point glow with many enemies; the
+  late lists in general), then the bug sweep. Open question: why fps did not rise (worker ~5 ms, GS thread waits ~4.8 ms).
+- **HANDOFF 3 (25 Oct ~12:20; superseded by HANDOFF 4).** Done this session (all on the PC, in
+  game): P9 port in place of the sprite interpreter (42d8fbc; user played 11:53: fights 50-60 fps, 180k P9 runs, 0
+  handovers); native renderer after save-state loads (fe36fe5 packindex pack loading, 604e051 4-bit textures); see
+  "Save-state boots run the native renderer" below. **Next: native shadow receivers for the entries without records**
+  (CJIdxMesh entries, blob receivers +0x20 / FUN_004C2E00; `docs/native_renderer.md` "Native shadows", N12 in
+  `docs/native_bugs.md`). Judge in game, not offline: the saves' shadow lists are empty offline (the game empties
+  them after drawing; checked again on 115837/115853: offline they end at `mesh +0x98`, in game at `shadow +0x5c`).
+  Loop: edit -> `game\jobs\stnative.ps1` on the PC (start-job; -Fast build, then 45 s boots of 184926 / 115837 /
+  115853 with R1 held; prints fps + world/late/shadow/sprite counters; logs `game\recomp-sotc\stnative_<save>.log`);
+  add `POP_NATIVE_WORLD_WHY=1` to its env for per-call reasons (`game\jobs\stwhy.ps1` is the 30 s variant). Goal:
+  `list entries without records` -> 0 and `ended by: shadow +0x5c` gone on 115837/115853; then the user checks the
+  save-point glow (115837: glow missing with many enemies on screen) in play. Copies on the Mac:
+  `game/analysis/saves1025/` (the two saves, their .glitch.txt, the stnative logs, play log 115307). Ask before
+  boots (TV). Still open from before: N1 (slowed enemies not sandy brown), N2-N4, N8-N11 caches, rewind at 30 fps
+  (115853 did not reproduce the drop in a 45 s boot), crash 2.
+- **HANDOFF (24 Oct ~19:00).** In-game session 18:41-18:53 on the late-lists
+  build (042b0b1, before sprites): clouds and torch smoke fine; fights at 47-56 fps for a minute or more (log
+  `game/analysis/saves1024b/play_20261024_184116.log`), save of a slow fight `saves1024b/play_20261024_184926.state`;
+  **then a hang at the end of a fight** (fps 0, audio stuttering; one thread 15484 at 100% CPU, the others idle).
+  Things to do, in order:
+  1. **Hang fix: runtime patches 41 + 42, built on the PC 24 Oct ~19:30, user check pending.** Patch 41 alone
+     (built 19:10) froze the game during the rewind power: generated code can return to the scheduler with the
+     same pc (Ghidra split the 0x4A6180 loop into pieces that call each other, pc 0x4A61D4 each iteration), 41
+     took that for a stub return and jumped to $ra = 0xB35A70 (log: `[guest-branch:missing-target] ... EE
+     scheduler ... pc=0xb35a70`; dump `game/analysis/hang1024c/hang.dmp`). Patch 42: only functions replaced
+     after registration (overrides, stubs) get pc = $ra; the first 20 uses log `[ee-scheduler] replaced function
+     .. left pc`. Look for those lines in the next play log. First hang: Thread 15484 = the game thread, spinning in `EeScheduler::run` -> `processPendingEvents`
+     with no guest frames; the main guest thread's context: pc 0x4C7B40 (CJMeshElementRef::Display), ra 0x4B9C88
+     (CElementList::Render), a0 0x1931890, a1 0x37, a2 0. Mechanism: our draw hooks skip a call by returning
+     without touching pc ("like a stub"); `dispatchGuestBranch` turns that into the fallthrough, but when the
+     checkpoint fires at the JAL itself, the call is resumed from `EeScheduler::run`, which dispatched pc 0x4C7B40
+     again forever. Patch 41 (`tools/patches/pop-sotc/41-scheduler-stub-return-to-ra.patch`): after a normal
+     return with pc unchanged and no unwind/transfer, pc = $ra. Upstream has the same gap
+     (`docs/upstream_ps2recomp.md` item 14). Deploy: `git am` it into `C:\tools\PS2Recomp-sotc`, check out its HEAD
+     in `game\recomp-sotc\runtime-src`, `-Fast` build (EeScheduler.cpp only). Unrelated to the 21 Oct crashes.
+     Method (map-independent): the stack's return addresses matched against the new exe by byte pattern (runtime
+     code moved by a constant 0x3910), the guest contexts found by scanning the dump for R5900Context blocks
+     with gp 0x6749f0 (Python `minidump`, scripts in the session scratchpad).
+  2. **White enemies (earlier session, saves 18330x-183541):** enemies drawn native with another texture (Prince,
+     Farah fine; a fresh boot showed them right). Cause believed: `popTextureKey`'s table (filled only by
+     PS2_Texture_Load) going stale mid-session; fix 88acfc5 reads TEX_List at draw time and logs
+     `[pop:native] texture index N: TEX_List key .., PS2_Texture_Load registered ..` when they differ. **Not yet
+     confirmed:** look for those lines in the next play log; if enemies still go white, the theory is wrong.
+     One enemy's calves were invisible (same cause?).
+  3. **Native sprites (2469ab0, 367e9e2):** in the PC build since 18:54, user check pending (`POP_NATIVE_SPRITES=0`
+     = off). Docs: `docs/native_renderer.md` "Native sprites on the VU1 interpreter".
+  4. **Save-point glow pops brighter when the camera turns to it** (saves 183302 left / 183305 facing): the light
+     column is native in both; the difference is the halo / after-effects pass (FUN_004ABFC0, GS). Asked the user for
+     an A/B at a save point with `play.ps1 -NoNativeLate` and `-NoNativeWorld` (pops in both = original behaviour;
+     smooth without the native world = its depth fools the halo's visibility test).
+  5. **Fight fps:** profile save 184926 (`tools/windows/profile-states.ps1`, or ask for a `-Profile` session);
+     the late lists add work per frame (worker 4.4 ms/frame in the earlier log).
+- **HANDOFF 2 (24 Oct ~20:45; start here).** Built on the PC and in the game now (user check pending): the black
+  one-frame flashes fix (N5, 30ef5d5: kept meshes dropped between generations) and the **crash 1 fix** (3b80b66:
+  entry at 0x172844; `docs/saves_1021.md`). Patches 41 + 42 checked in play (no hang since). Next, in order:
+  (1) triage of the 20:08-20:24 saves: **done 24 Oct evening** (`docs/native_bugs.md` "Triage of the 20:08-20:24
+  reports"): N8/N9/N11 = live-only stale per-address caches (g_fromPacket, g_litBatches, g_skinned, g_skipped not
+  reset by ReadElement; fix planned); N10 + save-point glow = the halo's occlusion test reads our Z (A/B with
+  ZBIAS=0); N12/N6 = a shadow falls back to the GS, then everything after it, and the sprite interpreter still runs
+  (fix planned: purity check first); (2) compress `.glitch` pictures + delete triaged captures (same doc, "Storage");
+  (3) native conversion after a save-state load. The user plays meanwhile; ask before a rebuild (exe locked).
+- **Native bug list + tooling plan (24 Oct ~20:00): `docs/native_bugs.md`.** N1 slowed enemies not sandy brown
+  (highest), N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat. User: fix at milestones,
+  not now. **Next: build the glitch capture key, then native conversion after a save-state load** (so I can boot
+  saves with the live path). White-enemy fix 88acfc5 confirmed working (log caught index 163's stale key).
+- **Load flash: FIXED, checked in game (23 Oct ~19:15, 85587ef; user: 2 saves + menu, no flash).** Cause (GS traces,
+  runtime patch 40): frame 1 after a load has no clear sprite, so FRAME at our marker was still the loading screen's
+  target = the buffer on screen, and the stale-camera picture was uploaded onto the display. Fix: never inject into
+  the displayed buffer (DISPFB1); use the other of the pair. In the log it fires once per load (+5 frames during the
+  boot logos), `[pop:world] frame N: FRAME fbp .. is on screen`. Debug aids kept: `POP_DISPLOG=1`,
+  `POP_DISPLOG_TRACE=<dir>`, `POP_NATIVE_WORLD_DUMP=<dir>`. Full hunt: `docs/history.md` "Load flash (23 Oct)".
+- **Open notes:** trouser flicker not seen lately (watch). Torch save `game/analysis/saves1023/st/` (point lights in
+  sets 0/1): offline native vs game 4.73, the Prince matches; point lights near a fire still to be looked at in game.
+  The -Fast rebuild once recompiled the whole runtime (~2,200 objects): find why.
+- **Save-state boots run the native renderer (25 Oct, checked on the PC).** Missing textures load their pack via
+  packindex.txt (fe36fe5); 4-bit textures decode (604e051: particle 250004ec, the block effect). Fight save 184926
+  with R1 held: frames native to +0x88 in 2,098 of 2,100, 12,707 particles native, ends at water (P6, 0.13). The
+  user's saves 115837 (save-point glow missing with many enemies) and 115853 (rewind at 30 fps): **a shadow ends the
+  frame** in ~90% of frames (`list entries without records` 3,712 / 3,151: CJIdxMesh / blob receivers), so all later
+  lists go to the GS (N12). **Next: native shadow receivers for those entries**, judged on these two saves.
+  P9 port in game: user session 25 Oct 11:53, 180,016 runs, 0 handovers; fights 50-60 fps (user).
+- **P9 sprites + P6 water VU1 ports: DONE (25 Oct), both pass the whole-program judge** (`port.py --chain p9`:
+  598 whole runs; `--chain p6`: 600). Night 24-25 Oct: Qwen 32 of 37 P9 stages + `p6_a_ck_cull`; the rest by hand
+  (`known_good/`: p9_c_b, d_save, d_loop_b, f_a, f_b, p6_a_ck_head). Two P6 pieces were unpassable: the case snapshot
+  took clip flags before an in-flight CLIP landed (fixed in `replay.cpp`; re-judged, Qwen's round-1/2 attempts pass;
+  the passed `b_ck_head` was a cheat, replaced). Speed on the Mac: P9 ~27 us per run vs ~5 ms interpreted (~190x),
+  P6 ~3 us vs ~1.8 ms. **P9 port in the game's sprite path (25 Oct, built offline, PC build + in-game check pending):**
+  `port.py --chain p9` now writes the self-contained `tools/vu1port/ported/p9.cpp` (stage ports inlined, in git),
+  included by `pop_native_live.cpp`; `spriteRun` runs it, the interpreter takes over at a pc no stage starts at
+  (log `[pop:native] sprite program: no port stage at pc ..`); `POP_NATIVE_P9=0` = interpreter only. Offline A/B
+  over the 236 traced saves: native frames byte-identical to the interpreter's, 0 handovers. Next: `-Fast` PC
+  build, then speed: in-game fps in a busy sprite/fight scene with `POP_NATIVE_P9=0` and without (save
+  `saves1024b/play_20261024_184926.state` = the slow fight; profiler `play.ps1 -Profile`; the 300-frame
+  `[pop:world] sprites (P9 port)` log line counts VU runs and handovers). P6 waits for the native water (0.13).
+  Details: `docs/llm_jobs.md` "Night of 24-25 Oct results".
+- **Character VU1 program P4 for Qwen: set up 25 Oct; tonight `tools/windows/oct25.ps1`** (P4 = the characters' first
+  pass: transform + per-vertex lighting from the light block, and the env-map mode; the native renderer already draws
+  characters, so the port is an exact lighting reference and a fast fallback, not an fps win; est. 7-10 h; PC desktop shortcut
+  "Qwen overnight (until Stop Qwen)"; cancel with "Stop Qwen"). 79 stages from the new `tools/vu1port/cutscan.py`
+  (borders only where nothing unsafe is in flight), cases from three play traces (`tools/vu1port/cases_p4.sh`),
+  `known_good/p4_0000` as the example. Ends by itself when all pass (then `--chain p4`) or after two passes with no
+  new pass, then shuts down. **Morning:** `game\jobs\qwen-night.log`, copy `game\analysis\qwen\vu1_p4_*` to the Mac,
+  hand-port what failed, `--chain p4`. Details: `docs/llm_jobs.md` "VU1 character program P4".
+- **Before the next non-VU1 Qwen job:** build in the ReAgent learnings (bounded evidence requests, a bulk
+  Ghidra JSON export with `jalr`/constant-address refs, save-state global values, recorded cases as judge):
+  `docs/llm_jobs.md` "ReAgent + ghidra-bridge".
+- **Qwen candidates for later nights:** standalone tested decoders (`livePacketBatches`, `skinnedFromPacket`, particle
+  quads; judged against the Python decoders on DMA captures). User rule: Qwen
+  work is overnight only; daytime is Claude + user. GPU skinning only if the profiler asks.
+- **Bugs written up, not fixed (user: later), `docs/saves_1021.md`:** camera X reversed in fixed-camera views
+  (low priority); a door flickering with a black web (GS output too); **two freezes in combat**: crash 1 = the
+  scheduler resuming at return address 0x172844 that has no entry (Ghidra split FUN_00172800's epilogue off at
+  the delay slot of a `jal`; seen again 24 Oct 20:24; **fix built 24 Oct, 3b80b66: entry registered by the
+  override, in-game check pending**), crash 2 = cause unknown, save kept
+  (`crash_20261021_210951.state`). Both are needed for roadmap 0.1. Also (22 Oct): once, Alt+F4 did not close
+  the game (the bias-0 session; force-killed over SSH; its log ends normally at 59.9 fps); cause unknown, the
+  user does not want it chased now. Esc now quits (runtime patch 39; `PS2X_ESC_QUITS=0` turns it off).
+- **Rules from the user (19 Oct):** the PC's TV is off unless the user is playing: ask before any job that boots
+  the game (`nvidia-smi --query-gpu=display_active` must be Enabled). Survey other projects before fixing a
+  narrowed-down problem (`docs/ps2_projects.md`); general learnings to `docs/lessons.md`; one dated job script
+  per night; optimise in order of biggest win. Shut the PC down after overnight work. Playtesting: the user
+  gathers saves; I work offline; milestone checks by the user.
+- **Open items carried over:** audio bugs (a quiet/missing track in one fight, Prince-Farah in-engine dialogue out
+  of sync, sound slows with the frame rate). Known limits: save-state boots have no sound (the native renderer works after a load since 25 Oct);
+   runtime screenshots come out as the game in a corner.
