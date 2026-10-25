@@ -170,6 +170,16 @@ Saves on the PC in `game\ps2\disc\states\` (each with `.glitch` + `.glitch.txt`;
 - **Crash 20:24 (save 202314, the minute before):** crash 1 again; fix built (`docs/saves_1021.md`).
 The exact save-to-report mapping above is by time (user's minutes vs save names); check each picture.
 
+## Reported 25 Oct 12:46-12:55 (play log `play_20261025_124621.log`; copies in `game/analysis/saves1025b/`)
+
+Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (143,782 of 143,782).
+- **125052: reference save, looking down into the bottom of a chasm** (user: for checking later that it renders right).
+- **125331 / 125417: save point missing on entering the room, then only its white cloud, the light column appearing
+  gradually over the fight.** A/B from 125417 (`game\jobs\glowab.ps1`: the same save with all native switches on, and
+  all off, screenshots at ~0/3/7/11 s): **the GS-only boot shows the same** (cloud, no column, still none at 11 s). So
+  not the native renderer at that moment; most likely the game's own behaviour during a fight (not confirmed from the
+  code; the column's fade is still to be found). 125331 (save point completely missing) not A/B'd.
+
 ## Storage of captures (agreed with the user 24 Oct)
 
 `.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after
