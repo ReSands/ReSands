@@ -30,6 +30,12 @@ Second report (save 200418, 20:04, glitch capture too): the game picture shows t
 the save has empty draw lists (0 draws: saved after the game cleared them), so it cannot be judged offline. Next:
 find the code that applies the freeze (dagger "slow" on an enemy) and what it changes per draw.
 
+25 Oct: names from the prototype: `FX_Freeze_Add/Process/End` (retail 0x2735C0 / 0x2E2300 / 0x26F180) keep a stack
+of (start, duration, factor) per object and pass the blended factor to FUN_001BED80 (time scale, not colour);
+`SFX_LocalFreeze_*` (0x356EC0 / 0x357080) is the screen ripple (FX modifier 0x11 + local alpha), not the tint either.
+The tint is not found yet. A scripted boot (184926, long triangle at 7 s, `game/jobs/n1slow.ps1`) slowed nobody, so
+the input still needed is a quick-save taken by hand while an enemy is slowed (with its draw lists filled).
+
 ## N6: sustained frame-rate drop (save 200200, 20:02)
 
 Glitch capture: 60 fps for 3 s, then 51-54 fps steadily (median frame 18.4 ms) while the frame's native draws rise
@@ -112,9 +118,12 @@ fresh), but `g_fromPacket` ((element << 8) | pass: lightmap pass-3 batches, pack
 (lit passes), `g_skinned` and `g_skipped` are never invalidated. When a level section streams in and reuses the memory
 of an unloaded one, a new element gets its base mesh right but its lightmap / lit pass / pass-2 layer / skinned-or-
 skipped status from the old object at that address. Offline runs a fresh process per save, so it never sees this.
-All three bugs are in areas just entered. Fix (planned): in `readElement` erase every per-address cache entry for the
-element (g_skinned, g_skipped, g_fromPacket and g_litBatches for passes 0-7). Check: needs live conversion after a
-save-state load, or a play session through the same spots (201124's door: just after the staircase climb).
+All three bugs are in areas just entered. **Fix built 25 Oct (3664837):** `readElement` erases every per-address
+cache entry for the element (g_skinned, g_skipped, g_fromPacket and g_litBatches for passes 0-7). The regression
+boots (184926 / 115837 / 115853 / 202314) are unchanged. Not covered: g_litBatches entries keyed by a
+CJMeshElementRef's address (refs are not created through ReadElement); if a lit instanced object shows the same
+symptom, key those by packet address too. In-game check: a play session through the same spots (201124's door: just
+after the staircase climb).
 
 **B. N10 (torch saturation with the camera) + save-point glow pop (handoff item 4): the halo is a depth query.**
 The halo pass (FUN_004AA240, per halo from FUN_004ABFC0; prototype AE_ProcessOneHalo) calls FUN_004AB500
@@ -127,6 +136,10 @@ pushes all of it back (more halo passes the test). A light set into a sconce or 
 and the outcome changes with the view angle. N2's capture is separate (the game's own fog table). Test (in game,
 one torch, one save point): default vs `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld`. Likely fix: halos query
 the GS-equivalent depth (unbiased native Z; or run the occlusion test natively from the light's position).
+25 Oct: tried with the torch saves 201244 / 201248 (`game/jobs/n10halo.ps1`, default / ZBIAS 0 / GS only): the game
+resumes and the Prince walks away from the torch, so no shot has the torch in view. Needs the in-game test.
+Note for screenshot jobs: `-Shots` counts fields from boot, and the counter jumps to the save's field at the load,
+so only the first shot or two fire; give fields after the save's own field.
 
 **C. N12 (sustained ~30 fps, 20:20-20:24) and N6: the frame falls back to the GS and the fallback costs double.**
 Capture 202128: 16.7 ms per frame until frame ~360, then 27-33 ms from exactly the frame whose record changes to
@@ -141,8 +154,10 @@ until the crash): 33-43 ms, the same reason throughout. N6's capture (200200): l
    check (save-point glow with many enemies) pending.
 2. `spriteRecord` runs the P9 VU1 interpreter on every sprite draw **before** checking whether the frame can still
    be native: in the slow stretch `quads` rose by ~350-390k per log interval while `native` stayed at 45,316. The
-   interpreter work is thrown away and the GS runs the same draw again. Fix: check `g_world && g_worldLate &&
-   worldStateOk` (purity) first, interpret only then. Then profile 202314 to see what the rest is.
+   interpreter work is thrown away and the GS runs the same draw again. **Fixed 25 Oct (3664837):** with
+   POP_NATIVE_WORLD on, spriteRecord returns to the GS before interpreting when the frame is no longer pure.
+   (The "P9 not loaded yet ... draws 0" line in save 184926's boots only means that save has no sprites on screen;
+   the other loaded saves run the P9 path.)
 
 **Second session (20:36, log `play_20261024_203615.log`, saves in `game/analysis/saves1024f/`):** the N11 wall
 drew fine at 20:41 (user), which fits A: a fresh process has a different memory history. Save 205204 (user: 30 fps

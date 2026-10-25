@@ -183,3 +183,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   Re-judged after the fix, the model's round-1/2 attempts were right. Snapshot every pipelined value the same way
   (as landed) and let a tool pick borders where nothing unsafe is in flight (`tools/vu1port/cutscan.py`), and be
   suspicious of a pass that writes constants to state just before returning.
+- **Check that a scripted input actually ran, not just that it was passed (25 Oct).** `boot.ps1` cleared any
+  `POP_INPUT` given through `-Env`, so every "R1 held" fight boot ran without blocking (the Prince died in a
+  300 s crash-1 check). The override logs `[pop:input] <button> at <t> s` for each press: grep for it in every job
+  that relies on scripted input.

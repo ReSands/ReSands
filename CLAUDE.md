@@ -48,29 +48,30 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **Agreed order (user, 25 Oct):** (1) 0.12 done: shadow receivers fixed (N12, e5ba9a5; the 25 Oct play log: all projectors native); (2) **now:
   the bug sweep below**; (3) then 0.13 (native water P6, halos, light shafts, flashes).
 - **Bug sweep, in this order** (details per bug in `docs/native_bugs.md`, crashes in `docs/saves_1021.md`):
-  1. **Crash 1** (scheduler resuming at 0x172844, FUN_00172800's split epilogue): fix 3b80b66 built 24 Oct, never
-     checked. Not seen since; reproduce from the crash saves if any, else a user fight session. Needed for 0.1.
-  2. **Crash 2**: cause unknown, save `crash_20261021_210951.state`. Needed for 0.1.
-  3. **N8/N9/N11 stale per-address caches** (wall hue, see-through door, wall missing): `g_fromPacket`,
-     `g_litBatches`, `g_skinned`, `g_skipped` are keyed by guest address and not reset when `ReadElement` reuses the
-     address. Fix planned: drop an address's entries in the ReadElement hook. Live-only (long sessions).
-  4. **N1 slowed enemies not sandy brown** (user: highest of N1-N4).
-  5. **N10 + save-point glow pop** (torch/glow brightness changes as the camera turns): the halo pass (FUN_004ABFC0, GS)
+  1. **Crash 1** (scheduler resuming at 0x172844): fix 3b80b66; 25 Oct a 300 s R1 fight from 202314 ran clean.
+     Close after a long user fight session without it. Needed for 0.1.
+  2. **Crash 2**: cause unknown. 25 Oct: the save's threads look healthy and it runs on when loaded (no freeze), so
+     it needs something a save-state boot lacks (sound is a guess, not evidence). User decision 25 Oct: do not fix the
+     emulated sound speculatively (native sound replaces it); only act on a reproduced freeze. Needed for 0.1.
+  3. **N8/N9/N11 stale per-address caches**: fix 3664837 built 25 Oct (ReadElement drops the element's entries);
+     in-game check pending (201124's door after the staircase climb).
+  4. **N1 slowed enemies not sandy brown** (user: highest of N1-N4). Needs a hand-taken save with an enemy slowed
+     (scripted triangle slowed nobody); FX_Freeze_* is the time scale, not the tint (`docs/native_bugs.md`).
+  5. **N10 + save-point glow pop** (torch/glow brightness changes as the camera turns; needs the user at a torch:
+     save boots walk away from it): the halo pass (FUN_004ABFC0, GS)
      tests visibility against Z that partly comes from the native world (biased by ZBIAS 128). Test: default vs
-     `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld` at one torch and one save point. (Not the same as the save point
-     missing in a fight: 125417 looks the same GS-only, see `docs/native_bugs.md` "Reported 25 Oct".)
+     `POP_NATIVE_WORLD_ZBIAS=0` vs `-NoNativeWorld` at one torch and one save point. Save point partly drawn in a fight
+     (125417): GS-only looks the same, which only rules out the native renderer (game code, VU and GS emulation are
+     shared). User doubts it is original: check against an independent reference (PS2 longplay video, PCSX2).
   6. **N2 fog blips on camera turns, N3 stairs flash, N4 camera "teleport" in combat.**
   7. **N5 black one-frame flashes**: fix 30ef5d5 built 24 Oct; confirm none in the 25 Oct play log, then close.
-  8. **Small ones:** spriteRecord should check purity before interpreting (N12 part 2; re-check now that P9 is ported);
-     the judge should ignore letterbox rows (cutscene saves score worse only because the bars are 2D); the
-     `sprites (P9 not loaded yet) ... draws 0` line in save-state boots (does the P9 path run after a load?);
-     `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the whole runtime.
+  8. **Small ones:** `.glitch` compression + delete triaged captures; why a `-Fast` rebuild once recompiled the whole runtime.
   Also open, lower: rewind at 30 fps (not reproduced), fight fps (save boots ~49-53 fps: worker ~5 ms, GS thread waits
   ~4.8 ms; profile 184926 / 115837), camera X reversed in fixed views, door flicker with a black web, trouser flicker
   (watch), torch point lights in game, audio bugs (quiet/missing fight track, dialogue out of sync, sound slows with
   the frame rate), Alt+F4 once did not close the game.
 - **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
-  184926 / 115837 / 115853 with R1 held; prints fps + world/late/shadow/sprite counters; logs
+  184926 / 115837 / 115853; R1 held only since 25 Oct: boot.ps1 used to clear an -Env POP_INPUT, 2160f01; prints fps + world/late/shadow/sprite counters; logs
   `game\recomp-sotc\stnative_<save>.log`), watched with `tools/windows/watch-job.sh` under Monitor. A/B of one save
   with native on vs off + screenshots: `game\jobs\glowab.ps1` (edit the save name). Save-state boots have no sound and
   miss long-session bugs (N8-N11); those need the user's play sessions. Before any boot: TV on (ask), and the user's

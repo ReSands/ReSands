@@ -79,7 +79,8 @@ PS2 recomp projects first (rule). Related: the nightly check's missing target 0x
 `game/analysis/crash1024/crash.dmp` on the PC). **Fix built 24 Oct (3b80b66), in-game check pending:** the override
 registers FUN_00172840 at 0x172844 too (its first instruction, 0x172840, is the jal's delay slot, a nop, so running
 it from there is the resume). A scan of every function in `functions.csv` for a last instruction that is a call:
-this is the only one in the ELF. Not a full fix for the class: the recompiler should add an entry at every call's
+this is the only one in the ELF. **25 Oct:** save 202314 fought for 300 s with R1 held (50-56 fps), no
+`missing-target` line, no freeze (one run; the 24 Oct crash came after ~16 minutes of play). Not a full fix for the class: the recompiler should add an entry at every call's
 return address even when it lies in the next function (`docs/upstream_ps2recomp.md`).
 
 ## Crash 2 (21 Oct 21:10, during combat)
@@ -91,6 +92,13 @@ The save was taken after the freeze began, so loading it may freeze at once (a r
 depended on something not in the save). Next steps (not done): load it on the PC (`PS2X_STATE_LOAD_AT`), read the
 guest threads' state from its ESCH section (which thread was running or blocked, at which pc), and check whether
 it is the same split-function problem as crash 1.
+**25 Oct:** the save's guest threads (`tools/popstate.py <state> --threads`) look like any healthy save: main thread
+running (in `rand`, called from the water ripple update FUN_0040EC80 with sane values: 7 iterations left, dt 0.02),
+threads 2/4 waiting on semaphores 10/70, thread 5 sleeping, thread 3 dormant; the same picture as save 115837.
+Booted on the PC (native renderer on, no R1) it **runs on**: 85 s at 60 fps, no freeze. So the freeze depended on
+something the save does not hold or a save-state boot does not run. The plain candidate is sound (save-state boots
+have none; the freeze was in a fight with music), else host-side state (GS/VU threads). Next: a fight session with
+sound on the current build; if it freezes, take a full dump (as crash1024) before closing the game.
 Ruled out (23 Oct): exhaustion of the runtime's callback-stack pool (the God Hand 30-minute crash, `docs/reference.md`
 "God Hand"): the crash save uses 3 of its 22 stacks.
 
