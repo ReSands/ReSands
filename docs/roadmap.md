@@ -94,6 +94,15 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   non-matching readable decomp is the fallback.
 - **Scale (estimate):** C++, ~4 MB of code; a full match is years, one subsystem (camera, Prince movement) weeks.
   Done a subsystem at a time, single-function sessions rather than many parallel workers.
+- **Who does what (25 Oct 2026, estimate).** The per-function grind suits Qwen at night: the byte diff is a strict
+  judge, as in the VU1 ports (`docs/llm_jobs.md`). Claude (day sessions) does what one-function-at-a-time cannot: the
+  compiler and project setup (split into translation units, link order, build + diff tooling), each subsystem's shared
+  headers (class layouts, vtable order, inlines; a wrong header breaks every function using it), and the morning
+  review of stuck functions. Qwen works a subsystem's queue easiest first, may not edit shared headers (it reports
+  "needs header change"), and a change is kept only if it matches and no matched function regresses.
+  decomp-permuter (no LLM) takes the near-misses (compiler-quirk walls: register allocation, scheduling). Most
+  functions by count could be Qwen's; most of the thinking is Claude's. Nights are taken by the renderer until 1.x,
+  so only the compiler check (no PC time) is worth doing early.
 - **Method reference:** `lemiur/Game-Decompilation-Skill-For-Claude` (Claude Code skills for matching decomps:
   matcher, wall-identifier, helper-recovery, permute, decomp-code-rules; read 25 Oct 2026; no licence, so reference
   only, not installed).
