@@ -2869,11 +2869,6 @@ namespace pop_native_live
         // (element or ref << 16 | matrix index | pass << 56) -> the records of its first Display call in the frame (later
         // calls of the same draw, e.g. the alpha pass +0x98, would darken twice)
         std::unordered_map<uint64_t, std::vector<RecordRange>> g_frameByCall;
-        // the same without the pass: the first call of (element or ref, matrix index) that added records. A skinned
-        // draw is recorded once per (element, index) whatever the pass (g_frameSeen), so a later call with another
-        // pass adds none; its geometry is the same.
-        constexpr uint64_t kPassBits = uint64_t(0xF) << 56;
-        std::unordered_map<uint64_t, std::vector<RecordRange>> g_frameByObject;
         uint64_t callKey(R5900Context *ctx)
         {
             return (uint64_t(getRegU32(ctx, 4)) << 16) | (getRegU32(ctx, 5) & 0xFFFF) | (uint64_t(getRegU32(ctx, 6) & 0xF) << 56);
@@ -2889,8 +2884,6 @@ namespace pop_native_live
                 v.push_back({1, n1, g_framePosed.size() - n1});
             if (g_frameRefs.size() > n2)
                 v.push_back({2, n2, g_frameRefs.size() - n2});
-            if (!v.empty())
-                g_frameByObject.emplace(key & ~kPassBits, v);
         }
         // the hooks: the recording calls above, plus which records each call added (records are made before the
         // original runs, so the counts after the call are right even if the scheduler unwinds inside it)
@@ -2924,8 +2917,7 @@ namespace pop_native_live
         {
             uint64_t projectors = 0, nativeProjectors = 0, mirror = 0, casters = 0, casterTris = 0, receivers = 0, receiverTris = 0, culled = 0, noGeometry = 0;
             // why: entries without records (CJIdxMesh, mesh/ref, other kinds), receivers whose base went to the GS
-            uint64_t missIdx = 0, missMesh = 0, missOther = 0, missEmpty = 0, baseOnGs = 0;
-            uint64_t otherPass = 0; // entries found through another pass's call (g_frameByObject)
+            uint64_t missIdx = 0, missMesh = 0, missOther = 0, baseOnGs = 0;
         } g_shadowStats;
 
         // world position of a record's vertex (row vectors: model is column-major object -> world)
@@ -3001,20 +2993,7 @@ namespace pop_native_live
                 ++(kind == 4 ? g_shadowStats.missIdx : g_shadowStats.missMesh);
                 return false;
             }
-            const std::vector<RecordRange> *ranges = &it->second;
-            if (ranges->empty())
-            {
-                // the call was made but added no records: another pass's call of the same object did
-                const auto ob = g_frameByObject.find(key & ~kPassBits);
-                if (ob == g_frameByObject.end())
-                {
-                    ++g_shadowStats.missEmpty;
-                    return false;
-                }
-                ++g_shadowStats.otherPass;
-                ranges = &ob->second;
-            }
-            for (const RecordRange &r : *ranges)
+            for (const RecordRange &r : it->second)
                 for (size_t i = r.first; i < r.first + r.count; ++i)
                 {
                     if (r.kind == 0)
@@ -3692,7 +3671,6 @@ namespace pop_native_live
             g_frameSeen.clear();
             g_frameLightmap.clear();
             g_frameByCall.clear();
-            g_frameByObject.clear();
             g_frameShadows.clear();
             g_frameShadowImages.clear();
             g_frameSeq = 0;
@@ -3845,13 +3823,11 @@ namespace pop_native_live
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu "
-                                         "(idx %llu, mesh/ref %llu, other kinds %llu, call without records %llu), found via another pass %llu, "
-                                         "receiver bases on the GS %llu\n",
+                                         "(idx %llu, mesh/ref %llu, other kinds %llu), receiver bases on the GS %llu\n",
                                  (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
                                  (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.receivers,
                                  (unsigned long long)g_shadowStats.noGeometry, (unsigned long long)g_shadowStats.missIdx,
                                  (unsigned long long)g_shadowStats.missMesh, (unsigned long long)g_shadowStats.missOther,
-                                 (unsigned long long)g_shadowStats.missEmpty, (unsigned long long)g_shadowStats.otherPass,
                                  (unsigned long long)g_shadowStats.baseOnGs);
             }
             g_origKick(rdram, ctx, runtime);
