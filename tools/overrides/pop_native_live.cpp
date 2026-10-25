@@ -2917,7 +2917,7 @@ namespace pop_native_live
         {
             uint64_t projectors = 0, nativeProjectors = 0, mirror = 0, casters = 0, casterTris = 0, receivers = 0, receiverTris = 0, culled = 0, noGeometry = 0;
             // why: entries without records (CJIdxMesh, mesh/ref, other kinds), receivers whose base went to the GS
-            uint64_t missIdx = 0, missMesh = 0, missOther = 0, baseOnGs = 0;
+            uint64_t missIdx = 0, missMesh = 0, missOther = 0, missEmpty = 0, baseOnGs = 0;
         } g_shadowStats;
 
         // world position of a record's vertex (row vectors: model is column-major object -> world)
@@ -2991,6 +2991,24 @@ namespace pop_native_live
             if (it == g_frameByCall.end())
             {
                 ++(kind == 4 ? g_shadowStats.missIdx : g_shadowStats.missMesh);
+                return false;
+            }
+            if (it->second.empty())
+            {
+                // the call was made but recorded nothing: what it was (the first few, to find the path)
+                ++g_shadowStats.missEmpty;
+                static int logged = 0;
+                if (logged++ < 24)
+                {
+                    const uint32_t obj = uint32_t(word) << 4, pass = guest8(rdram, entry + 0xD) & 0xF;
+                    const uint32_t el = kind == 10 ? guestAny(rdram, obj + 0x20) : obj;
+                    const auto sk = g_skipped.find(el);
+                    std::fprintf(stderr, "[pop:shadow] entry without records: kind %u %s %08x index %u pass %u | element %08x decoded %d skinned %d "
+                                         "skipped '%c' palette %08x packet %08x\n",
+                                 kind, kind == 10 ? "ref" : "element", obj, index, pass, el, int(g_elements.count(el)), int(g_skinned.count(el)),
+                                 sk == g_skipped.end() ? '-' : sk->second, guestAny(rdram, el + 0x48),
+                                 kind == 10 ? guestAny(rdram, obj + 4 * (pass == 4 ? 0 : pass)) : guestAny(rdram, el + 0x20 + 4 * (pass == 4 ? 1 : pass)));
+                }
                 return false;
             }
             for (const RecordRange &r : it->second)
@@ -3823,12 +3841,12 @@ namespace pop_native_live
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
                     std::fprintf(stderr, "[pop:world] shadows: projectors %llu, native %llu (mirror %llu), receivers %llu, list entries without records %llu "
-                                         "(idx %llu, mesh/ref %llu, other kinds %llu), receiver bases on the GS %llu\n",
+                                         "(idx %llu, mesh/ref %llu, other kinds %llu, call without records %llu), receiver bases on the GS %llu\n",
                                  (unsigned long long)g_shadowStats.projectors, (unsigned long long)g_shadowStats.nativeProjectors,
                                  (unsigned long long)g_shadowStats.mirror, (unsigned long long)g_shadowStats.receivers,
                                  (unsigned long long)g_shadowStats.noGeometry, (unsigned long long)g_shadowStats.missIdx,
                                  (unsigned long long)g_shadowStats.missMesh, (unsigned long long)g_shadowStats.missOther,
-                                 (unsigned long long)g_shadowStats.baseOnGs);
+                                 (unsigned long long)g_shadowStats.missEmpty, (unsigned long long)g_shadowStats.baseOnGs);
             }
             g_origKick(rdram, ctx, runtime);
         }
