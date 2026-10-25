@@ -591,22 +591,9 @@ namespace pop_native_live
             const uint32_t set = table + (guestAny(rdram, 0x70000088u) & 0xFF) * 0xF0u;
             uint32_t ambient = guestAny(rdram, set + 4);
             int count = int(guest8(rdram, set + 8));
-            // The constant colour bytes are refreshed lazily: DoSetSkinLightEnv first runs
-            // ExtractLocalAlphaAndConstantColor (0x4B23C0) when the state is dirty (+0x48 != +0x4C), and that
-            // runs inside the Display call native mode replaces, so the bytes can be stale. Derive them as it
-            // does from the render-state flags (bits 13-15: 2 = the material's +8 colour, 4 = 0x808080).
-            // N1: a slowed enemy is drawn in the material's flat sand colour this way.
-            bool constant = guest8(rdram, 0x70000039u) != 0;
-            uint32_t constColour = guestAny(rdram, 0x7000003Cu);
-            if (guestAny(rdram, 0x70000048u) != guestAny(rdram, 0x7000004Cu))
+            if (guest8(rdram, 0x70000039u))
             {
-                const uint32_t material = guestAny(rdram, 0x70000030u), cc = (guestAny(rdram, 0x70000000u) & 0xE000u) >> 13;
-                constant = material && (cc == 2 || cc == 4);
-                constColour = cc == 4 ? 0x808080u : material ? guestAny(rdram, material + 8) & 0xFFFFFFu : 0u;
-            }
-            if (constant)
-            {
-                ambient = constColour;
+                ambient = guestAny(rdram, 0x7000003Cu);
                 count = 0;
             }
             for (int c = 0; c < 3; ++c)
