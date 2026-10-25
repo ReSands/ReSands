@@ -95,6 +95,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 1.6   Ray tracing (each effect a toggle, drawn before the PS2 post-processing)
 1.7   DualSense haptics + adaptive triggers
 --    PAL / JP discs (new code takes addresses from one table per disc)
+2.0   (potential) Byte-matching decomp alongside the recomp, for historical study
 Dropped: DLSS/FSR/XeSS, GameCube assets (23 Oct)
 ```
 

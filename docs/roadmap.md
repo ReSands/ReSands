@@ -81,6 +81,26 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   addresses, so new code should take addresses from one table per disc. PAL also brings 50 Hz and its language
   versions.
 
+## 2.0: decomp for historical study (potential, user 25 Oct 2026; not investigated yet)
+
+- **2.0 = a byte-matching decompilation alongside the recomp,** as a side quest for historical study. It does not
+  clash with the recomp: a separate source tree (own folder or private repo) sharing the Ghidra project, the
+  prototype's names (10,618 functions) and struct layouts. Knowledge flows both ways, code only later: matched source
+  is PS2-shaped (32-bit pointers, fixed memory layout, VU0 inline assembly, scratchpad), so replacing a recompiled
+  function with it needs the same work as an override.
+- **First step when picked up: a feasibility check, no PC time.** Find the exact Metrowerks CodeWarrior PS2 version
+  and flags (the ELF's `.mwcats`), find a usable copy of that compiler (e.g. whether decomp.me hosts it), then try to
+  byte-match two or three small functions from one module. No suitable compiler -> byte matching is out; a
+  non-matching readable decomp is the fallback.
+- **Scale (estimate):** C++, ~4 MB of code; a full match is years, one subsystem (camera, Prince movement) weeks.
+  Done a subsystem at a time, single-function sessions rather than many parallel workers.
+- **Method reference:** `lemiur/Game-Decompilation-Skill-For-Claude` (Claude Code skills for matching decomps:
+  matcher, wall-identifier, helper-recovery, permute, decomp-code-rules; read 25 Oct 2026; no licence, so reference
+  only, not installed).
+- **Rules to settle first:** the leaked Jade source stays off limits; Sony library code in the ELF stays assembly or
+  is decompiled from our own binary only, never from memory; a decomp reconstructs Ubisoft's code, so it stays
+  private unless the user decides otherwise (the ground rules share only our own code).
+
 ## Dropped
 
 - **DLSS / FSR / XeSS (user, 23 Oct; was the old 1.3).** These temporal upscalers and frame generation only work
