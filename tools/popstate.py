@@ -67,7 +67,43 @@ class State:
         return fbp, fbw, psm, w, h
 
 
+THREAD_STATUS = ['running', 'ready', 'waiting', 'waiting+suspended', 'suspended', 'dormant']
+WAIT_REASON = ['none', 'sleep', 'semaphore', 'event flag', 'vsync']
+
+
+def threads(path):
+    """The guest threads of ESCH (ps2_save_state.cpp serialize(GuestThread)): one dict per thread.
+    R5900Context is copied raw (1648 bytes on the PC build: r[32] x 16, then pc)."""
+    d = open(path, 'rb').read()
+    o = d.find(b'ESCH')
+    # vblank period u32, then m_readyQueues (empty in every save seen: 0x400 bytes of zero counts here)
+    q = o + 0x408
+    n, = struct.unpack_from('<Q', d, q); q += 8
+    out = []
+    for _ in range(n):
+        key, tid = struct.unpack_from('<ii', d, q)
+        ctx = q + 8
+        r = ctx + 1648
+        entry, stack, ssz, gp, attr, opt, arg, prio0, prio = struct.unpack_from('<7I2i', d, r); r += 36
+        status = d[r]; r += 1 + 8 + 1 + 4  # status, suspendCount, wakeupCount, ownsStack, tlsBase
+        reason = d[r]; r += 1 + 16 + 16    # wait.reason, wait.resume, pendingResume
+        idx, = struct.unpack_from('<Q', d, r); r += 8
+        size = [1, 4, 16, 16, 16][idx]
+        wait_id = struct.unpack_from('<i', d, r)[0] if size >= 4 else None
+        r += size
+        reg = lambda i: struct.unpack_from('<I', d, ctx + 16 * i)[0]
+        out.append(dict(id=tid, entry=entry, prio=prio, status=THREAD_STATUS[status] if status < 6 else status,
+                        wait=WAIT_REASON[reason] if reason < 5 else reason, wait_id=wait_id,
+                        pc=struct.unpack_from('<I', d, ctx + 512)[0], ra=reg(31), sp=reg(29)))
+        q = r
+    return out
+
+
 def main():
+    if '--threads' in sys.argv:
+        for t in threads(sys.argv[1]):
+            print(' '.join(f'{k} {v:#x}' if isinstance(v, int) and k in ('entry', 'pc', 'ra', 'sp') else f'{k} {v}' for k, v in t.items()))
+        return
     s = State(sys.argv[1])
     if '--frame' in sys.argv:
         import os

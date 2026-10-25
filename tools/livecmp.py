@@ -67,8 +67,18 @@ def main(argv):
     if cmd == 'score':
         w, h, a = read_png(argv[1])
         _, _, b = read_png(argv[2])
-        d = [abs(x - y) for x, y in zip(a, b)]
-        print('mean difference %.2f, %.1f%% of values off by > 24, max %d' % (sum(d) / len(d), 100 * sum(1 for x in d if x > 24) / len(d), max(d)))
+        # letterbox bars (2D, black in the game picture) are not the native frame's: score the rows between them
+        black = lambda y: max(b[y * w * 3:(y + 1) * w * 3]) <= 8
+        y0, y1 = 0, h
+        while y0 < h and black(y0):
+            y0 += 1
+        while y1 > y0 and black(y1 - 1):
+            y1 -= 1
+        if y1 - y0 < h // 2:  # mostly black (a fade): score it all
+            y0, y1 = 0, h
+        d = [abs(x - y) for x, y in zip(a[y0 * w * 3:y1 * w * 3], b[y0 * w * 3:y1 * w * 3])]
+        bars = ', rows %d-%d (letterbox)' % (y0, y1 - 1) if (y0, y1) != (0, h) else ''
+        print('mean difference %.2f, %.1f%% of values off by > 24, max %d%s' % (sum(d) / len(d), 100 * sum(1 for x in d if x > 24) / len(d), max(d), bars))
     elif cmd == 'side':
         w, h, a = read_png(argv[1])
         _, _, b = read_png(argv[2])
