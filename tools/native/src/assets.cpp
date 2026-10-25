@@ -70,7 +70,7 @@ namespace pop_assets
             return ((page << 14) + ((id >> 5) << 14) + (id & 0x1F) * 512 + pop_gs::kColumn4[y & 15][x & 31]) % (8u << 20);
         }
 
-        bool texture8(const Pack &p, uint32_t off, pop_native::Image &out)
+        bool texture8(const Pack &p, uint32_t off, pop_native::Image &out, const uint8_t *paletteOverride = nullptr)
         {
             uint16_t w, h;
             uint32_t palKey;
@@ -101,7 +101,7 @@ namespace pop_assets
                 }
                 return true;
             }
-            const uint8_t *buf = p.d + dp, *palette = p.d + pp;
+            const uint8_t *buf = p.d + dp, *palette = paletteOverride ? paletteOverride : p.d + pp;
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x)
                 {
@@ -247,12 +247,30 @@ namespace pop_assets
         return isTexture(pack, key) && u16(pack, pack.records.at(key).first + 8, f) ? f : 0u;
     }
 
-    bool decodeTexture(const Pack &pack, uint32_t key, pop_native::Image &out)
+    bool decodeTexture(const Pack &pack, uint32_t key, pop_native::Image &out, const uint8_t *palette)
     {
         if (!isTexture(pack, key))
             return false;
         const auto [off, size] = pack.records.at(key);
-        return textureFormat(pack, key) == 6 ? lightmap(pack, off, size, out) : texture8(pack, off, out);
+        return textureFormat(pack, key) == 6 ? lightmap(pack, off, size, out) : texture8(pack, off, out, palette);
+    }
+
+    bool texturePalette(const Pack &pack, uint32_t key, std::vector<uint8_t> &out)
+    {
+        if (!isTexture(pack, key) || textureFormat(pack, key) == 6)
+            return false;
+        const uint32_t off = pack.records.at(key).first;
+        uint16_t w, h;
+        uint32_t palKey;
+        size_t pp, dp;
+        if (!u16(pack, off + 12, w) || !u16(pack, off + 14, h) || !u32(pack, off + 0x3C, palKey))
+            return false;
+        const auto pal = pack.records.find(palKey);
+        if (pal == pack.records.end() || !imageData(pack, pal->second.first, pal->second.first + pal->second.second, 1024, pp) ||
+            !imageData(pack, off, off + 0x200, size_t(w) * h, dp))
+            return false;
+        out.assign(pack.d + pp, pack.d + pp + 1024);
+        return true;
     }
 
     bool subMaterial(const Pack &pack, uint32_t multiMaterial, uint32_t index, SubMaterial &out)

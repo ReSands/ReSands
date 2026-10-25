@@ -27,7 +27,10 @@ namespace pop_assets
     // CLUT: index i -> grey 17 * i). RGBA out; texture alpha 0x80 -> 255.
     bool isTexture(const Pack &pack, uint32_t key);
     uint32_t textureFormat(const Pack &pack, uint32_t key); // 0 when not a texture
-    bool decodeTexture(const Pack &pack, uint32_t key, pop_native::Image &out);
+    // palette: 256 colours (1024 bytes, as stored) to use instead of the pack's (8-bit textures only)
+    bool decodeTexture(const Pack &pack, uint32_t key, pop_native::Image &out, const uint8_t *palette = nullptr);
+    // the pack's 256-colour palette of an 8-bit texture (1024 bytes, as stored); false for other textures
+    bool texturePalette(const Pack &pack, uint32_t key, std::vector<uint8_t> &out);
 
     // Multi-material (record kind 4) entry -> sub-material (kind 5): texture key and blend state.
     struct SubMaterial
