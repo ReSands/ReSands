@@ -401,5 +401,9 @@ Why: after P4 the next VU1 program by value for 0.13 (particles, tied to the `-N
 - **Run (26 Oct, started 11:38, daytime):** by 15:24, pass 1 had 54 of the first 64 stages passing (10 failing,
   mostly 0x04b8-0x06b8). The user stops it with "Stop Qwen" when they want the TV and restarts it for the night
   after checking whether it is still worth it.
+- **Result (stopped 20:22, "Stop Qwen"):** **83 of 87 pass** (82 Qwen + the hand-ported `p5_0000`). Pass 1 (to
+  16:43) left 13, pass 2 left 9, pass 3 left 4 (5 new passes there: the fresh seed per request works), pass 4 nothing
+  new. Left for hand-porting: `p5_02c0`, `p5_04b8`, `p5_1550`, `p5_1700` (each failed 12+ rounds). Results copied
+  to the Mac (`game/analysis/qwen/vu1_p5_*`). Not run overnight: 4 stages that failed 4 passes are cheaper by hand.
 - **P5 is the last VU1 program to port:** P0/P2 are VU0, P3 unreachable, P10 dead (26 Oct,
   `docs/native_renderer.md` "VU1 program inventory"). The next Qwen batch, if any, is not VU1 microcode.

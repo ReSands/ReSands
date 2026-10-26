@@ -78,9 +78,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **Qwen:** P4 character VU1 program done 26 Oct: Qwen 67 of 79 stages, 13 by hand, `--chain p4` PASS 673 whole runs
   (`tools/vu1port/ported/p4.cpp`, not in the game yet). Found on the way: 14 "passed" ports (P4/P6/P9, incl. the shipped
   `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). P5 (particles, 87 stages,
-  `oct26.ps1`) running since 26 Oct 11:38 (pass 1 at 15:24: 54 of 64 pass); the user stops it for the TV and restarts
-  it overnight after asking whether it is still worth it. Then: `qwen-night.log`, copy `game\analysis\qwen\vu1_p5_*`,
-  hand-port the rest, `--chain p5`. `docs/llm_jobs.md` "VU1 particle program P5". **P5 is the last VU1 program to
+  `oct26.ps1`, 26 Oct 11:38-20:22): **83 of 87 pass**, results on the Mac. Next: hand-port `p5_02c0`, `04b8`, `1550`,
+  `1700`, then `--chain p5` on the 930 whole runs. `docs/llm_jobs.md` "VU1 particle program P5". **P5 is the last VU1 program to
   port** (P0/P2 = VU0, P3 unreachable, P10 dead; 26 Oct, `docs/native_renderer.md` "VU1 program inventory").
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image.
 
