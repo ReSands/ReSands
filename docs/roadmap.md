@@ -177,6 +177,23 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **Rules to settle first:** the leaked Jade source stays off limits; Sony library code in the ELF stays assembly or
   is decompiled from our own binary only, never from memory; a decomp reconstructs Ubisoft's code, so it stays
   private unless the user decides otherwise (the ground rules share only our own code).
+- **Legal position, compared with OpenGOAL (26 Oct 2026; general background, not legal advice).** The rule above is
+  a cautious project choice about *publishing*, not a finding that the work is illegal; personal use from our own
+  disc and GOG copy is the same pattern every fan decomp relies on.
+  - OpenGOAL (Jak 1-3, `github.com/open-goal/jak-project`, ISC) answers "Is this project legal?" with only "Yes" in
+    its FAQ (`opengoal.dev/docs/faq/`), with no reasoning; it ships no assets, needs the user's own PS2 disc, shares
+    no ISOs. No court has ruled on any fan decomp (OpenGOAL, SM64, OoT), so a SoT decomp would be in the same untested
+    position, not a worse one.
+  - Case law (US): disassembly to build compatible software can be fair use (Sega v. Accolade 1992, Sony v.
+    Connectix 2000), but those cover the copying done during analysis, not publishing source that reproduces the
+    program. EU: decompilation allowed for interoperability only (narrower). Code is copyrighted, and decompiled source
+    is arguably a copy/derivative; byte matching aims to reproduce the original exactly, which arguably strengthens
+    that point. OpenGOAL may be on slightly firmer ground as a port (GOAL source -> x86-64 via its own compiler, not a
+    rebuild of the original binary; our reading, not their claim).
+  - These projects survive through tolerance (no assets, own disc required, nothing sold), not permission; the risk
+    is a takedown notice from the publisher (here Ubisoft). If the user wants to publish one day: read the published
+    decomps' notices first, possibly ask a lawyer. Until then the rule stays. The leaked-code rule is separate
+    (provenance) and applies either way.
 
 ## Dropped
 
