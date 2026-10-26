@@ -54,15 +54,14 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
   through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
   Borrowed fixes placed by milestone (MOVZ/MOVN with the next full rebuild, etc.): `docs/roadmap.md`.
-- **Next (agreed order):** after P5: the repeatable bugs first (N13-N16, N7, rewind 30 fps; fps items wait for 0.2;
-  `docs/native_bugs.md` "Order agreed 26 Oct"), then 0.13 native effects: water (P6), halos, light shafts, flashes; then retry `-NativeLate`
-  (if the glow still pops with halos/glow native, dig into the depth handoff: `docs/native_bugs.md` "Save-point pop").
-  Small ones on the side: `.glitch` compression (triaged captures deleted 25 Oct, `docs/native_bugs.md` "Storage");
-  why a `-Fast` rebuild once recompiled the whole runtime; Esc did not quit one session (25 Oct 14:59, killed).
-  The 25 Oct baths session's reports (N13-N16, rewind at 30 fps in 155110, a low-fps fight; missing sounds for 0.3):
-  `docs/native_bugs.md`, saves in `game/analysis/saves1025e/` (the baths saves = water test set for P6). Lower: fight fps (save boots ~49-58 fps),
-  camera X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights, audio bugs
-  (for 0.3), Alt+F4 once did not close the game.
+- **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
+  at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
+  the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native
+  (0.2), not fixed now;** bugs in the native code itself are fixed now. N7 set aside; fps items wait for 0.2. Then 0.13:
+  P4/P5 into the game, water (P6), halos, light shafts, flashes, then retry `-NativeLate` (if the glow still pops,
+  `docs/native_bugs.md` "Save-point pop"). Side jobs: `.glitch` compression, why one `-Fast` rebuild recompiled the
+  whole runtime, Esc / Alt+F4 sometimes not quitting. Missing sounds go to 0.3. Lower: camera X reversed in fixed
+  views, door flicker with a black web, trouser flicker, torch point lights.
 - **How we judge (lessons 25 Oct, `docs/lessons.md`):** a few screenshots cannot show a short or camera-dependent
   effect is absent; the user's in-motion check with clock times is the reference, and the job log records each run's
   start time. Our GS emulation is not ground truth either: PS2 videos / hardware settle "is this original?".

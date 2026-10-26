@@ -10,11 +10,25 @@ generation switches in the 25 Oct sessions, no black flash), N9 (user saw the do
 (the user captures a save then): N3 stairs flash, N4 combat camera teleport. Watch in long sessions: N8 wall hue,
 N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
 
-**Order agreed 26 Oct (user): squash the repeatable bugs (a save shows them) before 0.13 water.** After the P5 Qwen
-run is analysed and its leftovers hand-ported: (1) N13/N14/N16 flicker + N15 sun brightness (baths saves 1025e;
-first check each with every native switch off: GS-only shows it too -> not the hybrid frame); (2) N7 dagger flash
-(original? PCSX2 / video); (3) rewind at 30 fps (155110). (4) the fps items (N6, fight fps 160324 / 160404 / 184926)
-**wait until the renderer is fully native (0.2)**, so the GS fallback cost does not muddy the profile. Then 0.13.
+**Order agreed 26 Oct (user), revised 26 Oct evening (P5 is done: `--chain p5` PASS 930 whole runs).**
+Squash the repeatable bugs (a save shows them) before 0.13; every item below gets at least a quick look, so we do
+not build 0.13 on top of broken code.
+- **Rule (user, 26 Oct): a bug caused by the hybrid frame (native and GS drawing in one frame) is parked until the
+  renderer is fully native (0.2)**, not fixed now: that code is about to go. The deciding check for each: the same
+  save with every native switch off (GS only, as `game\jobs\glowab.ps1`). GS-only shows it too -> not the hybrid:
+  look into it now. Only with native on -> find out whether it is the hybrid (native and GS interacting: depth handoff,
+  late lists, fallback frames) or a bug in the native code itself; the first is parked here with a note, the second
+  is fixed now.
+1. **N13 / N14 / N16 flicker + N15 sun brightness** (baths saves `game/analysis/saves1025e/`: 162246, 162442,
+   162621 / 162625, 162819, 163042). First the GS-only A/B of each (needs the TV), then per the rule above.
+   N13/N14/N16 are probably one bug (seams of world geometry); N15 looks like N10 (glow visibility against a depth
+   buffer the native world partly wrote: if so, hybrid -> parked, or picked up with the 0.13 halo work).
+2. **Rewind at 30 fps** (save 155110): reproduce from the save first (115853 did not), then profile; if it is the
+   native frame falling back to the GS, it is hybrid -> parked.
+3. **N7 dagger flash: set aside** (user: seen once, may not be reproducible).
+4. The fps items (N6, fight fps 160324 / 160404 / 184926) wait for 0.2, as before.
+Then 0.13: put P4 / P5 into the game (as P9: the ports plus an interpreter fallback at branches the traces never
+took; whole-run checks on new traces), water (P6), halos, light shafts, flashes, then retry `-NativeLate`.
 
 ## Tooling first (agreed 24 Oct)
 
