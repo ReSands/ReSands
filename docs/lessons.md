@@ -207,3 +207,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   sampled case overflowed. Whole-run checks and every case of the failing runs (`vu1replay --records`) found them;
   a static check for the known bad form now runs before the judge. Also: when a primer describes semantics
   ("product first, then the add"), check it against the reference code; the model copies the primer faithfully.
+- **Before hunting for code that never ran, ask the binary who calls it.** P0, P2, P3, P10 (VU1 inventory) were
+  settled offline in about an hour, with no captures: references to each MPG packet, the program-selection table, and the
+  prototype's labels (its VU driver labels come in the same order as the retail programs). Two were VU0 code, one
+  unreachable, one dead library data. `docs/native_renderer.md` "VU1 program inventory".

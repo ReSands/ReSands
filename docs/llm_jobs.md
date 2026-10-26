@@ -398,3 +398,8 @@ Why: after P4 the next VU1 program by value for 0.13 (particles, tied to the `-N
 - **Expected run time (estimate, from P4):** P4 went 79 -> 23 stages left in pass 1 (6 h 50), -> 14 in pass 2 (3 h 20),
   -> 12 by mid pass 3. P5 is about the same size (87 stages), so pass 1 ~7 h, pass 2 ~3 h; the job usually stops on
   the two-idle-passes rule ~12-14 h after the start, or "Stop Qwen" in the morning with ~10-15 stages left by hand.
+- **Run (26 Oct, started 11:38, daytime):** by 15:24, pass 1 had 54 of the first 64 stages passing (10 failing,
+  mostly 0x04b8-0x06b8). The user stops it with "Stop Qwen" when they want the TV and restarts it for the night
+  after checking whether it is still worth it.
+- **P5 is the last VU1 program to port:** P0/P2 are VU0, P3 unreachable, P10 dead (26 Oct,
+  `docs/native_renderer.md` "VU1 program inventory"). The next Qwen batch, if any, is not VU1 microcode.

@@ -477,6 +477,15 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   | P9 | 0x4E338C | 0-48 | 2 per CJadeSpriteElement draw |
   | **P6** | **0x4DAC8C** | 40-60 | **water** (all 22 water saves of 17 Oct run it; 3 more saves do too) |
   P0, P2, P3, P10 never ran in 100 saves. Earlier notes' "VU1 program 7" for water = P6 here (counted from 1).
+  **Why (26 Oct, static, from the ELF + prototype symbols; prototype driver labels follow the same order):**
+  P0 = `ps2MATH_VU0_MicroCode` (VU0 maths: `VU0_CompteDirLight`, `VU0_ComputeParticules`) and P2 = the VU0
+  driver (`FREE_SHAPE_BOUNDING_BOX_CHECK`; `FUN_004a2200` sends it down VIF0 at graphics init) are **VU0** programs,
+  in the list only because they load at 0 (the game's VCALLMS sites are at 0x495300-0x495C18). P3 = `MULT_CHANNEL_DRIVER`, driver slot 3 in
+  `Vu1TagInit` (entry 0x196 like slot 0), **unreachable**: `ExchangeVu1Code` is only reached via `DoSetVUProgram`,
+  whose fixed callers pass 0/1/4/5/6/7, and the per-draw table at scratchpad 0x700000B0 (filled only by
+  `FUN_004b7640`) holds slots 0/1/2. P10 (+ the small MPGs at 0x400/0x200) = the SCEE screen shrink/clear packets
+  (`gvSceeDispShrink*`, `DoShrink`, `DoClear`), 0x4E4740-0x4E5200 with no reference from code: dead library data.
+  So nothing left to port on VU1 after P5; `vu1inventory.py` would still flag any of them in a save.
   The native renderer already covers what P1, P4, P7, P8 draw, i.e. nearly all VU1 runs.
 - **Prize measurement** (`POP_NATIVE_SKIP=static,skinned,lightmap,gfx|all`, measurement only: the covered
   paths return without building DMA, so the picture is wrong): `tools/windows/oct19.ps1 -Native` measures fps
