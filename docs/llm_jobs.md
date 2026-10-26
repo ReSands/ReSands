@@ -375,3 +375,26 @@ pass 3: 12). The 12 left, all hand-ported first try (`known_good/p4_*`): three 4
   pointer-read forms before compiling (catches all 14 originals, no false hits on the passing ports).
 - Still possible: other overflow-only differences in Qwen ports that the three traces never reach. When the game
   runs these ports, a whole-run check against the interpreter on new traces (as above) is the safety net.
+
+## VU1 particle program P5 for Qwen, 26 Oct 2026 (set up; the night job `oct26.ps1`)
+
+Why: after P4 the next VU1 program by value for 0.13 (particles, tied to the `-NativeLate` glow pop). P5 = ELF MPG
+0x4D948C, code 0x0-0x17c0 (760 pairs, 716 run in the traces); no R register, no EFU; 22 BAL / 8 JR subroutine calls,
+13 CLIPs with FCOR / FCAND tests, 3 E pairs.
+- **Several image hashes.** P5 shares VU1 micro memory with other programs, so its runs carry 7 hashes (every
+  recorded image holding P5's code unchanged: `port.P5_HASHES`); `vu1replay --only` takes a list now. ~930 runs over
+  the same three play traces as P4 (no new recording needed).
+- **Stages:** `cutscan.py --prefix p5` (new option): **87 stages, 716 pairs, longest 16**, 32 required entries, no
+  unsafe entry, no orphan block. Cases `tools/vu1port/cases_p5.sh`: 40-600 per stage, border check clean;
+  **`p5_whole.cases` = every recorded run (930)**, not 100 per run start: whole runs are what caught P4's overflow bugs.
+- **Hand port** `known_good/p5_0000` (the MSCAL entry, PASS 465): the end-to-end check and the first example, with the
+  exact `norm()` / `fix()` helpers.
+- **Harness changes from the P4 morning:** primer helpers and the reject check (above), and a **fresh seed per request**
+  (`tools/llm_port/meshdecode/port.py` `ask`): the 25-26 Oct retries with an unchanged conversation came back
+  byte-identical, so rounds after the first in a pass were wasted.
+- **Night job** `tools/windows/oct26.ps1` (shortcut "Qwen overnight (until Stop Qwen)" repointed): as oct25.ps1 for
+  P5; ends by itself after two passes with no new pass, then shuts down. Morning: `--chain p5` on the 930 runs, and a
+  look at any stage that passed only on its sampled cases (`vu1replay --records` on failing whole runs).
+- **Expected run time (estimate, from P4):** P4 went 79 -> 23 stages left in pass 1 (6 h 50), -> 14 in pass 2 (3 h 20),
+  -> 12 by mid pass 3. P5 is about the same size (87 stages), so pass 1 ~7 h, pass 2 ~3 h; the job usually stops on
+  the two-idle-passes rule ~12-14 h after the start, or "Stop Qwen" in the morning with ~10-15 stages left by hand.

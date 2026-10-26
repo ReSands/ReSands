@@ -1,7 +1,7 @@
 """Stage borders for a VU1 program port (tools/vu1port/port.py) from vu1replay --cutscan.
 
   vu1replay <trace> <image dir> /dev/null --only <hash> --cutscan <scan.txt> --hints <scan.hints>   (per trace)
-  python3 tools/vu1port/cutscan.py <image.bin> <scan.txt>... [--max N] [--resume <pc>...]
+  python3 tools/vu1port/cutscan.py <image.bin> <scan.txt>... [--max N] [--resume <pc>...] [--prefix p5]
 
 Prints a STAGES dict for port.py and a report. A pc may start a stage only if, on every visit in the traces:
 it is not a delay slot, nothing but vf / vi / ACC writes, clip flags, Q (the snapshot lands both), MAC / status
@@ -59,11 +59,15 @@ def control(lower):
 def main(argv):
     image, rest = argv[0], argv[1:]
     maxlen = 16
+    prefix = 'p4'
     extra = set()
     scans = []
     i = 0
     while i < len(rest):
-        if rest[i] == '--max':
+        if rest[i] == '--prefix':
+            prefix = rest[i + 1]
+            i += 2
+        elif rest[i] == '--max':
             maxlen = int(rest[i + 1])
             i += 2
         elif rest[i] == '--resume':
@@ -209,10 +213,10 @@ def main(argv):
         print('# block 0x%x is reached by no other block and is no entry' % b)
     for l, ex, ranges, size in stages:
         bad = [x for x in ex if x != END and x in blocks and entry_of[x] is None]
-        exs = ', '.join('P4_END' if x == END else '0x%x' % x for x in ex)
+        exs = ', '.join(prefix.upper() + '_END' if x == END else '0x%x' % x for x in ex)
         rs = ', '.join('(0x%x, 0x%x)' % (a, b) for a, b in ranges)
-        print("    'p4_%04x': dict(entry=0x%x, exits=[%s], ranges=[%s]),  # %d pairs%s" % (
-            l, l, exs, rs, size, ('  EXIT TO NON-ENTRY ' + str([hex(x) for x in bad])) if bad else ''))
+        print("    '%s_%04x': dict(entry=0x%x, exits=[%s], ranges=[%s]),  # %d pairs%s" % (
+            prefix, l, l, exs, rs, size, ('  EXIT TO NON-ENTRY ' + str([hex(x) for x in bad])) if bad else ''))
 
 
 if __name__ == '__main__':

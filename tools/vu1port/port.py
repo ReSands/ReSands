@@ -5,11 +5,11 @@ tries again. Results: game/analysis/qwen/vu1_<stage>/{port.log, spec.md, attempt
 
 Usage: python3 -I tools/vu1port/port.py <stage> [--url http://127.0.0.1:8033] [--rounds 12] [--spec-only]
        python3 -I tools/vu1port/port.py <stage> --judge <file.cpp>     (judge one file, e.g. a known-good answer)
-       python3 -I tools/vu1port/port.py --chain [p6|p9|p4]             (a whole program from the passed stages, judged
+       python3 -I tools/vu1port/port.py --chain [p6|p9|p4|p5]             (a whole program from the passed stages, judged
                                                                          on whole runs: game/analysis/vu1port/whole.cases,
                                                                          p9_whole.cases, p4_whole.cases; written to
                                                                          tools/vu1port/ported/<program>.cpp)
-Programs: P6 (water, stages p6_*; cases <stage minus "p6_">.cases), P9 (sprites, stages p9_*; cases <stage>.cases,
+Programs: P5 (particles, stages p5_*; cases <stage>.cases: tools/vu1port/cases_p5.sh), P6 (water, stages p6_*; cases <stage minus "p6_">.cases), P9 (sprites, stages p9_*; cases <stage>.cases,
 recorded offline from saves: tools/native/src/p9trace.cpp, tools/vu1port/cases_p9.sh) and P4 (characters, stages p4_*;
 cases <stage>.cases from three play traces: tools/vu1port/cases_p4.sh).
 """
@@ -234,14 +234,114 @@ STAGES_P4 = {
     'p4_3f88': dict(entry=0x3f88, exits=[0x31a8, 0x3290, 0x36c0, 0x3868], ranges=[(0x3f88, 0x3fb0)]),  # 6 pairs
 }
 
+# P5, the particle program (ELF MPG 0x4D948C, code 0x0-0x17c0; docs/native_renderer.md: runs follow the GFX particle
+# count). Its code shares VU1 micro memory with other programs, so its runs carry several image hashes (P5_HASHES, every
+# recorded image holding P5's code: identical in 0x0-0x17c0). No R register, no EFU; many BAL / JR subroutines and
+# clip tests. Stages from tools/vu1port/cutscan.py --prefix p5 over the cut scans of the same three traces (~930 runs,
+# 26 Oct), rules as P4. Cases: tools/vu1port/cases_p5.sh.
+P5_IMAGE = os.path.join(ROOT, 'game', 'analysis', 'vu1trace', 'vu1_7ed045b53cb74095.bin')
+P5_HASHES = '7ed045b53cb74095,c910ea058e675f8d,b35919706d1eaf51,ddbec29ebe2074a7,eb31521ad9827bdf,26a4916e54e450f8,7698e943d04daeb4'
+P5_END = 0xffffffff
+STAGES_P5 = {
+    'p5_0000': dict(entry=0x0, exits=[0x80], ranges=[(0x0, 0x78)]),  # 16 pairs
+    'p5_0080': dict(entry=0x80, exits=[0x100], ranges=[(0x80, 0xf8)]),  # 16 pairs
+    'p5_0100': dict(entry=0x100, exits=[0x370, 0x8e8, 0x8f8, 0x908, 0xf10, 0xf20, 0xf30], ranges=[(0x100, 0x140)]),  # 9 pairs
+    'p5_0148': dict(entry=0x148, exits=[0x1c8], ranges=[(0x148, 0x1c0)]),  # 16 pairs
+    'p5_01c8': dict(entry=0x1c8, exits=[0x370, 0x8e8, 0x8f8, 0x908, 0xf10, 0xf20, 0xf30], ranges=[(0x1c8, 0x238)]),  # 15 pairs
+    'p5_0240': dict(entry=0x240, exits=[0x2c0], ranges=[(0x240, 0x2b8)]),  # 16 pairs
+    'p5_02c0': dict(entry=0x2c0, exits=[0x1378, 0x1468, 0x14c0], ranges=[(0x2c0, 0x338)]),  # 16 pairs
+    'p5_0340': dict(entry=0x340, exits=[0x0], ranges=[(0x340, 0x368)]),  # 6 pairs
+    'p5_0370': dict(entry=0x370, exits=[P5_END], ranges=[(0x370, 0x378)]),  # 2 pairs
+    'p5_0380': dict(entry=0x380, exits=[0x3b0, 0x930], ranges=[(0x380, 0x3a8)]),  # 6 pairs
+    'p5_03b0': dict(entry=0x3b0, exits=[0x3f8, 0x408], ranges=[(0x3b0, 0x3f0)]),  # 9 pairs
+    'p5_03f8': dict(entry=0x3f8, exits=[0x408], ranges=[(0x3f8, 0x400)]),  # 2 pairs
+    'p5_0408': dict(entry=0x408, exits=[0x488], ranges=[(0x408, 0x480)]),  # 16 pairs
+    'p5_0488': dict(entry=0x488, exits=[0x4b8], ranges=[(0x488, 0x4b0)]),  # 6 pairs
+    'p5_04b8': dict(entry=0x4b8, exits=[0x538], ranges=[(0x4b8, 0x530)]),  # 16 pairs
+    'p5_0538': dict(entry=0x538, exits=[0x5b8], ranges=[(0x538, 0x5b0)]),  # 16 pairs
+    'p5_05b8': dict(entry=0x5b8, exits=[0x638], ranges=[(0x5b8, 0x630)]),  # 16 pairs
+    'p5_0638': dict(entry=0x638, exits=[0x6b8], ranges=[(0x638, 0x6b0)]),  # 16 pairs
+    'p5_06b8': dict(entry=0x6b8, exits=[0x718, 0x798], ranges=[(0x6b8, 0x710)]),  # 12 pairs
+    'p5_0718': dict(entry=0x718, exits=[0x3b0, 0x4b8, P5_END], ranges=[(0x718, 0x768)]),  # 11 pairs
+    'p5_0780': dict(entry=0x780, exits=[0x718], ranges=[(0x780, 0x790)]),  # 3 pairs
+    'p5_0798': dict(entry=0x798, exits=[0x848], ranges=[(0x798, 0x7a0)]),  # 2 pairs
+    'p5_0848': dict(entry=0x848, exits=[0x780, 0x860], ranges=[(0x848, 0x858)]),  # 3 pairs
+    'p5_0860': dict(entry=0x860, exits=[0x780, 0x878], ranges=[(0x860, 0x870)]),  # 3 pairs
+    'p5_0878': dict(entry=0x878, exits=[0x148, 0x780], ranges=[(0x878, 0x8e0)]),  # 14 pairs
+    'p5_08e8': dict(entry=0x8e8, exits=[0x918], ranges=[(0x8e8, 0x8f0)]),  # 2 pairs
+    'p5_08f8': dict(entry=0x8f8, exits=[0x240], ranges=[(0x8f8, 0x900)]),  # 2 pairs
+    'p5_0908': dict(entry=0x908, exits=[0x780], ranges=[(0x908, 0x910)]),  # 2 pairs
+    'p5_0918': dict(entry=0x918, exits=[0xf60], ranges=[(0x918, 0x928)]),  # 3 pairs
+    'p5_0930': dict(entry=0x930, exits=[0x9b0], ranges=[(0x930, 0x9a8)]),  # 16 pairs
+    'p5_09b0': dict(entry=0x9b0, exits=[0x9f0], ranges=[(0x9b0, 0x9e8)]),  # 8 pairs
+    'p5_09f0': dict(entry=0x9f0, exits=[0xa30, 0xa40], ranges=[(0x9f0, 0xa28)]),  # 8 pairs
+    'p5_0a30': dict(entry=0xa30, exits=[0xa40], ranges=[(0xa30, 0xa38)]),  # 2 pairs
+    'p5_0a40': dict(entry=0xa40, exits=[0xac0], ranges=[(0xa40, 0xab8)]),  # 16 pairs
+    'p5_0ac0': dict(entry=0xac0, exits=[0xae8], ranges=[(0xac0, 0xae0)]),  # 5 pairs
+    'p5_0ae8': dict(entry=0xae8, exits=[0xb68], ranges=[(0xae8, 0xb60)]),  # 16 pairs
+    'p5_0b68': dict(entry=0xb68, exits=[0xbe8], ranges=[(0xb68, 0xbe0)]),  # 16 pairs
+    'p5_0be8': dict(entry=0xbe8, exits=[0xc68], ranges=[(0xbe8, 0xc60)]),  # 16 pairs
+    'p5_0c68': dict(entry=0xc68, exits=[0xce8], ranges=[(0xc68, 0xce0)]),  # 16 pairs
+    'p5_0ce8': dict(entry=0xce8, exits=[0xd40, 0xdc0], ranges=[(0xce8, 0xd38)]),  # 11 pairs
+    'p5_0d40': dict(entry=0xd40, exits=[0x9f0, 0xae8, P5_END], ranges=[(0xd40, 0xd90)]),  # 11 pairs
+    'p5_0da8': dict(entry=0xda8, exits=[0xd40], ranges=[(0xda8, 0xdb8)]),  # 3 pairs
+    'p5_0dc0': dict(entry=0xdc0, exits=[0xe70], ranges=[(0xdc0, 0xdc8)]),  # 2 pairs
+    'p5_0e70': dict(entry=0xe70, exits=[0xda8, 0xe88], ranges=[(0xe70, 0xe80)]),  # 3 pairs
+    'p5_0e88': dict(entry=0xe88, exits=[0xda8, 0xea0], ranges=[(0xe88, 0xe98)]),  # 3 pairs
+    'p5_0ea0': dict(entry=0xea0, exits=[0x148, 0xda8], ranges=[(0xea0, 0xf08)]),  # 14 pairs
+    'p5_0f10': dict(entry=0xf10, exits=[0xf40], ranges=[(0xf10, 0xf18)]),  # 2 pairs
+    'p5_0f20': dict(entry=0xf20, exits=[0x240], ranges=[(0xf20, 0xf28)]),  # 2 pairs
+    'p5_0f30': dict(entry=0xf30, exits=[0xda8], ranges=[(0xf30, 0xf38)]),  # 2 pairs
+    'p5_0f40': dict(entry=0xf40, exits=[0xf60], ranges=[(0xf40, 0xf58)]),  # 4 pairs
+    'p5_0f60': dict(entry=0xf60, exits=[0xfa8], ranges=[(0xf60, 0xfa0)]),  # 9 pairs
+    'p5_0fa8': dict(entry=0xfa8, exits=[0x13c0], ranges=[(0xfa8, 0xfb0)]),  # 2 pairs
+    'p5_0fb8': dict(entry=0xfb8, exits=[0xfa8, 0x1388], ranges=[(0xfb8, 0xfe8)]),  # 7 pairs
+    'p5_0ff0': dict(entry=0xff0, exits=[0x1050, 0x1378], ranges=[(0xff0, 0x1048)]),  # 12 pairs
+    'p5_1050': dict(entry=0x1050, exits=[0x13c0], ranges=[(0x1050, 0x1058)]),  # 2 pairs
+    'p5_1060': dict(entry=0x1060, exits=[0x1050, 0x1388], ranges=[(0x1060, 0x1090)]),  # 7 pairs
+    'p5_1098': dict(entry=0x1098, exits=[0x10f8, 0x1378], ranges=[(0x1098, 0x10f0)]),  # 12 pairs
+    'p5_10f8': dict(entry=0x10f8, exits=[0x13c0], ranges=[(0x10f8, 0x1100)]),  # 2 pairs
+    'p5_1108': dict(entry=0x1108, exits=[0x10f8, 0x1388], ranges=[(0x1108, 0x1138)]),  # 7 pairs
+    'p5_1140': dict(entry=0x1140, exits=[0x11a0, 0x1378], ranges=[(0x1140, 0x1198)]),  # 12 pairs
+    'p5_11a0': dict(entry=0x11a0, exits=[0x13c0], ranges=[(0x11a0, 0x11a8)]),  # 2 pairs
+    'p5_11b0': dict(entry=0x11b0, exits=[0x11a0, 0x1388], ranges=[(0x11b0, 0x11e0)]),  # 7 pairs
+    'p5_11e8': dict(entry=0x11e8, exits=[0x1248, 0x1378], ranges=[(0x11e8, 0x1240)]),  # 12 pairs
+    'p5_1248': dict(entry=0x1248, exits=[0x13c0], ranges=[(0x1248, 0x1250)]),  # 2 pairs
+    'p5_1258': dict(entry=0x1258, exits=[0x1248, 0x1388], ranges=[(0x1258, 0x1288)]),  # 7 pairs
+    'p5_1290': dict(entry=0x1290, exits=[0x12f0, 0x1378], ranges=[(0x1290, 0x12e8)]),  # 12 pairs
+    'p5_12f0': dict(entry=0x12f0, exits=[0x13c0], ranges=[(0x12f0, 0x12f8)]),  # 2 pairs
+    'p5_1300': dict(entry=0x1300, exits=[0x12f0, 0x1388], ranges=[(0x1300, 0x1330)]),  # 7 pairs
+    'p5_1338': dict(entry=0x1338, exits=[0x1378, 0x15f8], ranges=[(0x1338, 0x1370)]),  # 8 pairs
+    'p5_1378': dict(entry=0x1378, exits=[0x370, 0x8e8, 0x8f8, 0x908, 0xf10, 0xf20, 0xf30], ranges=[(0x1378, 0x1380)]),  # 2 pairs
+    'p5_1388': dict(entry=0x1388, exits=[0xfb8, 0xff0, 0x1060, 0x1098, 0x1108, 0x1140, 0x11b0, 0x11e8, 0x1258, 0x1290, 0x1300, 0x1338], ranges=[(0x1388, 0x13b8)]),  # 7 pairs
+    'p5_13c0': dict(entry=0x13c0, exits=[0x1428, 0x1490], ranges=[(0x13c0, 0x1420)]),  # 13 pairs
+    'p5_1428': dict(entry=0x1428, exits=[0x1458, 0x1510], ranges=[(0x1428, 0x1450)]),  # 6 pairs
+    'p5_1458': dict(entry=0x1458, exits=[0x1520], ranges=[(0x1458, 0x1460)]),  # 2 pairs
+    'p5_1468': dict(entry=0x1468, exits=[0x1510], ranges=[(0x1468, 0x1488)]),  # 5 pairs
+    'p5_1490': dict(entry=0x1490, exits=[0x14f8, 0x1520], ranges=[(0x1490, 0x14b8)]),  # 6 pairs
+    'p5_14c0': dict(entry=0x14c0, exits=[0x1510], ranges=[(0x14c0, 0x14f0)]),  # 7 pairs
+    'p5_14f8': dict(entry=0x14f8, exits=[0x1510], ranges=[(0x14f8, 0x1508)]),  # 3 pairs
+    'p5_1510': dict(entry=0x1510, exits=[0xfb8, 0xff0, 0x1060, 0x1098, 0x1108, 0x1140, 0x11b0, 0x11e8, 0x1258, 0x1290, 0x1300, 0x1338], ranges=[(0x1510, 0x1518)]),  # 2 pairs
+    'p5_1520': dict(entry=0x1520, exits=[0x1550], ranges=[(0x1520, 0x1548)]),  # 6 pairs
+    'p5_1550': dict(entry=0x1550, exits=[0x1590], ranges=[(0x1550, 0x1588)]),  # 8 pairs
+    'p5_1590': dict(entry=0x1590, exits=[0x1378, 0x1468, 0x14c0], ranges=[(0x1590, 0x15f0)]),  # 13 pairs
+    'p5_15f8': dict(entry=0x15f8, exits=[0x1678], ranges=[(0x15f8, 0x1670)]),  # 16 pairs
+    'p5_1678': dict(entry=0x1678, exits=[0x16e0], ranges=[(0x1678, 0x16d8)]),  # 13 pairs
+    'p5_16e0': dict(entry=0x16e0, exits=[0x1700], ranges=[(0x16e0, 0x16f8)]),  # 4 pairs
+    'p5_1700': dict(entry=0x1700, exits=[0x1780], ranges=[(0x1700, 0x1778)]),  # 16 pairs
+    'p5_1780': dict(entry=0x1780, exits=[0x1378, 0x1468, 0x14c0, 0x1700], ranges=[(0x1780, 0x17b8)]),  # 8 pairs
+}
+
 PROGRAMS = {
     'p6': dict(image=IMAGE, stages=STAGES, r=False, first='p6_setup', what='the water renderer', scenes='two water scenes'),
     'p9': dict(image=P9_IMAGE, stages=STAGES_P9, r=True, first='p9_init', scenes='the sprite scenes of about 130 saves',
                what='the sprite renderer'),
     'p4': dict(image=P4_IMAGE, stages=STAGES_P4, r=False, first='p4_0000', what='the character renderer (skinned, lit meshes)',
                scenes='three recorded play sessions'),
+    'p5': dict(image=P5_IMAGE, stages=STAGES_P5, r=False, first='p5_0000', what='the particle renderer',
+               scenes='three recorded play sessions'),
 }
-ALL_STAGES = {**STAGES, **STAGES_P9, **STAGES_P4}
+ALL_STAGES = {**STAGES, **STAGES_P9, **STAGES_P4, **STAGES_P5}
 
 
 def prog(name):

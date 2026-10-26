@@ -7,7 +7,7 @@
 //   vu1replay <trace> <image dir> <out> [--only <hash>] [--limit N] [--twice]
 // <out>: per replayed run 'V1RO', record index, image hash, start pc, packet count, then per packet its
 // byte size and bytes; then the VU data after the run (16 KB) and the end state's vi[16] (judges of a port's
-// memory side effects). --only: just the runs of one image (hex); --twice: run each twice, compare (the
+// memory side effects). --only: just the runs of one image (hex; several: a,b,...); --twice: run each twice, compare (the
 // interpreter must be deterministic for the judge to mean anything).
 //   --coverage: per pc of the replayed runs, how many runs execute it (<out> becomes a text table).
 //   --start <pc>: just the runs that start at that pc (e.g. one entry of a multi-entry program).
@@ -280,7 +280,7 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "usage: vu1replay <trace> <image dir> <out> [--only <hash>] [--limit N] [--twice]\n");
         return 2;
     }
-    uint64_t only = 0;
+    std::set<uint64_t> onlySet; // --only: just these images
     uint32_t startPc = 0xFFFFFFFF;
     long limit = -1;
     std::set<uint64_t> recordSet; // --records: just these record indices
@@ -309,7 +309,11 @@ int main(int argc, char **argv)
     {
         const std::string a = argv[i];
         if (a == "--only" && i + 1 < argc)
-            only = std::stoull(argv[++i], nullptr, 16);
+        {
+            std::stringstream list(argv[++i]);
+            for (std::string h; std::getline(list, h, ',');)
+                onlySet.insert(std::stoull(h, nullptr, 16));
+        }
         else if (a == "--start" && i + 1 < argc)
             startPc = uint32_t(std::stoul(argv[++i], nullptr, 16));
         else if (a == "--limit" && i + 1 < argc)
@@ -393,7 +397,7 @@ int main(int argc, char **argv)
         }
         const uint64_t index = records++;
         ++perImage[hash];
-        if ((only && hash != only) || (startPc != 0xFFFFFFFF && state.state.pc != startPc) || (limit >= 0 && long(replayed) >= limit) ||
+        if ((!onlySet.empty() && !onlySet.count(hash)) || (startPc != 0xFFFFFFFF && state.state.pc != startPc) || (limit >= 0 && long(replayed) >= limit) ||
             (!recordSet.empty() && !recordSet.count(index)))
             continue;
         auto img = images.find(hash);

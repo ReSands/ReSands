@@ -13,6 +13,7 @@ Needs llama-server (OpenAI-compatible API) reachable at --url, e.g. through
 import ast
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -97,8 +98,9 @@ must produce exactly the same results as the Python reference on about 1,800 rea
 
 
 def ask(url, messages):
+    # a fresh seed per request: without one, a retry with the same conversation came back byte-identical (26 Oct)
     body = json.dumps({'messages': messages, 'temperature': 0.6, 'top_p': 0.95, 'top_k': 20, 'min_p': 0.0,
-                       'max_tokens': 32768, 'stream': False}).encode()
+                       'max_tokens': 32768, 'stream': False, 'seed': random.randrange(1 << 31)}).encode()
     req = urllib.request.Request(url.rstrip('/') + '/v1/chat/completions', data=body,
                                  headers={'Content-Type': 'application/json'})
     t = time.time()

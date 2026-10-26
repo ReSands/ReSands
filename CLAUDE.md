@@ -77,8 +77,9 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   `saves1025d/` (145139 / 145142 save point pop), `saves1024b/play_20261024_184926.state` (slow fight).
 - **Qwen:** P4 character VU1 program done 26 Oct: Qwen 67 of 79 stages, 13 by hand, `--chain p4` PASS 673 whole runs
   (`tools/vu1port/ported/p4.cpp`, not in the game yet). Found on the way: 14 "passed" ports (P4/P6/P9, incl. the shipped
-  `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). Next: set up P5 (particles) for
-  tonight. `docs/llm_jobs.md` "Night of 25-26 Oct".
+  `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). P5 (particles) for
+  tonight: set up 26 Oct (87 stages, `oct26.ps1`, shortcut repointed); morning: `qwen-night.log`, copy
+  `game\analysis\qwen\vu1_p5_*`, hand-port the rest, `--chain p5`. `docs/llm_jobs.md` "VU1 particle program P5".
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image.
 
 ## Release roadmap (user; full text, reasons and references: `docs/roadmap.md`)
