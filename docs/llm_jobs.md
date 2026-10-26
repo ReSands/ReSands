@@ -376,7 +376,7 @@ pass 3: 12). The 12 left, all hand-ported first try (`known_good/p4_*`): three 4
 - Still possible: other overflow-only differences in Qwen ports that the three traces never reach. When the game
   runs these ports, a whole-run check against the interpreter on new traces (as above) is the safety net.
 
-## VU1 particle program P5 for Qwen, 26 Oct 2026 (set up; the night job `oct26.ps1`)
+## VU1 particle program P5 for Qwen, 26 Oct 2026 (done: Qwen 82 of 87 stages, 5 by hand)
 
 Why: after P4 the next VU1 program by value for 0.13 (particles, tied to the `-NativeLate` glow pop). P5 = ELF MPG
 0x4D948C, code 0x0-0x17c0 (760 pairs, 716 run in the traces); no R register, no EFU; 22 BAL / 8 JR subroutine calls,
@@ -405,5 +405,16 @@ Why: after P4 the next VU1 program by value for 0.13 (particles, tied to the `-N
   16:43) left 13, pass 2 left 9, pass 3 left 4 (5 new passes there: the fresh seed per request works), pass 4 nothing
   new. Left for hand-porting: `p5_02c0`, `p5_04b8`, `p5_1550`, `p5_1700` (each failed 12+ rounds). Results copied
   to the Mac (`game/analysis/qwen/vu1_p5_*`). Not run overnight: 4 stages that failed 4 passes are cheaper by hand.
+- **The last four by hand (26 Oct evening), `--chain p5` PASS 930 whole runs** (`tools/vu1port/ported/p5.cpp`, not
+  in the game yet). P5 is done.
+  - `p5_02c0` could not pass: **its exits were wrong.** The subroutine at 0x240 is called with `BAL vi15` (0x8f8,
+    0xf20) and copies the link into vi1 (`IADD vi1, vi0, vi15`), so its `JR vi1` at 0x330 returns to 0x908 / 0xf30.
+    `cutscan.py` takes JR targets from the BALs that write the same register, so it gave the returns of the
+    `BAL vi1` calls (0x1378, 0x1468, 0x14c0); the recorded cases then ran on past the stage. Exits fixed by hand in
+    `port.py`, cases re-recorded (`cases_p5.sh p5_02c0`). Lesson: a JR through a register a subroutine copies the
+    link into needs its exits checked by hand (cutscan does not follow the copy).
+  - `p5_04b8`, `p5_1700`: `MULAz.w ACC, vf0, vf31z` reads vf0's **w** lane (1), so ACC.w = vf31.z, not 0 (the same
+    lane rule the primer states; my first hand port got it wrong too, Qwen in every round).
+  - `p5_1550`: a counted MR32 loop; Qwen rotated the wrong way or stopped after one iteration.
 - **P5 is the last VU1 program to port:** P0/P2 are VU0, P3 unreachable, P10 dead (26 Oct,
   `docs/native_renderer.md` "VU1 program inventory"). The next Qwen batch, if any, is not VU1 microcode.

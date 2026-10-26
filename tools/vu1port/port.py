@@ -249,7 +249,9 @@ STAGES_P5 = {
     'p5_0148': dict(entry=0x148, exits=[0x1c8], ranges=[(0x148, 0x1c0)]),  # 16 pairs
     'p5_01c8': dict(entry=0x1c8, exits=[0x370, 0x8e8, 0x8f8, 0x908, 0xf10, 0xf20, 0xf30], ranges=[(0x1c8, 0x238)]),  # 15 pairs
     'p5_0240': dict(entry=0x240, exits=[0x2c0], ranges=[(0x240, 0x2b8)]),  # 16 pairs
-    'p5_02c0': dict(entry=0x2c0, exits=[0x1378, 0x1468, 0x14c0], ranges=[(0x2c0, 0x338)]),  # 16 pairs
+    # exits by hand (cutscan gave the BAL vi1 returns): 0x240 copies the BAL vi15 link into vi1 (IADD vi1, vi0, vi15),
+    # so the JR vi1 at 0x330 returns after the calls at 0x8f8 / 0xf20
+    'p5_02c0': dict(entry=0x2c0, exits=[0x908, 0xf30], ranges=[(0x2c0, 0x338)]),  # 16 pairs
     'p5_0340': dict(entry=0x340, exits=[0x0], ranges=[(0x340, 0x368)]),  # 6 pairs
     'p5_0370': dict(entry=0x370, exits=[P5_END], ranges=[(0x370, 0x378)]),  # 2 pairs
     'p5_0380': dict(entry=0x380, exits=[0x3b0, 0x930], ranges=[(0x380, 0x3a8)]),  # 6 pairs
