@@ -15,6 +15,7 @@
 //   time a run reaches the entry pc, the state there (VuState, vu_task.h) and at the next exit pc reached, and
 //   the packets kicked in between. Boundaries must be clean (no write pending); unclean ones are counted.
 //   --max-cases N (default 4000), --stride N: write every Nth case only.
+//   --records a,b,...: just the runs of these record indices (the "trace record" of a judge report).
 //   --cutscan <file> (with --hints): no cases; per pc of the replayed runs, what is in flight before it (Pending
 //   bits, union over all visits), whether it is ever a delay slot, whether it lies between a MAC / clip flag write
 //   and the FM* / FC* reader of those flags, visits; the hints then cover the whole program.
@@ -282,6 +283,7 @@ int main(int argc, char **argv)
     uint64_t only = 0;
     uint32_t startPc = 0xFFFFFFFF;
     long limit = -1;
+    std::set<uint64_t> recordSet; // --records: just these record indices
     bool twice = false, coverage = false;
     uint32_t stageEntry = 0xFFFFFFFF;
     std::set<uint32_t> stageExits;
@@ -312,6 +314,12 @@ int main(int argc, char **argv)
             startPc = uint32_t(std::stoul(argv[++i], nullptr, 16));
         else if (a == "--limit" && i + 1 < argc)
             limit = std::stol(argv[++i]);
+        else if (a == "--records" && i + 1 < argc)
+        {
+            std::stringstream list(argv[++i]);
+            for (std::string r; std::getline(list, r, ',');)
+                recordSet.insert(std::stoull(r));
+        }
         else if (a == "--twice")
             twice = true;
         else if (a == "--coverage")
@@ -385,7 +393,8 @@ int main(int argc, char **argv)
         }
         const uint64_t index = records++;
         ++perImage[hash];
-        if ((only && hash != only) || (startPc != 0xFFFFFFFF && state.state.pc != startPc) || (limit >= 0 && long(replayed) >= limit))
+        if ((only && hash != only) || (startPc != 0xFFFFFFFF && state.state.pc != startPc) || (limit >= 0 && long(replayed) >= limit) ||
+            (!recordSet.empty() && !recordSet.count(index)))
             continue;
         auto img = images.find(hash);
         if (img == images.end())

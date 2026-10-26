@@ -2181,7 +2181,7 @@ inline float normalize_float(float f) {
     }
     if (exp == 0xFF) {
         // Infinity or NaN -> Max float
-        return (bits & 0x80000000) ? -0x7f7fffff : 0x7f7fffff;
+        return (bits & 0x80000000) ? -3.40282347e+38f : 3.40282347e+38f; // fixed 26 Oct: was the integer 0x7f7fffff as a float
     }
     return f;
 }

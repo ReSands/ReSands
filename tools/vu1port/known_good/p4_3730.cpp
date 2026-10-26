@@ -1,0 +1,124 @@
+// Known-good answer (by hand, 26 Oct; Qwen failed 33 of 595 cases in 9 rounds): P4 stage "3730", the same
+// two-bone transform as 35b0 one blend further on: normal vf21 through vf9-11 (vf29), vertex vf20 and normal
+// through vi5's bone (vf25, vf30) while loading vi13's, then vi13's (vf26 and the start of the normal).
+#include "vu_task.h"
+
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+
+namespace
+{
+    // VU operands: denormals read as zero, Inf/NaN as the largest float (sign kept)
+    float norm(float v)
+    {
+        uint32_t b;
+        std::memcpy(&b, &v, 4);
+        const uint32_t e = b & 0x7f800000u;
+        if (e == 0)
+            b &= 0x80000000u;
+        else if (e == 0x7f800000u)
+            b = (b & 0x80000000u) | 0x7f7fffffu;
+        std::memcpy(&v, &b, 4);
+        return v;
+    }
+    // A result as the reference interpreter lands it: judged on the exact value (one rounding for a product-sum,
+    // no clamp of the product on its own), so an overflowing product with a large opposite ACC still saturates
+    float fix(float r, long double exact)
+    {
+        const long double m = std::fabs(exact);
+        const float zero = std::signbit(exact) ? -0.0f : 0.0f;
+        if (m == 0.0L || m < (long double)std::numeric_limits<float>::min())
+            return zero;
+        if (m > (long double)std::numeric_limits<float>::max())
+            return std::signbit(exact) ? -std::numeric_limits<float>::max() : std::numeric_limits<float>::max();
+        return r;
+    }
+    using LD = long double;
+    float add(float a, float b) { a = norm(a); b = norm(b); return fix(a + b, LD(a) + LD(b)); }
+    float sub(float a, float b) { a = norm(a); b = norm(b); return fix(a - b, LD(a) - LD(b)); }
+    float mul(float a, float b) { a = norm(a); b = norm(b); return fix(a * b, LD(a) * LD(b)); }
+    float madd(float c, float a, float b) { c = norm(c); a = norm(a); b = norm(b); return fix(c + a * b, LD(c) + LD(a) * LD(b)); }
+    float msub(float c, float a, float b) { c = norm(c); a = norm(a); b = norm(b); return fix(c - a * b, LD(c) - LD(a) * LD(b)); }
+    float vmax(float a, float b) { return norm(a) > norm(b) ? norm(a) : norm(b); }
+    float vmin(float a, float b) { return norm(a) < norm(b) ? norm(a) : norm(b); }
+    int32_t vi16(int32_t v) { return int32_t(int16_t(v)); }
+    void lq(VuState &vu, int t, int32_t qword, unsigned mask = 0xF) // mask: x = 8, y = 4, z = 2, w = 1
+    {
+        const uint8_t *src = vu.mem + 16 * (uint32_t(qword) & 0x3FF);
+        if (t == 0)
+            return;
+        for (int c = 0; c < 4; ++c)
+            if (mask & (8u >> c))
+                std::memcpy(&vu.vf[t][c], src + 4 * c, 4);
+    }
+    void sq(VuState &vu, const float *v, int32_t qword, unsigned mask = 0xF)
+    {
+        uint8_t *dst = vu.mem + 16 * (uint32_t(qword) & 0x3FF);
+        for (int c = 0; c < 4; ++c)
+            if (mask & (8u >> c))
+                std::memcpy(dst + 4 * c, &v[c], 4);
+    }
+    int32_t ilw(const VuState &vu, int32_t qword, int lane)
+    {
+        uint32_t v;
+        std::memcpy(&v, vu.mem + 16 * (uint32_t(qword) & 0x3FF) + 4 * lane, 4);
+        return vi16(int32_t(v & 0xFFFF));
+    }
+    // ACC / vf product-sum rows of the 4x4 transforms this program is made of: d = ACC-chain over the masked lanes
+    void mula(VuState &vu, const float *a, float b, unsigned mask = 0xF)
+    {
+        for (int c = 0; c < 4; ++c)
+            if (mask & (8u >> c))
+                vu.acc[c] = mul(a[c], b);
+    }
+    void madda(VuState &vu, const float *a, float b, unsigned mask = 0xF)
+    {
+        for (int c = 0; c < 4; ++c)
+            if (mask & (8u >> c))
+                vu.acc[c] = madd(vu.acc[c], a[c], b);
+    }
+    void maddv(VuState &vu, int d, const float *a, float b, unsigned mask = 0xF)
+    {
+        float r[4];
+        for (int c = 0; c < 4; ++c)
+            r[c] = madd(vu.acc[c], a[c], b);
+        if (d != 0)
+            for (int c = 0; c < 4; ++c)
+                if (mask & (8u >> c))
+                    vu.vf[d][c] = r[c];
+    }
+}
+
+void stage(VuState &vu)
+{
+    float (*vf)[4] = vu.vf;
+    const int32_t *vi = vu.vi;
+    mula(vu, vf[9], vf[21][0]);             // 0x3730 MULAx.xyzw ACC, vf9, vf21x
+    lq(vu, 6, vi[5] + 901);                 //        LQ.xyzw vf6, 901(vi5)
+    madda(vu, vf[10], vf[21][1]);           // 0x3738 MADDAy.xyzw ACC, vf10, vf21y
+    lq(vu, 7, vi[5] + 902);                 //        LQ.xyzw vf7, 902(vi5)
+    maddv(vu, 29, vf[11], vf[21][2]);       // 0x3740 MADDz.xyzw vf29, vf11, vf21z
+    lq(vu, 8, vi[5] + 903);                 //        LQ.xyzw vf8, 903(vi5)
+    mula(vu, vf[5], vf[20][0]);             // 0x3748 MULAx.xyzw ACC, vf5, vf20x
+    madda(vu, vf[6], vf[20][1]);            // 0x3750 MADDAy.xyzw ACC, vf6, vf20y
+    lq(vu, 14, 1006);                       //        LQ.xyzw vf14, 1006(vi0)
+    madda(vu, vf[7], vf[20][2]);            // 0x3758 MADDAz.xyzw ACC, vf7, vf20z
+    maddv(vu, 25, vf[8], vf[0][3]);         // 0x3760 MADDw.xyzw vf25, vf8, vf0w
+    lq(vu, 9, vi[13] + 900);                //        LQ.xyzw vf9, 900(vi13)
+    mula(vu, vf[5], vf[21][0]);             // 0x3768 MULAx.xyzw ACC, vf5, vf21x
+    lq(vu, 10, vi[13] + 901);               //        LQ.xyzw vf10, 901(vi13)
+    madda(vu, vf[6], vf[21][1]);            // 0x3770 MADDAy.xyzw ACC, vf6, vf21y
+    lq(vu, 11, vi[13] + 902);               //        LQ.xyzw vf11, 902(vi13)
+    maddv(vu, 30, vf[7], vf[21][2]);        // 0x3778 MADDz.xyzw vf30, vf7, vf21z
+    lq(vu, 12, vi[13] + 903);               //        LQ.xyzw vf12, 903(vi13)
+    mula(vu, vf[9], vf[20][0]);             // 0x3780 MULAx.xyzw ACC, vf9, vf20x
+    lq(vu, 24, vi[3] + 40, 0xE);            //        LQ.xyz vf24, 40(vi3)
+    madda(vu, vf[10], vf[20][1]);           // 0x3788 MADDAy.xyzw ACC, vf10, vf20y
+    madda(vu, vf[11], vf[20][2]);           // 0x3790 MADDAz.xyzw ACC, vf11, vf20z
+    maddv(vu, 26, vf[12], vf[0][3]);        // 0x3798 MADDw.xyzw vf26, vf12, vf0w
+    mula(vu, vf[9], vf[21][0]);             // 0x37a0 MULAx.xyzw ACC, vf9, vf21x
+    madda(vu, vf[10], vf[21][1]);           // 0x37a8 MADDAy.xyzw ACC, vf10, vf21y
+    vu.pc = 0x37b0;
+}

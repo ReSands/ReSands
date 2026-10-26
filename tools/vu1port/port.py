@@ -284,14 +284,23 @@ the program stops.
   float, same sign). Arithmetic results (ADD, SUB, MUL, MADD, MSUB, their A forms) that underflow become zero
   of the same sign, overflowing ones +-0x7f7fffff. So MAX.xyzw vf13, vf20, vf0x on vf20 = 0x000000ff gives
   0, not the denormal; MINIi on it gives 0; SUB of two such lanes gives 0. MOVE, MR32, LQ, SQ, MFIR, FTOI and
-  ITOF copy or convert bits without normalising. Write a helper (memcpy to uint32_t, test 0x7f800000) and use
-  it on every operand and result.
+  ITOF copy or convert bits without normalising. Copy these helpers into your file and use them for every
+  operand and result (the largest float is 3.40282347e+38f; the integer 0x7f7fffff is NOT that float):
+  float norm(float v) { uint32_t b; std::memcpy(&b, &v, 4); uint32_t e = b & 0x7f800000u;
+      if (e == 0) b &= 0x80000000u; else if (e == 0x7f800000u) b = (b & 0x80000000u) | 0x7f7fffffu;
+      std::memcpy(&v, &b, 4); return v; }
+  // r = the float result, x = the same sum in long double (one rounding, no clamp of the product on its own)
+  float fix(float r, long double x) { long double m = std::fabs(x); if (m == 0 || m < 0x1p-126L)
+      return std::signbit(x) ? -0.0f : 0.0f; if (m > 0x1.fffffep127L) return std::signbit(x) ? -3.40282347e+38f
+      : 3.40282347e+38f; return r; }
+  e.g. MADD lane: a = norm(a), b = norm(b), c = norm(acc); d = fix(c + a * b, (long double)c + (long double)a * b).
+  DIV / RSQRT results go through norm() too (a denormal Q is 0); division by zero gives +-3.40282347e+38f.
 - ACC: MULA, ADDA, SUBA, MADDA, MSUBA write ACC (the masked lanes) instead of a vf register. Per lane, with
   b = the second operand, its broadcast lane, I or Q:
   ADD d = a + b; SUB d = a - b; MUL d = a * b; MADD d = ACC + a * b; MSUB d = ACC - a * b;
   ADDA ACC = a + b; SUBA ACC = a - b; MULA ACC = a * b; MADDA ACC = ACC + a * b; MSUBA ACC = ACC - a * b.
   ADDA / SUBA / MULA do NOT read the old ACC. "ADDAi.xyzw ACC, vf14, I" is ACC = vf14 + I;
-  "MSUBi.xyzw vf13, vf13, I" is vf13 = ACC - vf13 * I. Product first (rounded), then the add.
+  "MSUBi.xyzw vf13, vf13, I" is vf13 = ACC - vf13 * I (exact, then fix() as above).
 - MAX / MINI: per-lane maximum / minimum. ABS: absolute value. FTOIn: float * 2^n converted to int32
   (truncated toward zero, saturating), its bits stored in the lane. ITOFn: the lane's int32 bits converted
   to float, divided by 2^n (n = 0, 4, 12, 15).
@@ -463,6 +472,14 @@ def judge(stage, cpp, out_dir):
     exe = os.path.join(out_dir, 'judge_bin' + ('.exe' if os.name == 'nt' else ''))
     if os.path.exists(exe):
         os.remove(exe)
+    # the largest float written as an integer (converted to ~2.1e9, or read as an address): passes the sampled
+    # cases (no overflow in them) and crashes or misdraws in the game (12 passed ports, 26 Oct)
+    code = re.sub(r'//[^\n]*|/\*.*?\*/', '', open(cpp).read(), flags=re.S)
+    big = r'-?0x[fF7][fF]7[fF]{5}[uU]?'
+    if (re.search(r'return\s*[^;]*\?\s*%s\s*:\s*%s\s*;|return\s+%s\s*;' % (big, big, big), code) or
+            re.search(r'\*\s*(\(\s*float\s*\*\s*\)|reinterpret_cast\s*<\s*float\s*\*\s*>)\s*\([^;]*%s' % big, code)):
+        return False, ('Your code turns the integer 0x7f7fffff into a float (or reads memory at that address): the '
+                       'largest float is 3.40282347e+38f; use the norm() / fix() helpers from the rules.')
     ok, log = build_judge(cpp, exe, prog(stage)['r'])
     if not ok:
         errs = [l for l in log.splitlines() if 'error' in l][:15]

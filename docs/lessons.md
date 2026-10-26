@@ -202,3 +202,8 @@ mode boots the game check for an active display first, so a mistake like this ca
   ~90 min, so a 40-minute session without it is likely even if nothing changed (and nothing was built against it).
   For a crash seen several times (crash 1: ~16 and ~23 min of fights), a long clean session counts, but only if it
   had the same activity (time spent fighting, from the log's low-fps stretches).
+- **A judge on sampled cases passes code that is wrong on the rare inputs.** 14 local-model VU1 ports passed 600
+  sampled cases each, yet wrote the largest float as the integer 0x7f7fffff (or read memory at that address): no
+  sampled case overflowed. Whole-run checks and every case of the failing runs (`vu1replay --records`) found them;
+  a static check for the known bad form now runs before the judge. Also: when a primer describes semantics
+  ("product first, then the add"), check it against the reference code; the model copies the primer faithfully.

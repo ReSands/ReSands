@@ -349,3 +349,29 @@ Why: the next candidate after the water (CLAUDE.md); P4 = image 31829861c88dc716
 - **Night job** `tools/windows/oct25.ps1` (desktop shortcut "Qwen overnight (until Stop Qwen)", now pointing at
   it): passes over the unpassed P4 stages, 3 rounds each, `--chain p4` once all pass; ends by itself after two
   passes in a row with no new pass, then shuts the PC down. "Stop Qwen" cancels as before.
+
+## Night of 25-26 Oct results; P4 finished by hand (26 Oct 2026)
+
+Night job `oct25.ps1`, 22:22-10:43 (stopped with "Stop Qwen" during pass 3: retries had become byte-identical,
+e.g. `p4_0c80` rounds 7-9 the same file). Qwen passed **67 of 79** P4 stages (pass 1: 78 -> 23 left, pass 2: 14,
+pass 3: 12). The 12 left, all hand-ported first try (`known_good/p4_*`): three 4-instruction ILW/IOR/ISW stages
+(`0ee8`, `3408`, `39e8`: Qwen read `-1(vi6)` as a byte offset every round), the bone-matrix stages (`0c80`, `35b0`,
+`3630`, `3730`, `06a8`), `1598` / `15f0` (DIV, CLIP, FTOI4), the light loops `3dc8` / `3ee0` (RSQRT).
+- **Sampled cases hid two bugs in "passed" ports.** `--chain p4` then failed 18 of 673 whole runs, all near the
+  float limit. To find the stage: `vu1replay --records <the report's trace records>` (new, 26 Oct) records every
+  case of just those runs, then each passing port is judged on them.
+  1. **The largest float written as an integer**: `return sign ? -0x7f7fffff : 0x7f7fffff;` (= ~2.1e9) in 8
+     ports, and `*(float*)(sign ? 0xff7fffff : 0x7f7fffff)` (a read from that address: a crash on the first
+     overflow) in 6, among them **`p9_e_a`, in the shipped `ported/p9.cpp`**, and `p6_b_ck_sub`. 14 ports in all
+     (12 P4); fixed in place (`best.cpp`, originals kept as `best.cpp.orig`), every one re-judged PASS.
+  2. **Product-sums judged on the exact value.** The reference (`ps2_vu1_impl.inl` `normalizeFmacExactResult`)
+     clamps MADD/MSUB on the long-double sum, not on a clamped product plus ACC, and flushes a denormal Q to 0.
+     The primer said "product first (rounded), then the add", so Qwen clamped the product: `p4_0cd8` (passed 600
+     sampled cases) failed 3 whole runs; hand-ported.
+  After both: **`--chain p4` PASS 673 whole runs; `--chain p6` PASS 600 and `--chain p9` PASS 598** (P6 and P9 again
+  with the fixed ports). `ported/p9.cpp` changed: the game picks the fix up at its next build.
+- **Harness changes for the next program (P5):** the primer now gives `norm()` / `fix()` verbatim (exact product-sum,
+  DIV/RSQRT through `norm`, the largest float as `3.40282347e+38f`); the judge rejects the integer-as-float and
+  pointer-read forms before compiling (catches all 14 originals, no false hits on the passing ports).
+- Still possible: other overflow-only differences in Qwen ports that the three traces never reach. When the game
+  runs these ports, a whole-run check against the interpreter on new traces (as above) is the safety net.
