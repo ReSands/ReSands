@@ -26,8 +26,8 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   cannot be restored on a console). (a) GS replay (days, estimate): a PS2SDK homebrew player, loaded over ethernet
   with ps2link/ps2client, loads a frame's VRAM + GS registers (`tools/popstate.py`) and its GS packets
   (`PS2X_GS_TRACE`), draws them on the real GS and reads the framebuffer back (GS local->host transfer): exact
-  digital pixels, before the display circuit (circuit merge and interlace modelled from the registers; a capture card
-  only if the analogue output matters). Packets come from our recomp, so this checks the GS stage only. (b) DMA chain
+  digital pixels, before the display circuit (the display circuit merge is the game's own one-line blend, a formula from its registers, and is the
+  same in 480i and 480p: `docs/native_renderer.md` "Display stage"; no capture card needed). Packets come from our recomp, so this checks the GS stage only. (b) DMA chain
   replay (1-2 weeks, estimate): the frame's chain (`tools/statechain.py`) + VU1 microcode + VU1 memory through the
   real VIF1/VU1, which also checks our VU1 recomp; the player must sit in RAM the chain does not use. Native frames
   are still scored with a tolerance (Vulkan vs GS rasterisation). Hardware: any region (homebrew bypasses the disc
@@ -36,8 +36,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   is the first choice); SCPH-7000x slims have built-in ethernet and came with separate chips or a merged EE+GS
   chip, with no compatibility differences reported (second choice); avoid SCPH-7500x and later (merged EE+GS, new
   I/O chipset, reportedly "Deckard", known game compatibility problems; no known GS rendering differences,
-  unverified; late 9000x may need OpenTuna instead of FreeMcBoot). Readback stays on ethernet; a capture card
-  (component out) only to check the display stage. First step: survey PS2 homebrew GS test tools (none found on 25 Oct beyond PCSX2's own
+  unverified; late 9000x may need OpenTuna instead of FreeMcBoot). Readback stays on ethernet (user plans to buy a console, 26 Oct). First step: survey PS2 homebrew GS test tools (none found on 25 Oct beyond PCSX2's own
   dump replay), then try (a) on save 145139 (save point pop).
 - **0.3 = native sound + native PS2 movie decoder:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2
   emulation); a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; replaces

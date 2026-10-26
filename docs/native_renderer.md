@@ -512,6 +512,32 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   ~4 fps (OpenGL Present stalls): the first two evening runs were invalid; (3) the VU1 trace counts GS fields,
   which a save load restores to the save's field and which advance only with presented frames.
 
+## Display stage: the game's line blend, 480i vs 480p (26 Oct 2026)
+
+Settled so it is not re-asked (all static reading of the retail ELF + 51 saves; no boot):
+- **The game blends each line with the next itself.** Its flip routine `FUN_004a3fc0` (called from `PS2_Flip`
+  0x4A20C0) writes PMODE = (ALP << 8) | 0x23 (both read circuits on, MMOD: fixed ALP) and DISPLAY1/2 one raster line
+  apart, both reading the same frame buffer: output = ALP/255 x line y (circuit 1) + the rest x a neighbouring line
+  (circuit 2: 480i DY 0x33/0x32 -> line y+1; 480p DY +0/+1 -> line y-1). ALP = `+0xbb4` of
+  the graphics object (127 in all 51 saves: PMODE 0x7f23, DY 51/50, MAGH 3, DW 2559, DH 447), or **255 (no blend)**
+  when bit 0 of its second argument is set (flag from its callers `FUN_004c9c80` / `PS2_Flip`; meaning not read yet).
+- **480p exists and changes nothing we compare.** `FUN_004a3080` (video mode; callers `FUN_004a3740`,
+  `FUN_004b4280`) calls `sceGsResetGraph(0,1,2,0)` NTSC, `(0,1,3,0)` PAL or `(0,0,0x50,1)` 480p (progressive flag at
+  gp+0x77c). NTSC and 480p both use a 640x448 double buffer; nothing outside the mode switch, the screen-position
+  settings and the flip reads the flag. The flip's 480p branch sets the same ALP blend with the neighbour on the
+  other side (line above instead of below: a half-line shift, not a different look). So the rendered frame, the
+  post-processing and the blend are the same; otherwise only TV timing differs. All our saves
+  are 480i and fully valid as references. How 480p is switched on in the game: not looked up (not needed).
+- **What Windows shows today** (sotc runtime `GSCpuBackend::PresentFromLocalMemory`): the whole frame buffer every
+  frame (no fields), the two circuits merged with PMODE's ALP and the DISPLAY offsets, one progressive picture
+  scaled to the window. That already equals 480p output; forcing 480p would at most move the picture and would
+  feed the runtime timing values it has never seen. Not worth doing.
+- **For 0.2:** the native presenter (GS off) must do the same circuit merge from the game's registers (PMODE,
+  DISPLAY1/2, DISPFB1/2; ~half a day, estimate), including the ALP 255 case once its flag is understood.
+- **For the real-PS2 reference:** GS memory readback over ethernet checks every game pass (post-processing is GS
+  blits into GS memory); the circuit merge is a formula from the registers above. No capture card needed; one
+  would only show the console's analogue encoder (not the game's doing, not something to copy).
+
 ## Plan of attack (agreed with the user 19 Oct night)
 Renderer, in order:
 1. **Native static world in the game window** (DONE 22 Oct: `POP_NATIVE_WORLD`, on by default in play.ps1; see
