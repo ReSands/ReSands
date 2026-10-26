@@ -149,7 +149,12 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   in `game/decomp/try/`. Side find: the prototype's `POP1.ELF` (the bonus classic Prince of Persia 1) has full
   `.debug`/`.line` (DWARF 1) sections with source paths (`D:\dev\POP1\Dare\engine\common\src\sndCTheme.cpp` etc.,
   172 source files): it links the **DARE sound engine** the main game uses (`CThemeManager`, `SndManager`), so its
-  debug info gives real struct layouts and file splits for that subsystem (also for 0.3 native sound). Not parsed yet.
+  debug info gives real struct layouts and file splits for that subsystem (also for 0.3 native sound). Overlap (26 Oct, symbol names only): POP1.ELF has 2,310 functions;
+  986 of their names are among the 4,750 named retail SoT functions (612 the same size, 374 a different size, so
+  a different DARE version in places); 518 of its ~990 sound-like names (snd/theme/bank/stream/pcm...) are in SoT.
+  Source folders: mostly `Dare\engine\common\src` (+ `ToolArch\Managers`, `Sources`, `Renderers\PS2`) and
+  `Dare\engine\ps2\src\ee`. The DWARF is version 1 (CodeWarrior), which common tools barely read: needs a small
+  parser of our own. Not parsed yet.
 - **Feasibility check, part 2 (26 Oct 2026, PC, CPU only): byte matching works.** All four test functions compile
   **byte-identical** to retail (relocated fields masked) with **CodeWarrior 3.0.3-020716 (= 3.0b22-020716) at
   `-O4,p`**, the only candidate matching all four (`SynchroTheme` matches on no other build; GRO/AI also on 3.0 and
