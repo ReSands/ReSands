@@ -193,3 +193,12 @@ mode boots the game check for an active display first, so a mistake like this ca
   to runs (GS-only: yes; native: no). Log each run's start time, and for a visual check take many frames or ask
   the user to note times. Also: when native and GS differ, look for game code that edits data in memory (palettes,
   textures) that native reads from the disc instead.
+
+## 26 Oct 2026
+- **Prove a profiler hot spot by removing it before acting on it** (from gow-native-pc, `docs/reference.md`).
+  Their thread-suspension sampler showed ~40 % of VU1 time in a dispatch loop; removing the loop saved ~2 %, since
+  such samplers pile samples around calls and returns. Applies to `pop_profiler` too.
+- **A clean session says little about a rare crash; compare it with the crash's rate.** Crash 2 was seen once in
+  ~90 min, so a 40-minute session without it is likely even if nothing changed (and nothing was built against it).
+  For a crash seen several times (crash 1: ~16 and ~23 min of fights), a long clean session counts, but only if it
+  had the same activity (time spent fighting, from the log's low-fps stretches).

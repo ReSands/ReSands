@@ -82,6 +82,9 @@ it from there is the resume). A scan of every function in `functions.csv` for a 
 this is the only one in the ELF. **25 Oct:** save 202314 fought for 300 s with R1 held (50-56 fps), no
 `missing-target` line, no freeze (one run; the 24 Oct crash came after ~16 minutes of play). Not a full fix for the class: the recompiler should add an entry at every call's
 return address even when it lies in the next function (`docs/upstream_ps2recomp.md`).
+**26 Oct:** the user's 25 Oct session `play_20261025_154156.log` (15:41-16:50, clean exit): no `missing-target`
+line. Fighting was short: two low-fps stretches (~15:44-15:47 and ~16:03-16:06), a few minutes in all, against
+crash 1's two hits at ~16 and ~23 min of play. Evidence for the fix, not proof.
 
 ## Crash 2 (21 Oct 21:10, during combat)
 Log `play_20261021_1939.log`: fps 49-58 (a fight), then a quick-save at field 320965 with no "kept as" line and
@@ -99,6 +102,9 @@ Booted on the PC (native renderer on, no R1) it **runs on**: 85 s at 60 fps, no 
 something the save does not hold or a save-state boot does not run. The plain candidate is sound (save-state boots
 have none; the freeze was in a fight with music), else host-side state (GS/VU threads). Next: a fight session with
 sound on the current build; if it freezes, take a full dump (as crash1024) before closing the game.
+**26 Oct: taken off the 0.1 list (user).** Seen once (21 Oct, ~90 min into a session); nothing has been built
+against it, so a clean session cannot show it is fixed. Now a watch item through the 0.1 play-through: on a freeze,
+take a full dump (as crash1024) before closing the game.
 Ruled out (23 Oct): exhaustion of the runtime's callback-stack pool (the God Hand 30-minute crash, `docs/reference.md`
 "God Hand"): the crash save uses 3 of its 22 stacks.
 

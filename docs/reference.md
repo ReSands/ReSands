@@ -206,6 +206,35 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
     `pc_sampler.cpp` (reads the guest pc without the scheduler's map: it once corrupted that map), a crash log with
     guest pc + function name, `logs/play_last.log` kept per session, an IPU emulator from the AC5 recomp (Apache-2.0,
     `ps2xRuntime/src/lib/ipu/`; IPU emulation, so not our 0.3 route, though possibly a bitstream reference).
+- **gow-native-pc (Vnnc1/gow-native-pc, GPL-3.0; read 26 Oct 2026 at its 25 Oct head).** A new repo (created 25 Oct),
+  not one of the God of War projects already surveyed: it pins **YYOzcan/Tobiichi-Port @ 471c831** (which bundles
+  ran-j + Waffle565 + KIexster) and adds 16 numbered runtime patches, a Qt launcher and an installer. Not our runtime
+  family (ours is LightVelox's sotc-port), so patches need porting, not `git am`. Notes worth reading:
+  `docs/research/handoff-2026-10-25-performance-phases.md` (English), `ps2-ports-review-2026-10-25.md` (Portuguese).
+  - **Recompiler bug we share (checked in our copy: present).** MOVZ/MOVN write only the low 64 bits of rd on the
+    R5900; our `special_translator.cpp:123-126` copies all 128 (`SET_GPR_VEC`). Their patch 06 (from the GoW II port,
+    `ddcc548`). Only visible if the game later reads rd's upper half (MMI, `sq`), so low odds, but it is a one-line
+    fix; needs a full recompile (`-SkipGhidra`). Candidate for the next full rebuild, not a crash-2 lead on its own.
+  - **Already ours:** COP0 Count from the EE clock (their patch 11 = our patch 01); IOP heap first fit from the base
+    (their patch 11 / Killzone 0028: our `IopMemory::allocate` already searches from `HeapBase`). Small gap of ours:
+    `maxFreeMemory()` (QueryMaxFreeMemSize) still uses a cursor that never goes down, so it under-reports after frees.
+  - **Build time:** clang (llvm-mingw, `-ffp-contract=off -fno-strict-aliasing -fwrapv`) ~15 min full build against
+    45-60 with MSVC; clang + PGO beat MSVC in combat (59.4/57.9 avg/min fps against 58.0/53.1). Our `-SkipGhidra`
+    rebuilds take 30-50 min, so worth a trial at some point. **Trap:** raw `memcmp` of padded GS draw-state structs:
+    with clang every primitive became its own batch (~2 fps); compare fields. Check our GS for `memcmp` on structs
+    before any clang trial.
+  - **Performance ideas, measured there:** "register locals" codegen (guest GPRs in C++ locals, `ctx->pc` stored only
+    where read; Killzone patch 0017) cut EE thread time ~22 %; SPU2 mixer voice by voice in 64-frame batches,
+    verified bit-identical, 14 % -> 4 % of the game thread (relevant only until 0.3 replaces SPU2 emulation); VU1
+    clean-operand analysis (skip Inf/NaN normalisation where provably clean, checked at run time; idea from rac-rs
+    `vuclean.py`): fits `docs/vu1_scheduling.md`. VU1 block chaining gained only ~2 %.
+  - **Lessons:** thread-suspension sampling profilers pile samples around calls/returns (they saw "40 % dispatch
+    loop" that was not real), so check a profiler's hot spot by removing it before believing it (applies to our
+    `pop_profiler`). Their frame = one VU1 job (~14 ms) + ~3.5 ms of serial EE work (DMA wait, Flip); the lever they
+    identified is letting frame N+1 start before FINISH, not faster VU1 code. More batching can be slower (merged
+    batches left a fixed-function fast path).
+  - Placed by milestone (26 Oct): `docs/roadmap.md` (0.1, between 0.1 and 0.2, 1.2).
+  - Not for us: launcher/installer, fan-translation handling, Waffle's GS batching commits (saturate the GPU queue).
 - **To look into later (16 Oct 2026):** theclub654/ProjectCane, a native PC port (Windows/Linux) of Sly Cooper 1 (NTSC), rebuilt by reverse engineering; FFmpeg, shaders embedded at build time, a file extractor that reads the user's ISO. The README does not say how it renders models or handles sound, so read the code before step 5 (live native window) or the native sound mixer. **No licence named: read only, copy nothing.** Not Jade, so no format overlap. Also checked: lombyte-project/Lombyte (Ratchet & Clank matching decomp, GPL-3.0): not useful (matching-decomp route).
 
 ## Texture formats and the PC upgrade (12 Oct 2026)

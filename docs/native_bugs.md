@@ -238,6 +238,28 @@ Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (
   with no column, the column fading in over the fight: original behaviour. (The GS-only A/B alone could not show this:
   game code, VU and GS emulation are shared by both runs.)
 
+## Reported 25 Oct 15:51-16:30 (play log `play_20261025_154156.log`; copies in `game/analysis/saves1025e/`)
+
+Session 15:41-16:50 on the 25 Oct evening build (late lists on the GS), mostly the baths level; clean exit, no
+`missing-target` line. **User (26 Oct): file only, do not investigate now;** many may come from the hybrid
+native/GS frame and go away as it becomes fully native. Cheap first check when picked up: the same save with all
+native switches off (GS only, as `game\jobs\glowab.ps1`); if GS-only shows it too, it is not the hybrid. Save-to-report
+mapping is by time (the user's minutes vs save names); check each picture first.
+- **Rewind at 30 fps again (15:51, save 155110).** The first capture of the older "rewind at 30 fps" item
+  (115853 did not reproduce it in a 45 s boot).
+- **No sound from the spinning spike columns (15:56, save 155620)** and **no sound from a door opening (16:00,
+  saves 160002 / 160031);** user: "sound from this entire section is kinda messed up". Emulated sound, so for 0.3
+  (native sound); save-state boots have no sound, so these saves only locate the place.
+- **Fight with low fps (~16:05, saves 160324 / 160404).** The log shows ~46 fps average (min 30) over the fight
+  stretch after 16:03:24, ~60 samples after 16:04:04. Same family as the "fight fps" item.
+- **N13 flickering texture on a vertical wall corner (16:22, save 162246).**
+- **N14 another flickering wall texture (16:24, save 162442).**
+- **N15 sun brightness differs a lot between two camera rotations (16:26, saves 162621 / 162625, 4 s apart).**
+  Compare N10 (torch brightness with the camera turn, gone with the late lists on the GS).
+- **N16 flickering texture along the line of a ledge (16:28, save 162819)** and **more flicker (16:30, save
+  163042).** N13, N14 and N16 may be one bug (seams/edges of world geometry); look at them together.
+- **Water test set for 0.13 (P6):** the baths saves of this session (~16:12-16:31) have a lot of water.
+
 ## Storage of captures (agreed with the user 24 Oct)
 
 `.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after

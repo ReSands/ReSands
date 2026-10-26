@@ -6,7 +6,15 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 
 ## 0.x: playable, then native part by part
 
-- **0.1 = playable start to finish** with emulated graphics and sound (the two combat freezes of 21 Oct fixed).
+- **0.1 = playable start to finish** with emulated graphics and sound (crash 1 fixed; crash 2, cause unknown and
+  seen once, taken off the list 26 Oct and watched through the play-through: on a freeze, take a full dump).
+  Borrowed items for 0.1 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **MOVZ/MOVN write only the low 64 bits** (our recompiler copies 128; one line in
+  `special_translator.cpp`): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
+  the play-through. **IOP `maxFreeMemory()`** never goes back up after frees: fix (`-Fast`) only if import stats
+  (patch 11) show PoP calls QueryMaxFreeMemSize.
+- **Between 0.1 and 0.2 (or when full rebuilds become the bottleneck): clang (llvm-mingw) build trial** (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct):
+  ~15 min full builds there against 45-60 with MSVC, PGO on top; also the compiler 1.5 needs. First check our GS
+  for raw `memcmp` of padded structs (with clang every primitive became its own batch there).
 - **0.11 native static world -> 0.12 native characters, translucents, shadows + particles** (shadows moved here
   23 Oct: everything after them in the draw order waits for them) **-> 0.13 native effects** (water P6, sprites P9,
   halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.**
@@ -79,6 +87,11 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   animation, sound, cutscenes, sand rewind, timers that count frames) and fix them; frame pacing. Fallback if logic
   breaks above some rate: a fixed logic tick with interpolated presentation (Chronicle's `DECOUPLING_PLAN.md`,
   `docs/reference.md` "Renderer and DLSS notes") (estimate: needs only the native renderer's draw lists).
+  Borrowed for 1.2 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **"register locals" code generation** (guest registers in C++ locals; -22 % game-thread
+  time there; changes every generated function), earlier only if a fight profile shows the game thread limits fps;
+  **frame overlap** (start frame N+1 before the GS FINISH of frame N; their ~3.5 ms serial gap per frame), designed
+  on the native renderer's frame structure. Not taken: their batched SPU2 mixer (0.3 replaces SPU2 emulation) and
+  VU1 clean operands (native ports replace the emulated VU1 programs); revisit only if a profile says otherwise.
 - **1.3 = native higher resolution + crisp HUD.** Mostly render-target size once everything is native
   (2D/post-processing must scale too). HUD sprites drawn at output resolution, with upscaled or redrawn HUD textures.
 - **1.4 = assets from the PC and Xbox versions** (both owned by the user; GameCube dropped from the plan 23 Oct),

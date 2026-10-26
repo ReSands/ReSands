@@ -50,14 +50,19 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   gone with the late lists on the GS; user in-motion checks), N5 black flashes (41 over-budget generation switches in
   the 25 Oct sessions, no flash), N9 door (user saw it right). Parked until they recur (user: capture a save then):
   N3 stairs flash, N4 combat camera "teleport". Watch: N8 wall hue / N11 wall missing (fix 3664837, long sessions).
-- **Still needed for 0.1:** crash 1 (fix 3b80b66; close after a long user fight session without it) and crash 2
-  (cause unknown; act only on a reproduced freeze; no speculative emulated-sound fixes). `docs/saves_1021.md`.
+- **Still needed for 0.1:** crash 1 (fix 3b80b66; the 25 Oct 15:41 session had no `missing-target` but only a few
+  minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
+  through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
+  Borrowed fixes placed by milestone (MOVZ/MOVN with the next full rebuild, etc.): `docs/roadmap.md`.
 - **Next (agreed order):** 0.13 native effects: water (P6), halos, light shafts, flashes; then retry `-NativeLate`
   (if the glow still pops with halos/glow native, dig into the depth handoff: `docs/native_bugs.md` "Save-point pop").
-  Small ones on the side: `.glitch` compression (triaged captures deleted 25 Oct, `docs/native_bugs.md` "Storage"); why a `-Fast` rebuild once recompiled the
-  whole runtime; Esc did not quit one session (25 Oct 14:59, killed). Lower: rewind at 30 fps (not reproduced), fight
-  fps (save boots ~49-58 fps), camera X reversed in fixed views, door flicker with a black web, trouser flicker,
-  torch point lights, audio bugs (for 0.3), Alt+F4 once did not close the game.
+  Small ones on the side: `.glitch` compression (triaged captures deleted 25 Oct, `docs/native_bugs.md` "Storage");
+  why a `-Fast` rebuild once recompiled the whole runtime; Esc did not quit one session (25 Oct 14:59, killed).
+  Filed 26 Oct, not to investigate now (user): the 25 Oct baths session's reports (N13-N16 flicker and sun
+  brightness, missing sounds, rewind at 30 fps captured in 155110, a low-fps fight), `docs/native_bugs.md`, saves in
+  `game/analysis/saves1025e/` (the baths saves = water test set for P6). Lower: fight fps (save boots ~49-58 fps),
+  camera X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights, audio bugs
+  (for 0.3), Alt+F4 once did not close the game.
 - **How we judge (lessons 25 Oct, `docs/lessons.md`):** a few screenshots cannot show a short or camera-dependent
   effect is absent; the user's in-motion check with clock times is the reference, and the job log records each run's
   start time. Our GS emulation is not ground truth either: PS2 videos / hardware settle "is this original?".
@@ -78,7 +83,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 ## Release roadmap (user; full text, reasons and references: `docs/roadmap.md`)
 
 ```
-0.1   Playable start to finish, emulated graphics + sound (the two 21 Oct combat freezes fixed)
+0.1   Playable start to finish, emulated graphics + sound (crash 1 fixed; crash 2 watched)
 0.11  Native static world
 0.12  Native characters, translucents, shadows + particles
 0.13  Native effects: water (P6), sprites (P9), halos, light shafts, flashes

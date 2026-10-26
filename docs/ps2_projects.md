@@ -24,6 +24,7 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | sp00nznet/reo | Resident Evil Outbreak | own VU0/VU1 microcode translator (18 Oct) |
 | TaylorNAlbarnaz/PS2Recomp `sotc-port` 17 Oct | our base, newer commits | VU1 zero-padded prefix matching, hot paths: our patches 32-34 (18 Oct) |
 | KIexster/god-of-war-recomp | God of War (SotC base) | `docs/RENDIMIENTO.md`: getenv in hot loops 38%, IOP scheduler 41% (18 Oct) |
+| Vnnc1/gow-native-pc (GPL-3.0) | God of War; Tobiichi-Port runtime (= Waffle565 + KIexster) + 16 patches, launcher | created 25 Oct; clang/PGO builds, VU1 clean operands, batched SPU2 mixer, MOVZ/MOVN fix (26 Oct; `docs/reference.md` "gow-native-pc") |
 | catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS | Road Trip | VU1 AOT with build-time pipeline scheduling, ~60x (18 Oct) |
 | Harold0777/eagle_five_recomp | Ace Combat 5 perf fork | VU1 100%, GS state cache, VBlank condvars (18 Oct) |
 | kris-c-anderson/godhand-rearmed (GPL-3.0; fork of LasVola/godhand-recomp) | God Hand, PCSX2 GS, 60 fps, any aspect | same runtime family as ours via thiagordsfx/urban-reign-recomp; callback-stack leak fix, hang dump, switchable instruction patches, HUD anchoring, counter finder (23 Oct; `docs/reference.md` "God Hand") |
