@@ -136,6 +136,39 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **Method reference:** `lemiur/Game-Decompilation-Skill-For-Claude` (Claude Code skills for matching decomps:
   matcher, wall-identifier, helper-recovery, permute, decomp-code-rules; read 25 Oct 2026; no licence, so reference
   only, not installed).
+- **Feasibility check, part 1 (26 Oct 2026, Mac only).** The retail ELF's `.comment` (and the prototype's) reads
+  `MW MIPS C Compiler (2.4.1.01)` + `PlayStation2`; retail has no `.mwcats` (only the prototype ELFs do). decomp.me
+  hosts CodeWarrior PS2 compilers (`github.com/decompme/compilers`, `values.yaml`): the ones whose `mwccps2.exe`
+  carries exactly that string are 2.4-001213, 3.0-011126 (= 3.0b22-011126), 3.0.1-020123 (= 3.0b22-020123),
+  3.0.3-020716 (= 3.0b22-020716) and 3.0b22-020926: **five distinct binaries** (the 2003 builds, 3.0b38 onwards,
+  say 3.0.0, so they are out). Copies under `game/decomp/compilers/` (git-ignored; never commit). They are Win32
+  exes: no Wine on the Mac, so test compiles run on the PC (CPU only, no TV). Not via decomp.me's site: a scratch
+  is public. Test functions picked (retail addr, size): `GRO_Struct_Init__FP16GRO_tdst_Struct_i` 0x446280/44 (C
+  style), `AI_EvalFunc_OBJ_HierarchyGet_C` 0x1BD200/44 (has scheduler `nop`s), `SynchroTheme__13CThemeManagerFv`
+  0x193400/72 (list loop, `nop` pairs after the `jal`), `SetPos__4TPCMFi` 0x16F500/72 (virtual call); first guesses
+  in `game/decomp/try/`. Side find: the prototype's `POP1.ELF` (the bonus classic Prince of Persia 1) has full
+  `.debug`/`.line` (DWARF 1) sections with source paths (`D:\dev\POP1\Dare\engine\common\src\sndCTheme.cpp` etc.,
+  172 source files): it links the **DARE sound engine** the main game uses (`CThemeManager`, `SndManager`), so its
+  debug info gives real struct layouts and file splits for that subsystem (also for 0.3 native sound). Not parsed yet.
+- **Feasibility check, part 2 (26 Oct 2026, PC, CPU only): byte matching works.** All four test functions compile
+  **byte-identical** to retail (relocated fields masked) with **CodeWarrior 3.0.3-020716 (= 3.0b22-020716) at
+  `-O4,p`**, the only candidate matching all four (`SynchroTheme` matches on no other build; GRO/AI also on 3.0 and
+  3.0.1; 3.0b22-020926 matches only GRO). 2.4-001213 asks for a FlexLM `license.dat`, so untested. What it took:
+  - `GRO_Struct_Init`: first guess. `AI_EvalFunc_OBJ_HierarchyGet_C` (a C function): `void *r = 0; if (...) r = ...;
+    return r;` (early returns give other registers). `SynchroTheme`: `CThemeChannel *c = n->channel; n = n->next;
+    c->SynchroTheme();` (next loaded before the call). `SetPos__4TPCMFi`: virtual slot 7 (MW vtables: entries from
+    +8), and `SND_fn_rMulRealRealSnd` taking **unsigned** arguments (the conversion moves the load). The compiler's
+    odd `nop` pairs come out by themselves.
+  - So the usual matching-decomp wall (register allocation and scheduling depend on exact types and source shape) is
+    there, but at a normal height: three of four needed one to three tries. Small sample, easy functions; the real
+    question is the large Jade/AI functions and the class headers.
+  - Tooling: `tools/decomp/objcmp.py <elf> <targets.txt> <out dir>` (compare every object in `out/*/` with the
+    retail bytes; targets = `<symbol substring> <addr hex> <size>`); the test sources, `build.bat` (each compiler
+    x flag set, on the PC: `game\decomp\try\build.bat`) and the compilers stay under `game/decomp/` (git-ignored:
+    reconstructed Ubisoft code and Metrowerks binaries). The PC's SSH shell is cmd.exe, not PowerShell.
+  - Next steps if the user goes ahead: a whole small translation unit (one `.cpp` from POP1.ELF's file list, e.g. a
+    DARE file, with its DWARF types), splitting the ELF into units (splat), a linker check with `mwldps2`; then
+    decide the scope (one subsystem first).
 - **Rules to settle first:** the leaked Jade source stays off limits; Sony library code in the ELF stays assembly or
   is decompiled from our own binary only, never from memory; a decomp reconstructs Ubisoft's code, so it stays
   private unless the user decides otherwise (the ground rules share only our own code).

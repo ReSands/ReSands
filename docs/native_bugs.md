@@ -10,6 +10,12 @@ generation switches in the 25 Oct sessions, no black flash), N9 (user saw the do
 (the user captures a save then): N3 stairs flash, N4 combat camera teleport. Watch in long sessions: N8 wall hue,
 N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
 
+**Order agreed 26 Oct (user): squash the repeatable bugs (a save shows them) before 0.13 water.** After the P5 Qwen
+run is analysed and its leftovers hand-ported: (1) N13/N14/N16 flicker + N15 sun brightness (baths saves 1025e;
+first check each with every native switch off: GS-only shows it too -> not the hybrid frame); (2) N7 dagger flash
+(original? PCSX2 / video); (3) rewind at 30 fps (155110). (4) the fps items (N6, fight fps 160324 / 160404 / 184926)
+**wait until the renderer is fully native (0.2)**, so the GS fallback cost does not muddy the profile. Then 0.13.
+
 ## Tooling first (agreed 24 Oct)
 
 1. **Glitch capture (built 24 Oct evening, not yet used in play):** every kept quick-save (Select / F5) also writes
@@ -241,7 +247,7 @@ Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (
 ## Reported 25 Oct 15:51-16:30 (play log `play_20261025_154156.log`; copies in `game/analysis/saves1025e/`)
 
 Session 15:41-16:50 on the 25 Oct evening build (late lists on the GS), mostly the baths level; clean exit, no
-`missing-target` line. **User (26 Oct): file only, do not investigate now;** many may come from the hybrid
+`missing-target` line. **User (26 Oct): filed first, now first in the agreed order (top of this file);** many may come from the hybrid
 native/GS frame and go away as it becomes fully native. Cheap first check when picked up: the same save with all
 native switches off (GS only, as `game\jobs\glowab.ps1`); if GS-only shows it too, it is not the hybrid. Save-to-report
 mapping is by time (the user's minutes vs save names); check each picture first.
