@@ -1704,6 +1704,10 @@ namespace
         if (!held && t >= p.at)
         {
             ps2_stubs::setPadOverrideState(static_cast<uint16_t>(0xFFFFu & ~p.mask), p.lx, p.ly, 0x80, 0x80);
+#if POP_HAVE_QUICKSAVE
+            if (p.name == "select") // the pad override never reaches maybePadQuickSave, so a scripted Select saves here
+                ps2x::savestate::requestQuickSave();
+#endif
             held = true;
             std::cerr << "[pop:input] " << p.name << " at " << t << " s for " << p.hold << " s" << std::endl;
         }

@@ -211,3 +211,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   settled offline in about an hour, with no captures: references to each MPG packet, the program-selection table, and the
   prototype's labels (its VU driver labels come in the same order as the retail programs). Two were VU0 code, one
   unreachable, one dead library data. `docs/native_renderer.md` "VU1 program inventory".
+- **A save's own frame is not a GS reference for anything the native renderer drew.** Saves made with native on
+  hold the injected native picture, so `score_saves` "against the game" compares native with its own older output for
+  those draws: a change towards the GS can score as "further from the game" (vertex alpha, 27 Oct). Judge native-drawn
+  changes against a GS-only frame (all native switches off), and read the microcode before inferring what the GS gets.

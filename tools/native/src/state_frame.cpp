@@ -56,6 +56,9 @@ namespace
         ctx.r[6] = _mm_set_epi32(0, 0, 0, int(a2));
     }
 
+    // census (step 3c): Display passes per (element, matrix index) for kinds 9 / 10, as bits 1 << pass
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> g_passesOf;
+
     void noop(uint8_t *, R5900Context *, PS2Runtime *) {}
     void gfxEntry(uint8_t *, R5900Context *ctx, PS2Runtime *);
 
@@ -125,10 +128,12 @@ namespace
                 call(0x004C6200u, ctx);
                 break;
             case 9: // CJMeshElement::Display(element, matrix index, pass)
+                g_passesOf[{uint32_t(word) * 16, matrix}] |= 1u << pass;
                 setArgs(*ctx, uint32_t(word) * 16, matrix, pass);
                 call(0x004C8A80u, ctx);
                 break;
             case 10: // CJMeshElementRef::Display
+                g_passesOf[{uint32_t(word) * 16, matrix}] |= 1u << pass;
                 setArgs(*ctx, uint32_t(word) * 16, matrix, pass);
                 call(0x004C7B40u, ctx);
                 break;
@@ -372,6 +377,7 @@ int main(int argc, char **argv)
         return 1;
     }
     ps2SetScratchpadHostPtr(g_spr.data());
+    pop_mesh::g_keepAlpha = std::getenv("POP_ALPHA_CENSUS") != nullptr;
 
     // texture index -> key from the engine's texture list
     const uint32_t texCount = rd32(0x006CBC50u), texList = rd32(0x006CBC58u);
@@ -471,6 +477,72 @@ int main(int argc, char **argv)
                 std::fprintf(stderr, "[state] %s list +0x%x blend %u: native %zu (%zu tris), GS %zu (%zu tris)\n",
                              std::get<0>(k) == 0 ? "static" : std::get<0>(k) == 1 ? "skinned" : "instanced", std::get<1>(k), std::get<2>(k), v[0],
                              v[2], v[1], v[3]);
+        }
+        // census (POP_ALPHA_CENSUS=1, docs/renderer_audit.md items 9 and the displayRecord question): per (kind,
+        // list, blend kind) draws native / GS, and of those with source texel alpha > 0x80 or vertex alpha > 0x80
+        // (vertex alpha only where no local alpha replaces it); shadow textures are synthetic: not counted
+        if (pop_mesh::g_keepAlpha)
+        {
+            using namespace pop_native_live;
+            std::map<std::tuple<int, uint32_t, uint32_t, uint32_t>, std::array<size_t, 6>> by; // native, GS; texture over n/G; vertex over n/G
+            std::unordered_map<uint32_t, uint32_t> overOf; // texture key -> texels over 0x80
+            size_t notFound = 0;
+            auto add = [&](int kind, const DrawMaterial &m, const std::vector<pop_assets::Batch> &bs) {
+                const int g = m.native ? 0 : 1;
+                auto &e = by[{kind, m.list, (m.flags >> 16) & 0xF, (m.flags >> 4) & 1}];
+                ++e[g];
+                if (m.textureKey && kind != 3)
+                {
+                    auto it = overOf.find(m.textureKey);
+                    if (it == overOf.end())
+                    {
+                        pop_native::Image img;
+                        if (m.textureKey - kPaletteKey < 0x8000u && g_framePaletteImages.count(m.textureKey - kPaletteKey))
+                            img = g_framePaletteImages[m.textureKey - kPaletteKey];
+                        else if (!findTexture(m.textureKey, img))
+                            ++notFound;
+                        it = overOf.emplace(m.textureKey, img.alphaOver).first;
+                    }
+                    e[2 + g] += it->second != 0;
+                }
+                bool vover = false;
+                for (const auto &b : bs)
+                    for (const auto &v : b.vertices)
+                        vover = vover || v.colour[3] > 1.0f;
+                e[4 + g] += m.constAlpha < 0 && vover;
+            };
+            for (size_t i = 0; i < g_frameMaterials.size(); ++i)
+                add(0, g_frameMaterials[i], g_elements[g_frameDraws[i].first].meshes);
+            for (const auto &p : g_framePosed)
+                add(1, p.second, p.first);
+            for (const auto &r : g_frameRefs)
+                add(2, r.second.second, r.first);
+            for (const auto &r : g_frameShadows)
+                add(3, r.second.second, r.first);
+            static const char *const kinds[] = {"static", "skinned", "instanced", "shadow"};
+            for (const auto &[k, v] : by)
+                std::fprintf(stderr, "[census] %s list +0x%x blend %u test %u: draws native %zu GS %zu; texture alpha > 0x80 native %zu GS %zu; "
+                                     "vertex alpha > 0x80 native %zu GS %zu\n",
+                             kinds[std::get<0>(k)], std::get<1>(k), std::get<2>(k), std::get<3>(k), v[0], v[1], v[2], v[3], v[4], v[5]);
+            size_t over = 0;
+            for (const auto &[key, n] : overOf)
+                over += n != 0;
+            std::fprintf(stderr, "[census] textures %zu, not found %zu, with texels > 0x80 %zu\n", overOf.size(), notFound, over);
+            size_t both = 0;
+            for (const auto &[em, passes] : g_passesOf)
+                if ((passes & 3) == 3)
+                {
+                    ++both;
+                    std::fprintf(stderr, "[census] pass 0 and 1: element %08x matrix %u passes %x\n", em.first, em.second, passes);
+                }
+            std::map<uint32_t, size_t> masks;
+            for (const auto &[em, passes] : g_passesOf)
+                ++masks[passes];
+            std::string ms;
+            for (const auto &[m, n] : masks)
+                ms += " " + std::to_string(m) + ":" + std::to_string(n);
+            std::fprintf(stderr, "[census] (element, matrix) displayed %zu, with pass 0 and pass 1 %zu; pass masks%s\n", g_passesOf.size(), both,
+                         ms.c_str());
         }
         ctx.r[31] = _mm_set_epi32(0, 0, 0, 0x004A2100);
         call(0x004A2C80u, &ctx);

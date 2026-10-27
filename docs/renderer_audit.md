@@ -12,8 +12,8 @@ half-pixel viewport shift, cached readback invalidation, kept-mesh generation dr
 ## Confirmed defects
 
 Fixed 27 Oct: 1, 3, 4, 5, 7 (the AFAIL failure pass now inverts the GS test with its own shader bit, since the strict
-GS comparisons are no longer complements of each other). Item 2 was wrong: dropping the instanced clamp turned the
-walls of 160002 / 134531 / 145139 warmer than the GS picture (`score_saves` 1.67 -> 4.15 on 160002); the clamp stays.
+GS comparisons are no longer complements of each other). Item 2 was first rejected (walls of 160002 / 134531 / 145139 "warmer than the GS picture"), but that picture was
+the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only frames, with item 9's vertex alpha.
 
 1. **Alpha test ignores vertex alpha** (medium, now). `shaders/mesh.frag:28-30` tests `t.a`; the GS tests As after
    MODULATE (texel x vertex alpha, the value written at line 40). Alpha-tested draws with vertex or constant alpha
@@ -42,8 +42,76 @@ walls of 160002 / 134531 / 145139 warmer than the GS picture (`score_saves` 1.67
 9. **Alpha above 0x80 lost** (medium, measure first). Texture alpha: `assets.cpp:124`, `pop_native_live.cpp:3187`
    map 0x80-0xFF to 255; vertex alpha: `mesh.frag:40` clamps; the UNORM target clamps too. On the GS As > 0x80 scales blends
    up to ~2x. Census over the saves of palette / vertex alpha > 0x80 reaching native draws; fix only if any do.
+   **Census 27 Oct (step 3a):** `POP_ALPHA_CENSUS=1 pop_state_frame --world` (play defaults: characters, translucents,
+   shadows native) over the 51 saves; the switch keeps vertex alpha up to 2.0 in the decoders (`pop_mesh::g_keepAlpha`)
+   and `Image::alphaOver` counts source texels > 0x80. **Texture alpha: none** (4,924 texture lookups, 10 not found,
+   0 with a texel > 0x80; shadow textures are synthetic, lightmaps not counted). **Vertex alpha: yes.** Native today:
+   83 of 1,795 alpha-tested opaque instanced draws in list +0x2C (19 saves): with the clamp the native test sees a
+   smaller As than the GS (At x Av / 0x80), so texels the GS keeps can fail natively (small holes; not seen yet).
+   On the GS today (late lists, native from 0.13): list +0x88 AddAlpha (blend 6) 548 of 1,090, Blend (1) 216 of 717,
+   Add (4) 394 of 461 (alpha unused: harmless), +0xA8 AddAlpha 2. The GS traces (step 3b) agree: blended draws with
+   vertex alpha > 0x80 in every trace, ALPHA 0x48 (Cs x As + Cd) 160-2,480 per 4 fields, 0x44 (Blend) 0-216, also
+   in the menu (0x48: 896).
+   **Caveat found 27 Oct evening: these vertex counts are the packets' bytes, not what the GS gets.** User decision:
+   fix the alpha test now (accuracy first). Tried: decoders keep vertex alpha up to 2.0 and `mesh.frag` tests
+   As = At x Av >> 7 clamped to 0xFF. `score_saves` changed on 9 of 51 saves, all through one path,
+   `livePacketBatches` (instanced CJMeshElementRef draws, `pop_native_live.cpp` ~977; found by lifting each decoder's
+   clamp alone), and 2 of the 3 checked saves moved away from the game: 201540's torch smoke came out darker and
+   larger than the game's (6,574 pixels changed, 5,876 further), 134636 likewise (3,806 of 4,553 further); 202314 moved
+   closer (24,438 of 30,735). The cause is not the test: with the old test the picture was the same; the shader clamps
+   the interpolated alpha (`min(vColour.a, 1.0)`) instead of each vertex's, so an unclamped vertex makes the smoke's
+   inside more opaque. That evening's conclusion ("the GS draws it light, so P1 must change the alpha") was wrong,
+   see the P1 check below. **Reverted:** the decoders cap vertex alpha at 0x80 again (default output identical to
+   before on all 51 saves); kept: the GS formula in the test (same result while Av <= 0x80) and the census switch.
+   **P1 check (27 Oct night, static, `game/analysis/vu1/prog_4cde80.txt` + `tools/p1modes.py` over the 51 saves):**
+   P1 picks a vertex path by VU 17.w & 0xFF (header written per batch). **Modes 0, 1, 2, 4 copy the packet's colour
+   quad to the GIF packet unchanged** (`LQ vf26, 127(vi3)` -> `SQ vf26, -2(vi6)`; PACKED RGBAQ takes the low byte),
+   and the guard-band clipper (0x840 / 0xA88) reads colours back with `IAND 255` / ITOF0 and carries the full byte:
+   **P1 does not change vertex alpha; bytes up to 0xFF reach the GS.** Runs: mode 1 6,675 (275 with a byte > 0x80),
+   mode 2 2,867 (1,406), mode 0 415, mode 4 1; 234 runs with a header the script does not follow. **Mode 3 is the
+   lightmap pass** (ITOF15 UVs, 0x13B8 / clip 0x1590): no packet colours; RGB = VU 21 (SetLightmapColor, 0x80) and
+   **alpha = clamp(c + d x w, lo, hi)** with VU 16 = (hi, lo, c, d), the fog formula written as alpha. Only in the
+   baths saves (162246-162819, 583 runs each): (127, 76.2, 127.68, -1.062), so Av = 127 near and 76 from w ~48 on.
+   Native draws lightmaps with Av = 1.0 (`livePacketBatches` without colours), so **native lightmaps there are
+   darker than the GS's** (As = At x 76 / 128 on most of the scene; a native-path defect, fix now by the hybrid rule).
+   **Why the experiment "moved away from the game": the reference is not the GS.** Every save since 22 Oct was made
+   with the native renderer on (glitch notes: "injected"), so `popstate --frame` holds the native picture for every
+   native-drawn draw: for those, `score_saves` compares the native renderer with its own older output. The torch
+   smoke darker and larger with unclamped alpha is then likely what the GS draws. **Next:** a GS-only reference
+   (boot the saves with every native switch off and take the frame, or `PS2X_GS_TRACE`), then re-run the vertex-alpha
+   change against it. **Done 27 Oct night:** `game\jobs\gsref1027.ps1` boots 201540, 134636, 202314, 162246, 162621 with
+   every native switch off and quick-saves 9 s after the load (`POP_INPUT=...,select@10`: a scripted Select now saves);
+   the new saves' frames are pure GS (`game/analysis/gsref1027/`; TV off but `display_active` Enabled, 60 fps). The
+   GS smoke is a light-grey plume and the flame yellow; native drew a dark smudge and an orange flame: **the instanced
+   colour clamp (item 2) was the main error, alpha second.** `score_saves` against these frames, clamped -> RGB and
+   alpha up to 2.0 in `livePacketBatches` / `assets.cpp`: 201540 1.60 -> 1.49, 202314 6.81 -> 6.70, 134636 11.10 ->
+   11.05, 162246 (baths) 3.57 -> 2.44 (110,446 pixels changed, 102,019 closer), 162621 same. Alpha alone (RGB clamped)
+   moved 201540 further; with RGB both together are best. Now the default. Blending still clamps As at 1.0 in the
+   shader (the As > 0x80 blend question below). Still open: mode-3 alpha for native lightmaps (VU 16 per draw, from the fog the driver sets). P5 and P9
+   (ported) write their own alpha: their ports decide what the GS gets for particles and sprites.
+   **Blending with As > 0x80 (user, 27 Oct: needed natively in 0.13, not left to 0.2; user suggested dual-source
+   blending).** On the GS As up to 0xFF scales the blend up to ~2x. Vulkan clamps blend factors (dual-source ones
+   too) to 0..1 on a UNORM target, so: AddAlpha (Cs x As + Cd) is exact with Cs x As written from the shader and
+   blend ONE, ONE (if Cs x As > 1 the GS result clamps to 1 anyway). Blend ((Cs - Cd) x As + Cd) with As > 1 is
+   Cs x As - Cd x (As - 1): dual-source can give the factor As - 1 (alpha output stays the written As), but it needs
+   the SUBTRACT op while As <= 1 needs ADD, and the op is per pipeline, not per pixel: two draws of the same geometry
+   split by As (with ordering issues for overlapping triangles in one draw), and still inexact where Cs x As > 1.
+   Exact options: read Cd in the shader (programmable blending: `VK_EXT_rasterization_order_attachment_access`,
+   check MoltenVK support, or input attachments with a feedback-loop barrier per overlapping draw), or a float
+   target with the GS's per-draw clamp emulated. To decide at 0.13, after the P1 check shows how many draws need it.
+
 10. **GS features not modelled or checked** (low-medium): DTHE, mipmaps (TEX1 MXL; sampler `maxLod = 0`), PABE, FBA,
    region clamp modes. One `PS2X_GS_TRACE` per area type through `gsvram.py`: which values the game uses.
+   **Census 27 Oct (step 3b):** `tools/gscensus.py` over 8 GS-only 4-field traces (`game\jobs\gscensus1027.ps1`: saves
+   115837, 125052 chasm, 134636 slowed enemies, 145139 save point, 155110 rewind, 162246 baths, 184926 fight, and the
+   menu; plus the 16 Oct fight trace; 0.75 M draws). **DTHE 0, PABE 0, FBA 0 in every draw; COLCLAMP 1** (clamp, what
+   a UNORM target does). **No mipmaps:** MXL 0 everywhere (MMIN 4 and K 104 appear, but with MXL 0 they only pick
+   MMAG vs MMIN, both linear), so `maxLod = 0` is right. Nearest filtering (MMAG = MMIN = 0) on 80 + 12 draws in two
+   traces, not identified. **Region clamp (2/2)** only on the post-processing sprites that read framebuffer copies
+   (TBP 0x2300 / 0x1180 / 0): the same 12 rectangles with the same counts in every trace (the glow's downsample
+   chain); match them when the post-processing goes native. Otherwise CLAMP (0,0), (1,1), a few (0,1) / (1,0).
+   Nothing to model for the world; nothing to fix. Trace field = the save's own tick + 300 (after a state load the
+   field counter continues from the save: `popstate.py` prints it; field 600 traced nothing).
 11. **Hybrid boundary assumptions** (medium, parked to 0.2): the upload replaces everything drawn before the marker
    (checked on one save only); Z bias 128 lets GS draws up to 128 Z24 units behind a native surface show through.
    Cheap check: count GS primitives between the clear and the marker in the glitch note.
@@ -83,7 +151,9 @@ frame, so a texture key or batch marked sent always reaches the renderer. Shadow
 (element, index, alpha bit; only passes 2 and 3 add bits). An element displayed with pass 0 and then pass 1 at the same
 matrix index in one frame would get its pass-1 call skipped on the GS (`worldSeen` + `g_worldBase`) with nothing
 recorded natively for it. Unknown whether the game ever does that: count it in step 3's census before changing keys
-(shadows' `callKey` and the posed path use the same scheme). (c) `currentMaterial` against `FUN_004B2000`
+(shadows' `callKey` and the posed path use the same scheme). **Census 27 Oct (step 3c): never.** Over the 51 saves'
+draw lists 17,676 (element, matrix) pairs got kind 9 / 10 Display calls: passes {0} 16,040, {1} 1,489, {0, 2} 80, {1, 2} 67,
+{0, 1} none; the shared key stays (`pop_state_frame` census, pass masks). (c) `currentMaterial` against `FUN_004B2000`
 (`game/analysis/native/decomp/004b2000.c`): FBMSK, ZTST, AFAIL, alpha-test enable match. One defect fixed: TEST is
 written as `byte << 3 | 4` for the inverted test, so an odd AREF byte sets ATST bit 2 and LESS becomes GREATER;
 `mesh.frag` now does the same (no score change on 51 saves: no such draw in them). Not checked: the GS re-sends FBMSK

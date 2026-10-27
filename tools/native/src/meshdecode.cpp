@@ -13,6 +13,8 @@
 
 namespace pop_mesh {
 
+bool g_keepAlpha = false;
+
 namespace {
     bool readU32(const uint8_t* d, size_t len, size_t off, uint32_t& val) {
         if (off + 4 > len) return false;
@@ -333,7 +335,7 @@ bool skinnedBatches(const uint8_t *d, size_t len, uint32_t o, uint32_t size, std
                         b.colours[i*4] = std::min(nk.raw[4 * i] / 128.0, 1.0);
                         b.colours[i*4+1] = std::min(nk.raw[4 * i + 1] / 128.0, 1.0);
                         b.colours[i*4+2] = std::min(nk.raw[4 * i + 2] / 128.0, 1.0);
-                        b.colours[i*4+3] = std::min(nk.raw[4 * i + 3] / 128.0, 1.0);
+                        b.colours[i*4+3] = std::min(nk.raw[4 * i + 3] / 128.0, g_keepAlpha ? 2.0 : 1.0);
                     }
                 }
             }
@@ -528,7 +530,7 @@ bool batchMesh(const Batch &b, double uvscale, Mesh &out) {
             col[i * 4] = std::min(r[4 * i] / 128.0, 1.0);
             col[i * 4 + 1] = std::min(r[4 * i + 1] / 128.0, 1.0);
             col[i * 4 + 2] = std::min(r[4 * i + 2] / 128.0, 1.0);
-            col[i * 4 + 3] = std::min(r[4 * i + 3] / 128.0, 1.0);
+            col[i * 4 + 3] = std::min(r[4 * i + 3] / 128.0, g_keepAlpha ? 2.0 : 1.0);
         }
     }
     out.colours = col;

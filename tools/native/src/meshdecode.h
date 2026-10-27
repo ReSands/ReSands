@@ -16,6 +16,9 @@
 
 namespace pop_mesh
 {
+    // census only (pop_state_frame, POP_ALPHA_CENSUS): vertex alpha above 0x80 kept (up to 2.0) instead of clamped to 1.0
+    extern bool g_keepAlpha;
+
     struct Block
     {
         uint32_t index; // element_parts: 'v' (bits/variant) for LOD blobs, pass index for passes

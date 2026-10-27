@@ -22,6 +22,7 @@ namespace pop_native
     {
         uint32_t width = 0, height = 0;
         std::vector<uint8_t> rgba; // width * height * 4
+        uint32_t alphaOver = 0;    // texels whose source alpha was above 0x80 (clamped to 255; census)
     };
 
     // Blend kinds: the GS ALPHA settings the game's CJadeRenderStateManager::SetBlending (retail

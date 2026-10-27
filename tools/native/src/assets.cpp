@@ -83,6 +83,7 @@ namespace pop_assets
             out.width = w;
             out.height = h;
             out.rgba.assign(size_t(w) * h * 4, 0);
+            out.alphaOver = 0;
             if (!imageData(p, pal->second.first, pal->second.first + pal->second.second, 1024, pp) ||
                 !imageData(p, off, off + 0x200, size_t(w) * h, dp))
             {
@@ -98,6 +99,7 @@ namespace pop_assets
                     const uint8_t *e = p.d + pp + c * 4;
                     o[0] = e[0], o[1] = e[1], o[2] = e[2];
                     o[3] = static_cast<uint8_t>(std::min(255, e[3] * 2));
+                    out.alphaOver += e[3] > 0x80;
                 }
                 return true;
             }
@@ -122,6 +124,7 @@ namespace pop_assets
                     o[1] = palette[c * 4 + 1];
                     o[2] = palette[c * 4 + 2];
                     o[3] = static_cast<uint8_t>(std::min(255, palette[c * 4 + 3] * 2));
+                    out.alphaOver += palette[c * 4 + 3] > 0x80;
                 }
             return true;
         }
@@ -464,9 +467,9 @@ namespace pop_assets
                 v.uv[0] = float(b.uvs[2 * i] / (uvscale / 8)); // texture UVs 1/512 (see convertElement)
                 v.uv[1] = float(b.uvs[2 * i + 1] / (uvscale / 8));
                 const size_t c = 4 * (vbase + i);
-                // clamped at 1.0 unlike the static/lit paths: unclamped (2x, as GS MODULATE) tested 27 Oct, walls came out warmer than the GS (docs/renderer_audit.md item 2)
+                // up to 2x as GS MODULATE, alpha too (P1 passes the byte on): matches GS-only frames, docs/renderer_audit.md items 2, 9
                 for (int k = 0; k < 4; ++k)
-                    v.colour[k] = colours && c + 4 <= colourBytes ? std::min(colours[c + k] / 128.0f, 1.0f) : 1.0f;
+                    v.colour[k] = colours && c + 4 <= colourBytes ? std::min(colours[c + k] / 128.0f, 2.0f) : 1.0f;
             }
             vbase += n;
             std::vector<int32_t> flags(b.flags.begin(), b.flags.end());

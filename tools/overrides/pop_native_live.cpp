@@ -972,9 +972,9 @@ namespace pop_native_live
                         vx.uv[0] = float(st[0] / uvscale);
                         vx.uv[1] = float(st[1] / uvscale);
                         flags[v] = st[2];
-                        // clamped at 1.0 unlike the static/lit paths: unclamped (2x, as GS MODULATE) tested 27 Oct, walls came out warmer than the GS (docs/renderer_audit.md item 2)
+                        // up to 2x as GS MODULATE, alpha too (P1 passes the byte on): matches GS-only frames, docs/renderer_audit.md items 2, 9
                         for (int k = 0; k < 4; ++k)
-                            vx.colour[k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 1.0f) : 1.0f;
+                            vx.colour[k] = 4 * v + 4 <= col.size() ? std::min(col[4 * v + k] / 128.0f, 2.0f) : 1.0f;
                         vx.uv2[0] = vx.uv2[1] = 0;
                     }
                     for (uint32_t v = 2; v < num; ++v)

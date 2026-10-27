@@ -24,7 +24,15 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    meshes (8 saves; fixed: skipped); no index out of bounds; scores unchanged. Live A/B on the PC (`oct27.ps1 -Tag
    oct27b`, the 3 saves; no validation layer there, no SDK): counters and fps unchanged, no dropped or missing batches,
    screenshots the same.
-3. **Next.** Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
+3. **Done 27 Oct** (answers in `docs/renderer_audit.md` items 9, 10 and the last section): texture alpha > 0x80
+   none; vertex alpha > 0x80 yes (83 native alpha-tested draws, more in the GS late lists): two fixes proposed in
+   item 9; GS features: nothing used beyond what is modelled; pass 0 + pass 1 on one element:
+   never. **Follow-up (27 Oct evening):** the alpha-test fix the user chose was tried and reverted: the vertex
+   alpha counts are packet bytes. **P1 check done (27 Oct night, audit item 9):** P1 passes vertex alpha to the GS
+   unchanged (the "P1 changes alpha" idea was wrong: the save frames used as reference hold native pixels); its
+   lightmap mode writes a distance fade as alpha that native lacks (baths saves). GS-only reference saves made the same night
+   (`game/analysis/gsref1027/`): the instanced colour clamp (audit item 2) and alpha clamp are dropped, closer to the
+   GS on all 5 saves. Open: the lightmap fade (VU 16 per lightmap draw), blending with As > 0x80. The plan as it was: census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
    GS trace per area type (audit 9, 10): decides the fidelity work before 0.2. Measurement only; fix nothing in it
    without the user. Three questions in all:
    a. **Alpha > 0x80** (audit 9): over the 51 saves in `game/analysis/saves*/` (all at once: symlink the

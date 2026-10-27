@@ -21,14 +21,15 @@ void main()
 {
     vec4 t = texture(baseTex, vUv);
     // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
-    // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows
+    // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows.
     float a = t.a * min(vColour.a, 1.0);
     // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4; bit 16 keeps the failures instead),
     // 2 blended, 8 legacy glTF blend
     int flags = int(pc.params.x + 0.5);
     if ((flags & 1) != 0) {
-        // on the PS2 scale, as the GS: texel alpha is stored doubled (0x80 = 255), AREF = cutoff byte / 2
-        float as = floor(floor(t.a * 127.5 + 0.5) * min(vColour.a, 1.0) + 0.001);
+        // on the PS2 scale, as the GS: texel alpha is stored doubled (0x80 = 255), AREF = cutoff byte / 2;
+        // As = At * Av >> 7 clamped to 0xFF (instanced draws keep Av up to 2.0, the other decoders cap it at 0x80: docs/renderer_audit.md item 9)
+        float as = min(floor(floor(t.a * 127.5 + 0.5) * vColour.a + 0.001), 255.0);
         int top = int(pc.params.y * 255.0 + 0.5);
         float aref = float(top >> 1);
         // FUN_004B2000 ORs the byte in at bit 3, so an odd byte's low bit lands in ATST: LESS (2) becomes GREATER (6)

@@ -57,7 +57,10 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
   `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
   output gate, N6 profile. Step 1 done 27 Oct (df6c15d; audit item 2 rejected, see
-  `docs/renderer_audit.md`); step 2 done 27 Oct (96ae9f8); **next: step 3**, the census, plan in `docs/native_bugs.md` step 3 (a, b, c).
+  `docs/renderer_audit.md`); step 2 done 27 Oct (96ae9f8); step 3 (census) done 27 Oct; P1 check done 27 Oct night (`docs/renderer_audit.md` item 9: P1 passes vertex
+  alpha unchanged; the saves' frames hold native pixels, so they are no reference for native draws; native lightmaps
+  lack P1's distance fade in the baths); GS-only reference saves `game/analysis/gsref1027/` (scripted `select@N` saves):
+  instanced colour + alpha unclamped (audit items 2, 9; uncommitted). **Next:** lightmap fade, or step 4.
 - **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
   at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
   the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native
