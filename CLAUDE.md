@@ -60,7 +60,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   **save frames made with native on hold native pixels, so they are no reference for native draws**; GS-only
   reference saves (`game/analysis/gsref1027/`) showed the instanced colour clamp was wrong (item 2 now fixed) and
   native lightmaps lacked P1's distance fade (fixed). **Step 4 done 28 Oct:** nightly `render` gate (blend test +
-  11 GS-only saves with thresholds, `tools/nightly/render_gate.txt`). **Next: step 5** (N6 profile, texture memory). Blending with As > 0x80: the user's call at 0.13.
+  11 GS-only saves with thresholds, `tools/nightly/render_gate.txt`). **Next: step 5** (N6 profile, texture memory;
+  starting points in `docs/native_bugs.md` step 5). 0.13 candidates from the gate's pictures: step 4's last lines. Blending with As > 0x80: the user's call at 0.13.
 - **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
   at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
   the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native

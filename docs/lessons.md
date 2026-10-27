@@ -215,3 +215,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   hold the injected native picture, so `score_saves` "against the game" compares native with its own older output for
   those draws: a change towards the GS can score as "further from the game" (vertex alpha, 27 Oct). Judge native-drawn
   changes against a GS-only frame (all native switches off), and read the microcode before inferring what the GS gets.
+- **An offline score is a change detector, not a distance to the goal.** The nightly render gate (28 Oct) scores
+  `pop_state_frame` frames, which draw every list natively (late lists, sprites, particles) and no HUD, against GS-only
+  saves: fights score 8-13 with nothing broken. Read the side-by-side before treating a high score as a bug, and
+  only a rise above the save's own baseline as a regression.

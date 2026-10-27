@@ -65,8 +65,18 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    candidates for 0.13): 145139 the moon blown out to a white blob natively (GS: disc with a soft halo; sprite halo
    in +0x88 or its glow mask), 155110 a bright light patch on the floor natively that the GS frame lacks
    (light shaft?), 115853 the GS's sand particles / haze thicker than native.
-5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still
-   wait for 0.2 (item 4 below).
+5. **Next (start here).** Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement
+   only: fps fixes still wait for 0.2 (item 4 below). Starting points (gathered 28 Oct): N6's save is on the PC,
+   `states\play_20261024_200200.state` (+ `.glitch`; 60 fps for 3 s, then 51-54 fps as native draws go ~1,050 ->
+   1,450). Profile it from the save with `tools\windows\profile-states.ps1 -States play_20261024_200200` through
+   `start-job.ps1` (native on, the default; `POP_PROFILE`, symbolized with the play build's map; `-Start`/`-Duration`
+   in seconds; the default `-Start 12` falls inside the slow stretch only if the load is at 2 s: check). Audit 12's
+   question: is the ~3.3 ms worker (`upload()` new buffers + descriptor pool, 2-4 `oneShot` queue waits, then
+   `renderOffscreen`) what costs the frames, i.e. does the GS thread's wait grow with the draws? The per-600-frame
+   `[pop:world]` stats line (`tools/overrides/pop_native_world.cpp` ~442: worker read/upload/draw ms, GS-thread wait)
+   already splits it; a 45 s+ boot gives a few lines. Audit 13: add texture count and bytes (`Renderer` images, the
+   worker's `imageOf_`) to that same line, and see whether they keep growing over a long session. Boots: ask about the
+   TV (28 Oct: boots ran at ~55 fps with it off, display_active Disabled; check the fps lines).
 
 **Order agreed 26 Oct (user), revised 26 Oct evening (P5 is done: `--chain p5` PASS 930 whole runs).**
 Squash the repeatable bugs (a save shows them) before 0.13; every item below gets at least a quick look, so we do
