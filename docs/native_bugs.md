@@ -24,8 +24,24 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    meshes (8 saves; fixed: skipped); no index out of bounds; scores unchanged. Live A/B on the PC (`oct27.ps1 -Tag
    oct27b`, the 3 saves; no validation layer there, no SDK): counters and fps unchanged, no dropped or missing batches,
    screenshots the same.
-3. Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
-   GS trace per area type (audit 9, 10): decides the fidelity work before 0.2.
+3. **Next.** Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
+   GS trace per area type (audit 9, 10): decides the fidelity work before 0.2. Measurement only; fix nothing in it
+   without the user. Three questions in all:
+   a. **Alpha > 0x80** (audit 9): over the 51 saves in `game/analysis/saves*/` (all at once: symlink the
+      `.state` files into one scratch folder, as in step 2), count native draws whose texture/palette alpha or
+      vertex alpha exceeds 0x80, per kind (static / skinned / instanced / shadow) and render-state blend kind. Where:
+      `pop_state_frame` already decodes them (`tools/native/src/state_frame.cpp`; the alpha clamps are
+      `assets.cpp:124`, `pop_native_live.cpp` ~3187, `mesh.frag` `min(vColour.a, 1.0)`). A counter printed at the
+      end of `pop_state_frame` is the cheapest place, or a `POP_VIEW_LIST`-style side file.
+   b. **GS features** (audit 10): which values the game sets for DTHE, TEX1 (MXL, mipmaps), PABE, FBA and the CLAMP
+      region modes. One `PS2X_GS_TRACE=<field>:<n>:<path>` per area type (n >= 4 at 30 fps), decoded with
+      `tools/gsvram.py`. Needs PC boots (TV on: ask; game closed). Or first try the saves' GS registers
+      (`tools/popstate.py`), which needs no boot but holds only the last value of each register.
+   c. **From step 2's reads:** does any element get Display calls with both pass 0 and pass 1 (same element, same
+      matrix index) in one frame? If yes, the shared frame-seen key in `displayRecord` loses its pass-1 layer
+      (audit, last section). Count it from the saves' draw lists (`pop_state_frame` walks them) or with a temporary
+      counter in `displayRecord` during a live boot.
+   Write the answers into the audit (items 9, 10) and propose fixes only where a count is non-zero.
 4. `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a one-quad-per-blend-kind test
    (audit 17).
 5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still

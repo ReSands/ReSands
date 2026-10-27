@@ -53,11 +53,11 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **Still needed for 0.1:** crash 1 (fix 3b80b66; the 25 Oct 15:41 session had no `missing-target` but only a few
   minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
   through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
-  Borrowed fixes placed by milestone (MOVZ/MOVN with the next full rebuild, etc.): `docs/roadmap.md`.
+  Borrowed fixes placed by milestone (MOVZ/MOVN + runtime patch 43 small screenshots with the next full rebuild, etc.): `docs/roadmap.md`.
 - **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
   `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
   output gate, N6 profile. Step 1 done 27 Oct (df6c15d; audit item 2 rejected, see
-  `docs/renderer_audit.md`); step 2 done 27 Oct; **next: step 3** (census; add the pass 0 / pass 1 key question from the reads).
+  `docs/renderer_audit.md`); step 2 done 27 Oct (96ae9f8); **next: step 3**, the census, plan in `docs/native_bugs.md` step 3 (a, b, c).
 - **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
   at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
   the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native

@@ -12,6 +12,10 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   `special_translator.cpp`): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
   the play-through. **IOP `maxFreeMemory()`** never goes back up after frees: fix (`-Fast`) only if import stats
   (patch 11) show PoP calls QueryMaxFreeMemSize.
+  Also with that rebuild (user, 27 Oct): **runtime patch 43, small screenshots.** `PS2X_SCREENSHOT_DIR` shots
+  (`ps2_runtime.cpp` ~2911, `LoadImageFromScreen` + `ExportImage`) are 9600x5400 on the 4K TV at 250% DPI with the
+  game in a corner, and `livecmp.py` takes minutes per pair. Crop to the game's draw rectangle and resize to 640x448
+  before export. Debug shots only; does not change play.
 - **Between 0.1 and 0.2 (or when full rebuilds become the bottleneck): clang (llvm-mingw) build trial** (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct):
   ~15 min full builds there against 45-60 with MSVC, PGO on top; also the compiler 1.5 needs. First check our GS
   for raw `memcmp` of padded structs (with clang every primitive became its own batch there).
