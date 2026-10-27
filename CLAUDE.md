@@ -54,6 +54,9 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
   through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
   Borrowed fixes placed by milestone (MOVZ/MOVN with the next full rebuild, etc.): `docs/roadmap.md`.
+- **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
+  `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
+  output gate, N6 profile.
 - **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
   at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
   the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native

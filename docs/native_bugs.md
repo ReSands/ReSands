@@ -10,6 +10,17 @@ generation switches in the 25 Oct sessions, no black flash), N9 (user saw the do
 (the user captures a save then): N3 stairs flash, N4 combat camera teleport. Watch in long sessions: N8 wall hue,
 N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
 
+**First: the renderer audit's five steps (user, 27 Oct; one at a time; findings `docs/renderer_audit.md`).**
+1. Shader alpha test (audit 1 + 3), then the one-liners 4, 5, 7 (and 2: instanced colour clamp).
+2. Validation-layer switch + index bounds check in `FrameLoader::load`, run over the saves offline (audit 8). Do the
+   three targeted reads (audit, last section) first, so their fixes join this batch.
+3. Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
+   GS trace per area type (audit 9, 10): decides the fidelity work before 0.2.
+4. `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a one-quad-per-blend-kind test
+   (audit 17).
+5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still
+   wait for 0.2 (item 4 below).
+
 **Order agreed 26 Oct (user), revised 26 Oct evening (P5 is done: `--chain p5` PASS 930 whole runs).**
 Squash the repeatable bugs (a save shows them) before 0.13; every item below gets at least a quick look, so we do
 not build 0.13 on top of broken code.
