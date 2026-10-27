@@ -4,7 +4,7 @@
 #   tools\windows\start-job.ps1 -Script tools\windows\profile-states.ps1
 # Default scenes (docs/saves_1017.md): the sand-monster fight (#50, 3-18 fps), the courtyard pool
 # (#11, ~38 fps) and a 60 fps reference (#40, fire pits). Save-state boots have no sound.
-# Native renderer on as play.ps1s default (world, characters, translucents, shadows; late lists on the GS).
+# Native renderer on as play.ps1's default (world, characters, translucents, shadows; late lists on the GS).
 # Output: game\analysis\prof\<state>.txt (raw) and <state>.report.txt (per thread, self + inclusive).
 param([switch]$NoBuild, [string[]]$States = @('play_20261017_093051', 'play_20261017_091049', 'play_20261017_092346'),
       [int]$Start = 12, [int]$Duration = 30)
