@@ -4,6 +4,7 @@
 #   tools\windows\start-job.ps1 -Script tools\windows\profile-states.ps1
 # Default scenes (docs/saves_1017.md): the sand-monster fight (#50, 3-18 fps), the courtyard pool
 # (#11, ~38 fps) and a 60 fps reference (#40, fire pits). Save-state boots have no sound.
+# Native renderer on as play.ps1s default (world, characters, translucents, shadows; late lists on the GS).
 # Output: game\analysis\prof\<state>.txt (raw) and <state>.report.txt (per thread, self + inclusive).
 param([switch]$NoBuild, [string[]]$States = @('play_20261017_093051', 'play_20261017_091049', 'play_20261017_092346'),
       [int]$Start = 12, [int]$Duration = 30)
@@ -23,7 +24,7 @@ foreach ($st in $States) {
     $prof = "$out\$st.txt"
     Remove-Item $prof -ErrorAction SilentlyContinue
     & "$Root\tools\windows\boot.ps1" -Play -Out game\recomp-sotc -Seconds ($Start + $Duration + 10) -Name "prof_$st" `
-        -Env "PS2X_STATE_LOAD_AT=120:states/$st.state;POP_60FPS=1;POP_PROFILE=$($prof):$($Start):$($Duration)" | Out-Null
+        -Env "PS2X_STATE_LOAD_AT=120:states/$st.state;POP_60FPS=1;POP_NATIVE_WORLD=1;POP_NATIVE_CHARACTERS=1;POP_NATIVE_TRANSLUCENT=1;POP_NATIVE_SHADOWS=1;POP_NATIVE_LATE=0;POP_PROFILE=$($prof):$($Start):$($Duration)" | Out-Null
     $fps = (Select-String -Path "$Root\game\recomp-sotc\prof_$st.log" -Pattern '\[pop:fps\] ([\d.]+)' |
             ForEach-Object { $_.Matches[0].Groups[1].Value }) -join ' '
     "fps: $fps"
