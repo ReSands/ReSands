@@ -1,9 +1,15 @@
 # Nightly render gate (tools/nightly/checks.py --only render): GS-only reference saves in
 # game/analysis/gsref1027/states/ and the highest mean difference (tools/livecmp.py score) their native
-# frame may have against the save's own GS picture. Baseline 27 Oct night (gsref1027/lmfade) + 0.1.
+# frame may have against the save's own GS picture. Baseline + 0.1: the first five 27 Oct night (gsref1027/lmfade), the rest 28 Oct (gsref1028.ps1).
 # A save that gets better: lower its line in the same commit as the fix.
 20261024_201540.gs 1.59
 20261024_202314.gs 6.70
 20261025_134636.gs 11.14
 20261025_162246.gs 2.37
 20261025_162621.gs 10.89
+20261024_184926.gs 8.08
+20261025_115837.gs 9.71
+20261025_115853.gs 13.06
+20261025_125052.gs 2.96
+20261025_145139.gs 10.76
+20261025_155110.gs 11.41

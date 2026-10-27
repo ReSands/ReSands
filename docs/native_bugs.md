@@ -50,18 +50,21 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
       (audit, last section). Count it from the saves' draw lists (`pop_state_frame` walks them) or with a temporary
       counter in `displayRecord` during a live boot.
    Write the answers into the audit (items 9, 10) and propose fixes only where a count is non-zero.
-4. **Half done 28 Oct (Mac).** The gate: `python3 -I tools/nightly/checks.py --only render` (Mac only, 8 s; also in
-   the default run) runs `pop_blend_test` (one quad per blend kind, every branch of SetBlending 0x4B2500 incl.
-   inverse / destination alpha, against the GS formula from the ALPHA byte: 32 cases, all within 1 step) and
-   `score_saves.sh` over the saves in `tools/nightly/render_gate.txt` (threshold = 27 Oct baseline + 0.1; real fixes
-   moved scores by 0.1-1.3; lower a line in the same commit as a fix that improves it). Checked that a lowered
-   threshold makes the report list the save. **Left: more GS-only saves** (needs the TV): `game\jobs\gsref1028.ps1`
-   (copy to the PC; -Fast rebuild, then 115837, 115853, 125052 chasm, 145139 save point, 155110 rewind, 184926 fight:
-   the area types of audit 10), copy the `.gs.state` files to `game/analysis/gsref1027/states/`, score them, add
-   their lines to `render_gate.txt`. **The set must be GS-only saves** (lesson 27 Oct: a save made with native on
-   holds native pixels). How they are made: every native switch off, `POP_INPUT=r1@1:9,select@10,r1@11:3600`
-   quick-saves 9 s after the load (inputs run in order, so a long hold blocks later ones); the job backs up and
-   restores `quick.state`; `GSREF_NOBUILD=1` skips the rebuild.
+4. **Done 28 Oct (Mac + one PC job).** The gate: `python3 -I tools/nightly/checks.py --only render` (Mac only, 18 s;
+   also in the default run) runs `pop_blend_test` (one quad per blend kind, every branch of SetBlending 0x4B2500
+   incl. inverse / destination alpha, against the GS formula from the ALPHA byte: 32 cases, all within 1 step) and
+   `score_saves.sh` over the 11 GS-only saves in `tools/nightly/render_gate.txt` (`game/analysis/gsref1027/states/`;
+   threshold = baseline + 0.1; real fixes moved scores by 0.1-1.3; lower a line in the same commit as a fix that
+   improves it). Checked that a lowered threshold makes the report list the save. Six saves added 28 Oct by
+   `game\jobs\gsref1028.ps1` (115837, 115853, 125052 chasm, 145139 save point, 155110 rewind, 184926 fight; TV off,
+   display_active Disabled, still ~55 fps). How the saves are made: every native switch off,
+   `POP_INPUT=r1@1:9,select@10,r1@11:3600` quick-saves 9 s after the load (inputs run in order); the job backs up and
+   restores `quick.state`; `GSREF_NOBUILD=1` skips the rebuild. **The set must be GS-only saves** (lesson 27 Oct).
+   The scores are absolute differences: the offline frame draws every list natively (late lists, sprites, particles
+   too, unlike live play) and has no HUD, so 8-13 is normal for fights. Seen in the new side-by-sides (not fixed;
+   candidates for 0.13): 145139 the moon blown out to a white blob natively (GS: disc with a soft halo; sprite halo
+   in +0x88 or its glow mask), 155110 a bright light patch on the floor natively that the GS frame lacks
+   (light shaft?), 115853 the GS's sand particles / haze thicker than native.
 5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still
    wait for 0.2 (item 4 below).
 
