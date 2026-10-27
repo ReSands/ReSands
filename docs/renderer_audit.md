@@ -124,8 +124,11 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
 12. **Synchronous worker on the critical path** (medium, measure first): every frame `upload()` makes new buffers and
    a descriptor pool and waits for the queue 2-4 times (`oneShot`), plus `renderOffscreen`; the GS thread waits up
    to 250 ms. Measured ~3.3 ms per frame (22 Oct); N6 drops to 51-54 fps at ~1,450 draws. Unmeasured: that the waits are the cause.
+   Measured 27 Oct (save 200200, native on, 60 fps): worker 3.6-4.0 ms, GS thread waits 3.4-4.0 ms (on the critical
+   path, no frames lost at that load); N6's slow stretch did not reproduce from the save.
 13. **No texture budget** (low-medium): the worker only calls `reset(true)`, so textures and `imageOf_` grow all session.
-   Log count/bytes in the 600-frame stats line.
+   Log count/bytes in the 600-frame stats line. Done 27 Oct (`<n> textures, <MB> MB`; 86 / 3 MB flat over 3,000
+   frames of one scene); growth over a long session still to read from a `play.ps1` log.
 
 ## Migration work (not defects)
 

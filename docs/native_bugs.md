@@ -65,18 +65,16 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    candidates for 0.13): 145139 the moon blown out to a white blob natively (GS: disc with a soft halo; sprite halo
    in +0x88 or its glow mask), 155110 a bright light patch on the floor natively that the GS frame lacks
    (light shaft?), 115853 the GS's sand particles / haze thicker than native.
-5. **Next (start here).** Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement
-   only: fps fixes still wait for 0.2 (item 4 below). Starting points (gathered 28 Oct): N6's save is on the PC,
-   `states\play_20261024_200200.state` (+ `.glitch`; 60 fps for 3 s, then 51-54 fps as native draws go ~1,050 ->
-   1,450). Profile it from the save with `tools\windows\profile-states.ps1 -States play_20261024_200200` through
-   `start-job.ps1` (native on, the default; `POP_PROFILE`, symbolized with the play build's map; `-Start`/`-Duration`
-   in seconds; the default `-Start 12` falls inside the slow stretch only if the load is at 2 s: check). Audit 12's
-   question: is the ~3.3 ms worker (`upload()` new buffers + descriptor pool, 2-4 `oneShot` queue waits, then
-   `renderOffscreen`) what costs the frames, i.e. does the GS thread's wait grow with the draws? The per-600-frame
-   `[pop:world]` stats line (`tools/overrides/pop_native_world.cpp` ~442: worker read/upload/draw ms, GS-thread wait)
-   already splits it; a 45 s+ boot gives a few lines. Audit 13: add texture count and bytes (`Renderer` images, the
-   worker's `imageOf_`) to that same line, and see whether they keep growing over a long session. Boots: ask about the
-   TV (28 Oct: boots ran at ~55 fps with it off, display_active Disabled; check the fps lines).
+5. **Done 27 Oct (two PC boots, TV off, display_active Disabled).** `tools\windows\profile-states.ps1 -States
+   play_20261024_200200 -Start 6 -Duration 40` (the script now turns the native switches on as `play.ps1` does; before,
+   it booted GS-only). **N6 does not reproduce from its save:** 60 fps for the whole 40 s, GS-only (report kept as
+   `game\analysis\prof\play_20261024_200200.gsonly.report.txt`) and native (`...200200.report.txt`); the Prince stands
+   still after the load, so the draws never rise to the slow stretch's ~1,450. Audit 12: worker 3.6-4.0 ms per frame
+   (read 0.9, upload 1.7, draw 1.1-1.4) and the GS thread waits 3.4-4.0 ms, i.e. nearly all of it: the worker is on
+   the critical path, as the audit said, but costs no frames at this load (60 fps). Audit 13: the stats line now ends
+   with `<n> textures, <MB> MB` (86 textures, 3 MB, flat over 3,000 frames here); growth needs a long session, which
+   every `play.ps1` session now logs. N6 itself waits for 0.2 with the other fps items, or a `play.ps1 -Profile`
+   quick-save in the slow stretch.
 
 **Order agreed 26 Oct (user), revised 26 Oct evening (P5 is done: `--chain p5` PASS 930 whole runs).**
 Squash the repeatable bugs (a save shows them) before 0.13; every item below gets at least a quick look, so we do
@@ -149,7 +147,8 @@ keys changed meaning between frames. **Closed 25 Oct**: the user confirmed slowe
 ## N6: sustained frame-rate drop (save 200200, 20:02)
 
 Glitch capture: 60 fps for 3 s, then 51-54 fps steadily (median frame 18.4 ms) while the frame's native draws rise
-from ~1,050 to ~1,450. A heavier scene, not a hitch. Needs a `play.ps1 -Profile` session at that spot.
+from ~1,050 to ~1,450. A heavier scene, not a hitch. Needs a `play.ps1 -Profile` session at that spot: the save alone runs at 60 fps
+(27 Oct, audit step 5).
 
 ## N7: flash when the Prince raises the dagger after gathering sand (saves 195613 / 195733)
 
