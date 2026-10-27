@@ -53,6 +53,10 @@ target_link_libraries(pop_native_view PRIVATE pop_native SDL3::SDL3)
 add_executable(pop_assets_test src/assets_test.cpp)
 target_link_libraries(pop_assets_test PRIVATE pop_native)
 
+# pop_blend_test: one quad per blend kind against the GS blend formula (exit 0 = all pass)
+add_executable(pop_blend_test src/blend_test.cpp)
+target_link_libraries(pop_blend_test PRIVATE pop_native_render)
+
 # pop_postfx_check: judges postfx.h against the game's per-pass framebuffer dumps (POP_PASSDUMP_AT)
 add_executable(pop_postfx_check src/postfx_check.cpp)
 target_include_directories(pop_postfx_check PRIVATE src ${stb_SOURCE_DIR})

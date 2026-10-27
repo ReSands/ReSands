@@ -70,6 +70,13 @@ def findings(results, changes):
         out.append(('boot', 'frame rate below 28 fps', f"fps_median {boot['fps_median']}"))
     if boot and boot.get('ok') and not boot.get('framecap'):
         out.append(('boot', 'frame capture missing', 'no frame capture file was written'))
+    rd = results.get('render', {})
+    if rd.get('error'):
+        out.append(('render', 'render gate did not run', rd['error'][:400]))
+    if rd.get('blend_wrong'):
+        out.append(('render', f"{len(rd['blend_wrong'])} blend kinds differ from the GS formula", ' | '.join(rd['blend_wrong'])[:400]))
+    for n in rd.get('over', []):
+        out.append(('render', f'native frame of save {n} over its threshold', f"score {rd['scores'].get(n)} (tools/nightly/render_gate.txt), pictures in {rd.get('output')}"))
     m = results.get('meshes', {})
     if m.get('error'):
         out.append(('meshes', 'mesh check did not run', m['error'][:400]))

@@ -141,6 +141,7 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    out when it is next touched (shadows, lighting, packet decoding first).
 17. No automatic output gate: `score_saves.sh` is not in `tools/nightly/checks.py`; no test of `materialFromGsFlags`
    / blend factors (one quad per blend kind through `renderOffscreen`). The emulated GS is a regression reference only.
+   **Done 28 Oct:** `pop_blend_test` + the nightly `render` check (`docs/native_bugs.md` step 4).
 18. `recolouredKey` (`pop_native_live.cpp:356`) re-decodes and re-uploads every frame while a palette differs, even
    unchanged; the 4-bit path (`assets.cpp:90-104`) ignores the RAM palette.
 

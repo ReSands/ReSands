@@ -2,8 +2,8 @@
 game/analysis/nightly/<date>/, plus diff.json against the previous run. Scripts decide what is
 wrong; tools/nightly/report.py only turns the results into readable bug reports.
 
-Usage: python3 -I tools/nightly/checks.py [--only mmi,boot,meshes] [--packs N] [--hours H] [--date YYYY-MM-DD]
-Order: mmi, boot (minutes), then meshes (saved per pack and resumed on later runs; --hours stops it).
+Usage: python3 -I tools/nightly/checks.py [--only mmi,render,boot,meshes] [--packs N] [--hours H] [--date YYYY-MM-DD]
+Order: mmi, render, boot (minutes), then meshes (saved per pack and resumed on later runs; --hours stops it).
 Runs on the PC (Windows: from a VS developer environment, as tools/windows/llm-job.ps1 -Job nightly
 sets up) or the Mac (instruction and mesh checks only).
 
@@ -12,6 +12,9 @@ Checks
   meshes  every world pack (key 0xFF......) of PRINCE.BF: geometry records parsed by the converted
           loader (must end exactly at the record end), mesh elements, elements that decode to
           vertices, errors. Packs run in parallel.
+  render  native renderer output gate: tools/native/pop_blend_test (one quad per GS blend kind), then
+          tools/native/score_saves.sh over the GS-only saves in tools/nightly/render_gate.txt, each
+          against its threshold there. Mac only; needs game/native-build (with pop_state_frame).
   boot    Windows only: boots the play build from states/gameplay1.state for 60 s with the frame
           capture and the ADPCM decoder capture; checks the log (missing branch targets,
           exceptions, frame rate), the capture and the decoder replay.
@@ -251,6 +254,38 @@ def check_boot(work):
     return out
 
 
+# ---------------------------------------------------------------- render
+def check_render(work):
+    out = {'check': 'render', 'ok': False}
+    if WIN:  # shortcut: the PC's bash is WSL's, which cannot drive score_saves.sh with the .exe tools; port it if the PC nightly needs the gate
+        out['error'] = 'render gate runs on the Mac only'
+        return out
+    build = os.path.join(ROOT, 'game', 'native-build')
+    code, so, se = run([os.path.join(build, 'pop_blend_test')], timeout=300)
+    out['blend_wrong'] = [l for l in so.splitlines() if l.endswith('WRONG')] or ([] if code == 0 else [(so + se).strip()[-300:]])
+    gate = {}
+    for l in open(os.path.join(ROOT, 'tools', 'nightly', 'render_gate.txt')):
+        if l.strip() and not l.startswith('#'):
+            n, t = l.split()
+            gate[n] = float(t)
+    states = os.path.join(work, 'render_states')  # only the gate's saves, as score_saves takes a folder
+    os.makedirs(states)
+    src = os.path.join(ROOT, 'game', 'analysis', 'gsref1027', 'states')
+    for n in gate:
+        shutil.copy(os.path.join(src, n + '.state'), states)
+    scored = os.path.join(work, 'render')
+    run(['bash', os.path.join(ROOT, 'tools', 'native', 'score_saves.sh'), states, scored], timeout=3600)
+    scores = {}
+    for l in open(os.path.join(scored, 'scores.txt')):
+        m = re.match(r'(\S+) mean difference ([\d.]+)', l)
+        scores[l.split()[0]] = float(m.group(2)) if m else l.strip()  # a FAILED line stays text
+    out['scores'] = scores
+    out['over'] = sorted(n for n, t in gate.items() if not isinstance(scores.get(n), float) or scores[n] > t)
+    out.update({'ok': True, 'blend_wrong_count': len(out['blend_wrong']), 'over_count': len(out['over']),
+                'saves': len(gate), 'output': scored})
+    return out
+
+
 # ---------------------------------------------------------------- diff
 def diff(prev, cur):
     changes = []
@@ -261,7 +296,7 @@ def diff(prev, cur):
         for k, v in c.items():
             if isinstance(v, (int, float, str, bool)) and k in p and p[k] != v and k not in ('seconds',):
                 changes.append({'check': name, 'field': k, 'before': p[k], 'after': v})
-            if isinstance(v, list) and k in ('wrong', 'missing_targets') and k in p:
+            if isinstance(v, list) and k in ('wrong', 'missing_targets', 'over') and k in p:
                 added, removed = sorted(set(v) - set(p[k])), sorted(set(p[k]) - set(v))
                 if added or removed:
                     changes.append({'check': name, 'field': k, 'added': added, 'removed': removed})
@@ -272,7 +307,7 @@ def main(argv):
     if '--mesh-pack' in argv:  # one pack, in its own process (check_meshes): result as one JSON line
         print(json.dumps(mesh_pack(int(argv[argv.index('--mesh-pack') + 1], 16))))
         return 0
-    only = argv[argv.index('--only') + 1].split(',') if '--only' in argv else ['mmi', 'meshes', 'boot']
+    only = argv[argv.index('--only') + 1].split(',') if '--only' in argv else ['mmi', 'render', 'meshes', 'boot']
     limit = int(argv[argv.index('--packs') + 1]) if '--packs' in argv else None
     date = argv[argv.index('--date') + 1] if '--date' in argv else datetime.date.today().isoformat()
     base = os.path.join(ROOT, 'game', 'analysis', 'nightly')
@@ -285,7 +320,7 @@ def main(argv):
     hours = float(argv[argv.index('--hours') + 1]) if '--hours' in argv else None
     deadline = time.time() + 3600 * hours if hours else None
     # quick checks first, so even a short run has results; the mesh check resumes across runs
-    for name, fn in (('mmi', check_mmi), ('boot', check_boot), ('meshes', lambda w: check_meshes(w, limit, deadline))):
+    for name, fn in (('mmi', check_mmi), ('render', check_render), ('boot', check_boot), ('meshes', lambda w: check_meshes(w, limit, deadline))):
         if name not in only:
             continue
         t0 = time.time()

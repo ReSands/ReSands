@@ -50,15 +50,18 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
       (audit, last section). Count it from the saves' draw lists (`pop_state_frame` walks them) or with a temporary
       counter in `displayRecord` during a live boot.
    Write the answers into the audit (items 9, 10) and propose fixes only where a count is non-zero.
-4. **Next (start here).** `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a
-   one-quad-per-blend-kind test (audit 17). **The set must be GS-only saves** (lesson 27 Oct: a save made with native
-   on holds native pixels, no reference for native draws). How to make them: `game\jobs\gsref1027.ps1` (every native
-   switch off, `POP_INPUT=r1@1:9,select@10,r1@11:3600` quick-saves 9 s after the load; inputs run in order, so a long
-   hold blocks later ones; it backs up and restores `quick.state`; `gsref1027b.ps1` = same without the rebuild).
-   Five exist (`game/analysis/gsref1027/states/`, baselines in `fixed/` and `lmfade/scores.txt`: 1.49, 6.60, 11.04,
-   2.27, 10.79). Choose more saves to cover the area types (audit 10's list), make them in one job, then thresholds.
-   The PC's play build is behind the Mac (rebuild `-Fast` first; the TV was off on 27 Oct yet `display_active` said
-   Enabled and boots ran at 60 fps).
+4. **Half done 28 Oct (Mac).** The gate: `python3 -I tools/nightly/checks.py --only render` (Mac only, 8 s; also in
+   the default run) runs `pop_blend_test` (one quad per blend kind, every branch of SetBlending 0x4B2500 incl.
+   inverse / destination alpha, against the GS formula from the ALPHA byte: 32 cases, all within 1 step) and
+   `score_saves.sh` over the saves in `tools/nightly/render_gate.txt` (threshold = 27 Oct baseline + 0.1; real fixes
+   moved scores by 0.1-1.3; lower a line in the same commit as a fix that improves it). Checked that a lowered
+   threshold makes the report list the save. **Left: more GS-only saves** (needs the TV): `game\jobs\gsref1028.ps1`
+   (copy to the PC; -Fast rebuild, then 115837, 115853, 125052 chasm, 145139 save point, 155110 rewind, 184926 fight:
+   the area types of audit 10), copy the `.gs.state` files to `game/analysis/gsref1027/states/`, score them, add
+   their lines to `render_gate.txt`. **The set must be GS-only saves** (lesson 27 Oct: a save made with native on
+   holds native pixels). How they are made: every native switch off, `POP_INPUT=r1@1:9,select@10,r1@11:3600`
+   quick-saves 9 s after the load (inputs run in order, so a long hold blocks later ones); the job backs up and
+   restores `quick.state`; `GSREF_NOBUILD=1` skips the rebuild.
 5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still
    wait for 0.2 (item 4 below).
 
