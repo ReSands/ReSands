@@ -548,6 +548,7 @@ namespace pop_native
                     {
                         failMat = *mat;
                         failMat.depthWrite = false;
+                        failMat.writeAlpha = false;
                     }
                     std::string perr;
                     const VkPipeline want = pipeline(pipelineKey(afail ? &failMat : mat), perr);
@@ -561,11 +562,11 @@ namespace pop_native
                     Push push;
                     mul(clip, d.model, push.mvp);
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
-                    // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels)
+                    // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels), bit 4 keep the
+                    // failures instead (the failure pass keeps exactly the pixels the test rejects)
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
-                    // the failure pass keeps exactly the pixels the test rejects: the LESS bit flipped
-                    const bool less = (mat && mat->alphaTestLess) != (afail == 1);
-                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0));
+                    const bool less = mat && mat->alphaTestLess;
+                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)

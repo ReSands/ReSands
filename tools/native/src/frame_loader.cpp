@@ -110,7 +110,7 @@ namespace pop_native
                 const bool hasImage = image >= 0 && size_t(image) < imageIndex.size();
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 2u : 0u));
+                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;

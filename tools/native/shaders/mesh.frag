@@ -20,10 +20,20 @@ layout(location = 0) out vec4 outColour;
 void main()
 {
     vec4 t = texture(baseTex, vUv);
-    // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4), 2 blended, 8 legacy glTF blend
+    // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
+    // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows
+    float a = t.a * min(vColour.a, 1.0);
+    // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4; bit 16 keeps the failures instead),
+    // 2 blended, 8 legacy glTF blend
     int flags = int(pc.params.x + 0.5);
-    if ((flags & 1) != 0 && ((flags & 4) != 0 ? t.a >= pc.params.y : t.a < pc.params.y))
-        discard;
+    if ((flags & 1) != 0) {
+        // on the PS2 scale, as the GS: texel alpha is stored doubled (0x80 = 255), AREF = cutoff byte / 2
+        float as = floor(floor(t.a * 127.5 + 0.5) * min(vColour.a, 1.0) + 0.001);
+        float aref = float(int(pc.params.y * 255.0 + 0.5) >> 1);
+        bool pass = (flags & 4) != 0 ? as < aref : as > aref;
+        if (pass == ((flags & 16) != 0))
+            discard;
+    }
     if ((flags & 8) != 0 && t.a < 0.02)
         discard;
     vec3 base = t.rgb * vColour.rgb;
@@ -35,7 +45,5 @@ void main()
     }
     // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending
     base = mix(pc.fogColour.rgb, base, vFog);
-    // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
-    // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows
-    outColour = vec4(base, t.a * min(vColour.a, 1.0));
+    outColour = vec4(base, a);
 }

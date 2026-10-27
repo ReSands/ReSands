@@ -11,6 +11,10 @@ half-pixel viewport shift, cached readback invalidation, kept-mesh generation dr
 
 ## Confirmed defects
 
+Fixed 27 Oct: 1, 3, 4, 5, 7 (the AFAIL failure pass now inverts the GS test with its own shader bit, since the strict
+GS comparisons are no longer complements of each other). Item 2 was wrong: dropping the instanced clamp turned the
+walls of 160002 / 134531 / 145139 warmer than the GS picture (`score_saves` 1.67 -> 4.15 on 160002); the clamp stays.
+
 1. **Alpha test ignores vertex alpha** (medium, now). `shaders/mesh.frag:28-30` tests `t.a`; the GS tests As after
    MODULATE (texel x vertex alpha, the value written at line 40). Alpha-tested draws with vertex or constant alpha
    below 0x80 (`pop_native_live.cpp:3330`) keep pixels the PS2 discards. Fix: `a = t.a * min(vColour.a, 1.0)` for test and output.

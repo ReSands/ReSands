@@ -153,9 +153,6 @@ namespace pop_native_world
                 pic.draws = uint32_t(draws.size());
                 pic.ok = pic.ok && renderer.renderOffscreen(kWidth, kHeight, clip, draws, pic.rgba, error, nullptr, &pic.gsZ);
                 const auto t3 = std::chrono::steady_clock::now();
-                g_stats.loadMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
-                g_stats.uploadMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
-                g_stats.renderMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
                 if (!pic.ok)
                 {
                     static int logged = 0;
@@ -165,6 +162,9 @@ namespace pop_native_world
                 const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 std::lock_guard<std::mutex> lock(g_mutex);
                 g_stats.drawMs += ms;
+                g_stats.loadMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+                g_stats.uploadMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+                g_stats.renderMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
                 ++g_stats.drawn;
                 g_done.push_back(std::move(pic));
                 while (g_done.size() > 4)

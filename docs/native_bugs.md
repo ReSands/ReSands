@@ -11,7 +11,10 @@ generation switches in the 25 Oct sessions, no black flash), N9 (user saw the do
 N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
 
 **First: the renderer audit's five steps (user, 27 Oct; one at a time; findings `docs/renderer_audit.md`).**
-1. Shader alpha test (audit 1 + 3), then the one-liners 4, 5, 7 (and 2: instanced colour clamp).
+1. **Done 27 Oct (Mac, offline):** shader alpha test (audit 1 + 3) and the one-liners 4, 5, 7; item 2 reverted (see
+   the audit). `score_saves` over 22 saves: unchanged within 0.07 (184926 +0.07: a faint ring in the sword glow's
+   alpha). Live A/B on the PC (`tools/windows/oct27.ps1`, saves 184926 / 115837 / 115853): counters and fps
+   unchanged, screenshots look the same.
 2. Validation-layer switch + index bounds check in `FrameLoader::load`, run over the saves offline (audit 8). Do the
    three targeted reads (audit, last section) first, so their fixes join this batch.
 3. Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one

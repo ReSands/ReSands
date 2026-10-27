@@ -464,6 +464,7 @@ namespace pop_assets
                 v.uv[0] = float(b.uvs[2 * i] / (uvscale / 8)); // texture UVs 1/512 (see convertElement)
                 v.uv[1] = float(b.uvs[2 * i + 1] / (uvscale / 8));
                 const size_t c = 4 * (vbase + i);
+                // clamped at 1.0 unlike the static/lit paths: unclamped (2x, as GS MODULATE) tested 27 Oct, walls came out warmer than the GS (docs/renderer_audit.md item 2)
                 for (int k = 0; k < 4; ++k)
                     v.colour[k] = colours && c + 4 <= colourBytes ? std::min(colours[c + k] / 128.0f, 1.0f) : 1.0f;
             }

@@ -54,6 +54,7 @@ if ($Out -ne 'game\recomp') {
 New-Item -ItemType Directory -Force -Path "$Root\game\recomp\screens" | Out-Null
 # -Shots '1800,3600': the SotC runtime's own window screenshots at those vsync counts (~60/s),
 # saved to <Out>\screens (our override's frame dumper does not see the GPU renderer's output).
+# The counts are absolute: after PS2X_STATE_LOAD_AT the save's own field count applies, so take shots at that count + N.
 if ($Shots) {
     New-Item -ItemType Directory -Force -Path "$R\screens" | Out-Null
     $env:PS2X_SCREENSHOT_FIELDS = $Shots
