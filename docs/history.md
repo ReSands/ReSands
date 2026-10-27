@@ -714,3 +714,57 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   hand-port the failures, `port.py --chain p4`. `docs/llm_jobs.md` "VU1 character program P4"; before the next
   non-VU1 Qwen job, build in the ReAgent learnings (same doc).
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image.
+
+## Moved from CLAUDE.md on 27 Oct 2026 night (status block of 25-27 Oct; verbatim)
+
+### Current status (25 Oct 2026 evening; start here)
+
+Older status blocks and handoffs 1-4: `docs/history.md` (last moved: "Moved from CLAUDE.md on 25 Oct 2026 evening").
+Keep this section short: finished work goes to the topic docs, old status blocks to `docs/history.md`.
+
+- **Where we are.** Native renderer at roadmap 0.12, on by default in `play.ps1` (desktop shortcut "PoP 60 fps";
+  `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows` turn parts off): static world, lit
+  statics, characters, translucents, shadows, sprites via the P9 port. The lists after the shadows (+0x88/+0xA8,
+  particles) are on the GS since 25 Oct (`-NativeLate` turns them on; drawn natively they made glows pop).
+  Details: `docs/native_renderer.md`, bugs `docs/native_bugs.md`.
+- **Bug sweep of 25 Oct: done.** Closed: N1 (slowed enemies sandy again: the slow rewrites the texture palette in
+  memory, native now uses the RAM palette, `recolouredKey`), N2 fog blips + N10 torch brightness + save-point pop (all
+  gone with the late lists on the GS; user in-motion checks), N5 black flashes (41 over-budget generation switches in
+  the 25 Oct sessions, no flash), N9 door (user saw it right). Parked until they recur (user: capture a save then):
+  N3 stairs flash, N4 combat camera "teleport". Watch: N8 wall hue / N11 wall missing (fix 3664837, long sessions).
+- **Still needed for 0.1:** crash 1 (fix 3b80b66; the 25 Oct 15:41 session had no `missing-target` but only a few
+  minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
+  through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
+  Borrowed fixes placed by milestone (MOVZ/MOVN + runtime patch 43 small screenshots with the next full rebuild, etc.): `docs/roadmap.md`.
+- **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
+  `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
+  output gate, N6 profile. Steps 1-3 done 27 Oct, plus (27 Oct night, audit item 9): P1 passes vertex alpha unchanged;
+  **save frames made with native on hold native pixels, so they are no reference for native draws**; GS-only
+  reference saves (`game/analysis/gsref1027/`) showed the instanced colour clamp was wrong (item 2 now fixed) and
+  native lightmaps lacked P1's distance fade (fixed). **Step 4 done 28 Oct:** nightly `render` gate (blend test +
+  11 GS-only saves with thresholds, `tools/nightly/render_gate.txt`). **Step 5 done 27 Oct:** N6 does not reproduce from its save (60 fps GS-only and native); worker ~3.7 ms with the GS thread waiting nearly all of it; texture count/MB now on the `[pop:world]` stats line (`docs/native_bugs.md` step 5). **All five audit steps done.** 0.13 candidates from the gate's pictures: step 4's last lines. Blending with As > 0x80: the user's call at 0.13.
+- **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
+  at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
+  the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native
+  (0.2), not fixed now;** bugs in the native code itself are fixed now. N7 set aside; fps items wait for 0.2. Then 0.13:
+  P4/P5 into the game, water (P6), halos, light shafts, flashes, then retry `-NativeLate` (if the glow still pops,
+  `docs/native_bugs.md` "Save-point pop"). Side jobs: `.glitch` compression, why one `-Fast` rebuild recompiled the
+  whole runtime, Esc / Alt+F4 sometimes not quitting. Missing sounds go to 0.3. Lower: camera X reversed in fixed
+  views, door flicker with a black web, trouser flicker, torch point lights.
+- **How we judge (lessons 25 Oct, `docs/lessons.md`):** a few screenshots cannot show a short or camera-dependent
+  effect is absent; the user's in-motion check with clock times is the reference, and the job log records each run's
+  start time. Our GS emulation is not ground truth either: PS2 videos / hardware settle "is this original?".
+- **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
+  184926 / 115837 / 115853 with R1 held; fps + world/late/shadow/sprite counters; logs
+  `game\recomp-sotc\stnative_<save>.log`), watched with `tools/windows/watch-job.sh` under Monitor. User in-motion
+  checks from a save: `play.ps1 -Env 'PS2X_STATE_LOAD_AT=120:states/<save>.state'` (+ switches). Offline:
+  `tools/native/score_saves.sh`, `pop_state_frame --world`, viewer `--gsz` (native depth). Before any boot: TV on
+  (ask), and the user's game closed (`taskkill /f /pid`, confirm with `tasklist`).
+- **Saves.** On the PC in `game\ps2\disc\states\`; copies on the Mac: `game/analysis/saves1025/` (115837, 115853),
+  `saves1025b/` (125052 chasm, 125331 / 125417 save point in a fight), `saves1025c/` (134636 / 134815 slowed enemies),
+  `saves1025d/` (145139 / 145142 save point pop), `saves1024b/play_20261024_184926.state` (slow fight).
+- **Qwen:** P4 character VU1 program done 26 Oct: Qwen 67 of 79 stages, 13 by hand, `--chain p4` PASS 673 whole runs
+  (`tools/vu1port/ported/p4.cpp`, not in the game yet). Found on the way: 14 "passed" ports (P4/P6/P9, incl. the shipped
+  `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). P5 (particles) done 26 Oct: Qwen 82 of 87 stages,
+  5 by hand, `--chain p5` PASS 930 whole runs (`ported/p5.cpp`, not in the game yet). **Every reachable VU1 program is now ported** (P0/P2 = VU0, P3 unreachable, P10 dead; 26 Oct, `docs/native_renderer.md` "VU1 program inventory").
+- **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image (raylib `LoadImageFromScreen` at 250% DPI on the 4K TV; shrink with `sips -Z 1600` before looking, `livecmp.py` on them takes minutes).

@@ -35,57 +35,52 @@ Decided 22 Oct: keep our own native renderer (the PS2 look, haze and post-proces
   per night; optimise in order of biggest win. Shut the PC down after overnight work. Playtesting: the user
   gathers saves; I work offline; milestone checks by the user.
 
-## Current status (25 Oct 2026 evening; start here)
+## Current status (27 Oct 2026 night; start here)
 
-Older status blocks and handoffs 1-4: `docs/history.md` (last moved: "Moved from CLAUDE.md on 25 Oct 2026 evening").
+Older status blocks: `docs/history.md` (last moved: "Moved from CLAUDE.md on 27 Oct 2026 night").
 Keep this section short: finished work goes to the topic docs, old status blocks to `docs/history.md`.
 
 - **Where we are.** Native renderer at roadmap 0.12, on by default in `play.ps1` (desktop shortcut "PoP 60 fps";
   `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows` turn parts off): static world, lit
-  statics, characters, translucents, shadows, sprites via the P9 port. The lists after the shadows (+0x88/+0xA8,
-  particles) are on the GS since 25 Oct (`-NativeLate` turns them on; drawn natively they made glows pop).
-  Details: `docs/native_renderer.md`, bugs `docs/native_bugs.md`.
-- **Bug sweep of 25 Oct: done.** Closed: N1 (slowed enemies sandy again: the slow rewrites the texture palette in
-  memory, native now uses the RAM palette, `recolouredKey`), N2 fog blips + N10 torch brightness + save-point pop (all
-  gone with the late lists on the GS; user in-motion checks), N5 black flashes (41 over-budget generation switches in
-  the 25 Oct sessions, no flash), N9 door (user saw it right). Parked until they recur (user: capture a save then):
-  N3 stairs flash, N4 combat camera "teleport". Watch: N8 wall hue / N11 wall missing (fix 3664837, long sessions).
-- **Still needed for 0.1:** crash 1 (fix 3b80b66; the 25 Oct 15:41 session had no `missing-target` but only a few
-  minutes of fighting; close after a fight-heavy session without it). Crash 2 is off the list (user, 26 Oct): watched
-  through the play-through, full dump on a freeze; no speculative emulated-sound fixes. `docs/saves_1021.md`.
-  Borrowed fixes placed by milestone (MOVZ/MOVN + runtime patch 43 small screenshots with the next full rebuild, etc.): `docs/roadmap.md`.
-- **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
-  `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
-  output gate, N6 profile. Steps 1-3 done 27 Oct, plus (27 Oct night, audit item 9): P1 passes vertex alpha unchanged;
-  **save frames made with native on hold native pixels, so they are no reference for native draws**; GS-only
-  reference saves (`game/analysis/gsref1027/`) showed the instanced colour clamp was wrong (item 2 now fixed) and
-  native lightmaps lacked P1's distance fade (fixed). **Step 4 done 28 Oct:** nightly `render` gate (blend test +
-  11 GS-only saves with thresholds, `tools/nightly/render_gate.txt`). **Step 5 done 27 Oct:** N6 does not reproduce from its save (60 fps GS-only and native); worker ~3.7 ms with the GS thread waiting nearly all of it; texture count/MB now on the `[pop:world]` stats line (`docs/native_bugs.md` step 5). **All five audit steps done.** 0.13 candidates from the gate's pictures: step 4's last lines. Blending with As > 0x80: the user's call at 0.13.
-- **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
-  at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
-  the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native
-  (0.2), not fixed now;** bugs in the native code itself are fixed now. N7 set aside; fps items wait for 0.2. Then 0.13:
-  P4/P5 into the game, water (P6), halos, light shafts, flashes, then retry `-NativeLate` (if the glow still pops,
-  `docs/native_bugs.md` "Save-point pop"). Side jobs: `.glitch` compression, why one `-Fast` rebuild recompiled the
-  whole runtime, Esc / Alt+F4 sometimes not quitting. Missing sounds go to 0.3. Lower: camera X reversed in fixed
-  views, door flicker with a black web, trouser flicker, torch point lights.
-- **How we judge (lessons 25 Oct, `docs/lessons.md`):** a few screenshots cannot show a short or camera-dependent
-  effect is absent; the user's in-motion check with clock times is the reference, and the job log records each run's
-  start time. Our GS emulation is not ground truth either: PS2 videos / hardware settle "is this original?".
+  statics, characters, translucents, shadows, sprites via the P9 port. The late lists (+0x88/+0xA8, particles) stay
+  on the GS (`-NativeLate` turns them on; drawn natively they made glows pop). Details `docs/native_renderer.md`,
+  bugs `docs/native_bugs.md`.
+- **Renderer audit (`docs/renderer_audit.md`): all five steps done 27 Oct.** Open on purpose: item 11 (hybrid
+  boundary, 0.2); items 12/13 measure-only (worker ~3.7 ms per frame, the GS thread waits nearly all of it, no fps
+  cost at 60; texture count/MB now end the `[pop:world]` stats line: read growth from a long `play.ps1` log). The
+  nightly `render` gate (blend test + 11 GS-only saves, `tools/nightly/render_gate.txt`) guards native output;
+  **reference saves must be GS-only** (saves made with native on hold native pixels). 0.13 candidates the gate showed
+  (moon halo 145139, light patch 155110, sand haze 115853): `docs/native_bugs.md` step 4. Blending with As > 0x80:
+  the user's call at 0.13.
+- **Still needed for 0.1:** crash 1 (fix 3b80b66; close after a fight-heavy session without `missing-target`).
+  Crash 2 is off the list (user, 26 Oct): watched, full dump on a freeze; no speculative emulated-sound fixes.
+  Borrowed fixes placed by milestone (MOVZ/MOVN + runtime patch 43 small screenshots with the next full rebuild):
+  `docs/roadmap.md`.
+- **Next (agreed order, `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look at every repeatable bug before
+  0.13: GS-only A/B of the baths saves (N13-N16, needs the TV), then the rewind at 30 fps (155110). **Rule (user): a
+  bug caused by the hybrid native/GS frame is parked until 0.2;** bugs in the native code itself are fixed now. Then
+  0.13: P4/P5 into the game, water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they
+  recur), N7, fps items incl. N6 (does not reproduce from its save; needs a `play.ps1 -Profile` quick-save in the slow
+  stretch). Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the
+  whole runtime, Esc / Alt+F4 sometimes not quitting. Lower: camera X reversed in fixed views, door flicker with a
+  black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+- **How we judge (`docs/lessons.md`):** the user's in-motion check with clock times is the reference for short or
+  camera-dependent effects; our GS emulation is not ground truth (PS2 videos / hardware are).
 - **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
-  184926 / 115837 / 115853 with R1 held; fps + world/late/shadow/sprite counters; logs
-  `game\recomp-sotc\stnative_<save>.log`), watched with `tools/windows/watch-job.sh` under Monitor. User in-motion
-  checks from a save: `play.ps1 -Env 'PS2X_STATE_LOAD_AT=120:states/<save>.state'` (+ switches). Offline:
-  `tools/native/score_saves.sh`, `pop_state_frame --world`, viewer `--gsz` (native depth). Before any boot: TV on
-  (ask), and the user's game closed (`taskkill /f /pid`, confirm with `tasklist`).
-- **Saves.** On the PC in `game\ps2\disc\states\`; copies on the Mac: `game/analysis/saves1025/` (115837, 115853),
+  184926 / 115837 / 115853 with R1 held; logs `game\recomp-sotc\stnative_<save>.log`), watched with
+  `tools/windows/watch-job.sh` under Monitor. Profiling a save: `tools\windows\profile-states.ps1 -States <save>`
+  (native on). User checks from a save: `play.ps1 -Env 'PS2X_STATE_LOAD_AT=120:states/<save>.state'`. Offline:
+  `tools/native/score_saves.sh`, `pop_state_frame --world`, viewer `--gsz`. Before any boot: ask about the TV (boots
+  ran at ~60 fps with it off on 27-28 Oct; check the fps lines) and make sure the user's game is closed
+  (`taskkill /f /pid`, then `tasklist`).
+- **Saves.** On the PC in `game\ps2\disc\states\`; Mac copies: `game/analysis/saves1025/` (115837, 115853),
   `saves1025b/` (125052 chasm, 125331 / 125417 save point in a fight), `saves1025c/` (134636 / 134815 slowed enemies),
-  `saves1025d/` (145139 / 145142 save point pop), `saves1024b/play_20261024_184926.state` (slow fight).
-- **Qwen:** P4 character VU1 program done 26 Oct: Qwen 67 of 79 stages, 13 by hand, `--chain p4` PASS 673 whole runs
-  (`tools/vu1port/ported/p4.cpp`, not in the game yet). Found on the way: 14 "passed" ports (P4/P6/P9, incl. the shipped
-  `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). P5 (particles) done 26 Oct: Qwen 82 of 87 stages,
-  5 by hand, `--chain p5` PASS 930 whole runs (`ported/p5.cpp`, not in the game yet). **Every reachable VU1 program is now ported** (P0/P2 = VU0, P3 unreachable, P10 dead; 26 Oct, `docs/native_renderer.md` "VU1 program inventory").
-- **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image (raylib `LoadImageFromScreen` at 250% DPI on the 4K TV; shrink with `sips -Z 1600` before looking, `livecmp.py` on them takes minutes).
+  `saves1025d/` (145139 / 145142 save point pop), `saves1025e/` (baths), `saves1024b/play_20261024_184926.state`
+  (slow fight), GS-only references `gsref1027/`.
+- **VU1 ports:** every reachable VU1 program is ported (`tools/vu1port/ported/`; P4 and P5 pass whole-run chains but
+  are not in the game yet; `docs/native_renderer.md` "VU1 program inventory").
+- **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
+  (shrink with `sips -Z 1600` before looking).
 
 ## Release roadmap (user; full text, reasons and references: `docs/roadmap.md`)
 
@@ -118,7 +113,7 @@ Windows is the target; Linux and macOS (Apple Silicon, via MoltenVK) should stay
 ## Working reference (distilled 17 Oct 2026; the details and their history are in `docs/history.md` and `docs/reference.md`)
 
 - **Where things are written down.** `docs/history.md`: dated session logs (boot log 11-12 Oct, sound bring-up 13-14 Oct, mesh reader / Stage A-C findings 14-16 Oct, old status blocks and plans). `docs/reference.md`: background that is not a session log (PS2Recomp pipeline/PRs/status, prototypes and symbols, cross-version assets, texture formats, survey of other PS2 projects, RTX Remix, HD packs, renderer/DLSS notes, sources, answered open questions). Topic docs: `docs/roadmap.md` (release roadmap in full), `docs/native_renderer.md` (Stage B-D, live window), `docs/postfx.md`, `docs/movies.md`, `docs/llm_jobs.md`, `docs/vu1_scheduling.md` (build-time VU scheduling plan), `docs/upstream_ps2recomp.md` (our PS2Recomp bug list), `docs/nightly/`. Before re-deriving a fact, grep these.
-- **Builds.** PC (the real target, pop-sotc runtime, `game\recomp-sotc`): `tools\windows\rebuild.ps1 -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc` with `-Fast` (override/runtime-only changes, ~30 s-few min) or `-SkipGhidra` (recompiler or runtime-header changes, full ~30-50 min); boot `tools\windows\boot.ps1 -Play -Out game\recomp-sotc [-Seconds N] [-Env 'A=1;B=2'] [-Shots <fields>]`. Runtime patches live in `tools/patches/pop-sotc/` (`git am` into `C:\tools\PS2Recomp-sotc`, then `git -C game\recomp-sotc\runtime-src checkout --detach` its HEAD; currently up to 41 (39 = Esc quits, 40 = GS trace from an override, 41/42 = scheduler stub return, replaced functions only); remote `sotc` = TaylorNAlbarnaz/PS2Recomp). Compiled VU1/VU0 microcode: record with `PS2X_VU1_CAPTURE=game\recomp-sotc\vu1_capture` (both units since patch 31) or take the images from saves (`tools/vuimages.py <dir> <states>`), build with `rebuild.ps1 ... -Vu1 <that dir>` (all runner files recompile, ~30 min). Never put `vu0_*.bin` in a capture folder an older `vu1_recomp` reads (it expects 16 KB images). The play build links with /MAP (symbols for the profiler). Mac: the sotc base does not build there (x86 headers); the Mac uses the `pop` branch (`tools/rebuild.sh [--fast]`, `POP_BUILD=build-mac-play tools/boot.sh [secs] [log]`, exit 142 = time limit); Mac-only problems (medallion drift, curtain-load stall) are parked. Native tools: `cmake -S tools/native -B game/native-build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build game/native-build` (Mac: Homebrew molten-vk, vulkan-loader, vulkan-headers, glslang, SDL3).
+- **Builds.** PC (the real target, pop-sotc runtime, `game\recomp-sotc`): `tools\windows\rebuild.ps1 -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc` with `-Fast` (override/runtime-only changes, ~30 s-few min) or `-SkipGhidra` (recompiler or runtime-header changes, full ~30-50 min); boot `tools\windows\boot.ps1 -Play -Out game\recomp-sotc [-Seconds N] [-Env 'A=1;B=2'] [-Shots <fields>]`. Runtime patches live in `tools/patches/pop-sotc/` (`git am` into `C:\tools\PS2Recomp-sotc`, then `git -C game\recomp-sotc\runtime-src checkout --detach` its HEAD; currently up to 42 (39 = Esc quits, 40 = GS trace from an override, 41/42 = scheduler stub return, replaced functions only); remote `sotc` = TaylorNAlbarnaz/PS2Recomp). Compiled VU1/VU0 microcode: record with `PS2X_VU1_CAPTURE=game\recomp-sotc\vu1_capture` (both units since patch 31) or take the images from saves (`tools/vuimages.py <dir> <states>`), build with `rebuild.ps1 ... -Vu1 <that dir>` (all runner files recompile, ~30 min). Never put `vu0_*.bin` in a capture folder an older `vu1_recomp` reads (it expects 16 KB images). The play build links with /MAP (symbols for the profiler). Mac: the sotc base does not build there (x86 headers); the Mac uses the `pop` branch (`tools/rebuild.sh [--fast]`, `POP_BUILD=build-mac-play tools/boot.sh [secs] [log]`, exit 142 = time limit); Mac-only problems (medallion drift, curtain-load stall) are parked. Native tools: `cmake -S tools/native -B game/native-build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build game/native-build` (Mac: Homebrew molten-vk, vulkan-loader, vulkan-headers, glslang, SDL3).
 - **PC access.** `ssh 10.0.0.202` (ping is blocked; wake-on-LAN in the dated launchers), repo `C:\dev\PoP_Decomp`. The PC cannot pull from the Mac: send a git bundle to `game\jobs\pop.bundle` and `git pull --ff-only` it. Run PowerShell over SSH with `-EncodedCommand`; complex env strings go in a wrapper script under `game\jobs\`. Long jobs: `powershell -ExecutionPolicy Bypass -File tools\windows\start-job.ps1 -Script <ps1>` (log `game\jobs\job.log`, `-Status`; second slot task `PoP_Decomp_Job2`); anything with a window needs the desktop session (scheduled task, not plain SSH). git on the PC has no identity (`git -c user.name=… -c user.email=…`). `tools/stop-pc-job.command` stops a job; `shutdown /s /t 5` over SSH turns the PC off.
 - **Save states.** F5 or Select (pad) quick-saves (`states\quick.state`, plus a kept copy `play_<date>_<time>.state`). Load with `PS2X_STATE_LOAD_AT=<field>:states/<file>` (a field number, ~60 per second: 120 = 2 s after boot). PC states: `gameplay1` (0102_Remparts, after the curtains), `enemies` (fight on the 0101_Entree ramparts, saved at field 22625), `before_curtain`, `loading`. Limits: no sound after a load, no bigfile lookups and no `ReadElement`; the native renderer still works (25 Oct: elements decoded from their packets, world packs loaded through `game/analysis/packindex.txt` on a texture miss). Fight boots: `POP_INPUT=r1@1:3600` (hold block); job `game\jobs\stnative.ps1` (build + boot saves, prints the world/late/shadow/sprite counters).
 - **Debug switches** (override `tools/overrides/pop_slus20743.cpp` and friends): `POP_INPUT` (scripted pad, `button@s[:hold]`, sticks `lup/ldown/lleft/lright`; balcony: `start@55,start@65,cross@85,cross@95,cross@105`), `POP_60FPS=1`, `POP_ASYNC_GS=1`, `POP_PASSDUMP_AT`, `POP_SNDLOG`, `POP_TRACE`, `POP_TEXLOG`, `POP_PACKLOG`, `POP_CAMLOG` + `POP_FRAMECAP=<file>:<n>` (+ `POP_DMACAP`), `POP_NATIVE_LIVE` / `POP_NATIVE_FRAME=<file>:<s>` / `POP_NATIVE_WINDOW=<port>`, `POP_MOVIE_SOURCE=bink`, `POP_VK_VALIDATION=1` (Khronos layer, any native renderer), `POP_KEEP_SAVES=0`. Runtime: `PS2X_GS_TRACE=<field>:<n>:<path>` (n >= 4 at 30 fps; decode with `tools/gsvram.py`), `PS2X_AUDIO_DUMP` (header only on clean exit), `PS2X_ADMA_DUMP`, `PS2X_SPU2_STATS`, `PS2X_INVERT_RIGHT_STICK=x` (forces it; default now: the override inverts X in the third-person camera only, `POP_CAMERA_CLASSIC=1` keeps the original), `PS2X_EE_FLOAT_NEAREST=1`, `PS2X_FULLSCREEN=1`, `PS2X_DEBUGGER=0`, `PS2X_FRAME_GRAPH=1`, `PS2X_VU1_CAPTURE=<dir>`, `PS2X_VU1_TIMING=<scale>` (0.5 by default at 60 fps), `PS2X_VU0_VERIFY=1` / `PS2X_VU1_VERIFY=1` (compiled vs interpreter), `PS2X_VU0_RECOMP=0`. Profiler: `POP_PROFILE=<file>:<start s>:<seconds>`, or rolling `POP_PROFILE_LAST=<s>` (every kept quick-save also writes `play_<date>_<time>.prof` of the seconds before it; desktop shortcut "PoP 60 fps (profiling)" = `play.ps1 -Profile`, symbolized to `.report.txt` when the game closes; costs ~1-3 fps in a fight, noisy) (`tools/overrides/pop_profiler.cpp`; symbolize with `tools/profsym.py <file> <map or exe>`; PC: `tools/windows/profile-states.ps1`).
