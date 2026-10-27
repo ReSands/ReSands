@@ -80,6 +80,7 @@ namespace pop_native_world
         struct Stats
         {
             uint64_t drawn = 0, injected = 0, missed = 0, wrongTarget = 0;
+            size_t textures = 0, textureBytes = 0; // the worker's renderer after its last upload (audit 13: no budget)
             double drawMs = 0, waitMs = 0, loadMs = 0, uploadMs = 0, renderMs = 0; // worker: total, read, upload, draw + readback
         } g_stats;
 
@@ -166,6 +167,8 @@ namespace pop_native_world
                 g_stats.uploadMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
                 g_stats.renderMs += std::chrono::duration<double, std::milli>(t3 - t2).count();
                 ++g_stats.drawn;
+                g_stats.textures = renderer.textureCount();
+                g_stats.textureBytes = renderer.textureBytes();
                 g_done.push_back(std::move(pic));
                 while (g_done.size() > 4)
                     g_done.pop_front(); // frames whose marker never came (or came first)
@@ -443,11 +446,11 @@ namespace pop_native_world
             {
                 std::lock_guard<std::mutex> lock(g_mutex);
                 std::fprintf(stderr, "[pop:world] %llu frames injected, %llu missed, %llu unexpected buffers; per frame: worker %.2f ms (read %.2f, "
-                                     "upload %.2f, draw %.2f), GS thread waited %.2f ms\n",
+                                     "upload %.2f, draw %.2f), GS thread waited %.2f ms; %zu textures, %zu MB\n",
                              (unsigned long long)g_stats.injected, (unsigned long long)g_stats.missed,
                              (unsigned long long)g_stats.wrongTarget, g_stats.drawMs / double(g_stats.drawn), g_stats.loadMs / double(g_stats.drawn),
                              g_stats.uploadMs / double(g_stats.drawn), g_stats.renderMs / double(g_stats.drawn),
-                             g_stats.waitMs / double(g_stats.injected + g_stats.missed));
+                             g_stats.waitMs / double(g_stats.injected + g_stats.missed), g_stats.textures, g_stats.textureBytes >> 20);
             }
             return true;
         }

@@ -182,6 +182,8 @@ namespace pop_native
         int keptMesh(uint64_t key) const;
         uint32_t keptEpoch() const;
         size_t keptBytes() const;
+        size_t textureCount() const; // uploaded images (+ white): a session's texture use (audit 13)
+        size_t textureBytes() const;
         void dropKept();
         size_t keptBudgetBytes = size_t(512) << 20;
         bool autoDropKept = true;

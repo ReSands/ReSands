@@ -1490,6 +1490,19 @@ namespace pop_native
                (m->keptIndexCount + m->keptPendingIndices.size()) * sizeof(uint32_t);
     }
 
+    size_t Renderer::textureCount() const
+    {
+        return m->textures.size();
+    }
+
+    size_t Renderer::textureBytes() const
+    {
+        size_t bytes = 0;
+        for (const auto &t : m->textures)
+            bytes += size_t(t.width) * t.height * 4; // RGBA8, one mip level
+        return bytes;
+    }
+
     bool Renderer::updateImage(int index, const Image &image)
     {
         const size_t uploaded = m->textures.empty() ? 0 : m->textures.size() - 1;
