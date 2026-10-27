@@ -540,6 +540,17 @@ namespace pop_native_live
             return key;
         }
 
+        // the current fog zone's VU 0x10 constants (FUN_004B7200: table 0x70000270 + zone * 16) as the draw's fog
+        void zoneFog(uint8_t *rdram, DrawMaterial &dm)
+        {
+            const uint32_t e = 0x70000270u + (guestAny(rdram, 0x70000084u) & 0xFF) * 16, fmax = guestAny(rdram, e),
+                           fmin = guestAny(rdram, e + 4), fa = guestAny(rdram, e + 8), fb = guestAny(rdram, e + 12);
+            std::memcpy(&dm.fogA, &fa, 4);
+            std::memcpy(&dm.fogB, &fb, 4);
+            std::memcpy(&dm.fogMin, &fmin, 4);
+            std::memcpy(&dm.fogMax, &fmax, 4);
+        }
+
         DrawMaterial currentMaterial(uint8_t *rdram)
         {
             DrawMaterial dm;
@@ -614,13 +625,7 @@ namespace pop_native_live
                     std::fprintf(stderr, "[pop:native] UV matrix sub %08x flags %08x: %.3f %.3f %.3f %.3f + (%.3f, %.3f)\n", sub, dm.flags, dm.uvm[0],
                                  dm.uvm[1], dm.uvm[2], dm.uvm[3], dm.uvm[4], dm.uvm[5]);
             }
-            const uint32_t zone = guestAny(rdram, 0x70000084u) & 0xFF, fmax = guestAny(rdram, 0x70000270u + zone * 16),
-                           fmin = guestAny(rdram, 0x70000270u + zone * 16 + 4), fa = guestAny(rdram, 0x70000270u + zone * 16 + 8),
-                           fb = guestAny(rdram, 0x70000270u + zone * 16 + 12);
-            std::memcpy(&dm.fogA, &fa, 4);
-            std::memcpy(&dm.fogB, &fb, 4);
-            std::memcpy(&dm.fogMin, &fmin, 4);
-            std::memcpy(&dm.fogMax, &fmax, 4);
+            zoneFog(rdram, dm);
             dm.fogColour = guestAny(rdram, 0x70000024u) & 0xFFFFFF;
             dm.zTest = guest8(rdram, 0x70000038u);
             if ((dm.flags & 0x60) == 0x40)
@@ -2658,6 +2663,9 @@ namespace pop_native_live
                         dm.textureKey = key;
                         dm.flags = guestAny(rdram, 0x70000000u);
                         dm.fbmsk = 0xFF000000u; // flags 0x284: colour written, alpha kept
+                        // CLMElementList::Render selects fog zone (entry bits 14-17) + 0x10, whose constants are the
+                        // base zone's x 127/255; P1 (mode 3) writes that F as the vertex alpha: the lightmap fades with distance
+                        zoneFog(rdram, dm);
                         dm.list = g_currentList;
                         const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
                         std::array<float, 16> model;

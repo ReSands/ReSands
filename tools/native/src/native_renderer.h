@@ -61,6 +61,7 @@ namespace pop_native
         bool afailRgbOnly = false;  // GS TEST AFAIL RGB_ONLY: alpha-test failures write colour, not depth
         bool doubleSided = true; // false: back faces culled (characters: VU1 culls them)
         bool clampUv = false;    // base texture clamped to its edge texels (GS CLAMP_1 = 5) instead of repeated
+        bool fogAlpha = false;   // the fog factor F is the vertex alpha (0x80 = 1.0), no fog colour (lightmap pass, P1 mode 3)
     };
 
     inline bool isBlended(AlphaMode m) { return m != AlphaMode::Opaque && m != AlphaMode::Mask; }
@@ -93,6 +94,7 @@ namespace pop_native
         // AFAIL RGB_ONLY: pixels failing the test still write colour, but not depth; the renderer
         // draws such materials twice (passing pixels with depth, failing ones without)
         m.afailRgbOnly = m.alphaTest && (flags & 0x100);
+        m.fogAlpha = flags == 0x30284; // CLMElementList::Render's FUN_004B2000 flags (docs/renderer_audit.md item 9)
     }
 
     struct Mesh

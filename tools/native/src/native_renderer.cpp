@@ -567,10 +567,10 @@ namespace pop_native
                     mul(clip, d.model, push.mvp);
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
                     // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels), bit 4 keep the
-                    // failures instead (the failure pass keeps exactly the pixels the test rejects)
+                    // failures instead (the failure pass keeps exactly the pixels the test rejects), bit 5 fog as vertex alpha
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
                     const bool less = mat && mat->alphaTestLess;
-                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0));
+                    push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0) | (mat && mat->fogAlpha ? 32 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)

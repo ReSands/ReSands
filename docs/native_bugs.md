@@ -32,7 +32,7 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    unchanged (the "P1 changes alpha" idea was wrong: the save frames used as reference hold native pixels); its
    lightmap mode writes a distance fade as alpha that native lacks (baths saves). GS-only reference saves made the same night
    (`game/analysis/gsref1027/`): the instanced colour clamp (audit item 2) and alpha clamp are dropped, closer to the
-   GS on all 5 saves. Open: the lightmap fade (VU 16 per lightmap draw), blending with As > 0x80. The plan as it was: census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
+   GS on all 5 saves. Lightmap distance fade done too (fog zone + 0x10 as alpha). Open: blending with As > 0x80 (decide at 0.13). The plan as it was: census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
    GS trace per area type (audit 9, 10): decides the fidelity work before 0.2. Measurement only; fix nothing in it
    without the user. Three questions in all:
    a. **Alpha > 0x80** (audit 9): over the 51 saves in `game/analysis/saves*/` (all at once: symlink the
@@ -50,8 +50,15 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
       (audit, last section). Count it from the saves' draw lists (`pop_state_frame` walks them) or with a temporary
       counter in `displayRecord` during a live boot.
    Write the answers into the audit (items 9, 10) and propose fixes only where a count is non-zero.
-4. `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a one-quad-per-blend-kind test
-   (audit 17).
+4. **Next (start here).** `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a
+   one-quad-per-blend-kind test (audit 17). **The set must be GS-only saves** (lesson 27 Oct: a save made with native
+   on holds native pixels, no reference for native draws). How to make them: `game\jobs\gsref1027.ps1` (every native
+   switch off, `POP_INPUT=r1@1:9,select@10,r1@11:3600` quick-saves 9 s after the load; inputs run in order, so a long
+   hold blocks later ones; it backs up and restores `quick.state`; `gsref1027b.ps1` = same without the rebuild).
+   Five exist (`game/analysis/gsref1027/states/`, baselines in `fixed/` and `lmfade/scores.txt`: 1.49, 6.60, 11.04,
+   2.27, 10.79). Choose more saves to cover the area types (audit 10's list), make them in one job, then thresholds.
+   The PC's play build is behind the Mac (rebuild `-Fast` first; the TV was off on 27 Oct yet `display_active` said
+   Enabled and boots ran at 60 fps).
 5. Profile N6 before any performance work and log texture memory (audit 12, 13). Measurement only: fps fixes still
    wait for 0.2 (item 4 below).
 

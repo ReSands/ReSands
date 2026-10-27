@@ -24,7 +24,7 @@ void main()
     // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows.
     float a = t.a * min(vColour.a, 1.0);
     // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4; bit 16 keeps the failures instead),
-    // 2 blended, 8 legacy glTF blend
+    // 2 blended, 8 legacy glTF blend, 32 fog as vertex alpha
     int flags = int(pc.params.x + 0.5);
     if ((flags & 1) != 0) {
         // on the PS2 scale, as the GS: texel alpha is stored doubled (0x80 = 255), AREF = cutoff byte / 2;
@@ -46,7 +46,11 @@ void main()
         float a = texture(lightmapTex, vUv2).r * pc.params.z;
         base *= 1.0 - a;
     }
-    // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending
-    base = mix(pc.fogColour.rgb, base, vFog);
+    // GS fog: (F * Cs + (255 - F) * FOGCOL) / 255, applied before alpha blending; bit 32: F is the vertex
+    // alpha instead (lightmap pass: P1 mode 3 writes clamp(c + d * w) as RGBAQ alpha, PRMODE without fog)
+    if ((flags & 32) != 0)
+        a *= vFog * 255.0 / 128.0;
+    else
+        base = mix(pc.fogColour.rgb, base, vFog);
     outColour = vec4(base, a);
 }

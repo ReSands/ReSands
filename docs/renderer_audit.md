@@ -87,7 +87,13 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    alpha up to 2.0 in `livePacketBatches` / `assets.cpp`: 201540 1.60 -> 1.49, 202314 6.81 -> 6.70, 134636 11.10 ->
    11.05, 162246 (baths) 3.57 -> 2.44 (110,446 pixels changed, 102,019 closer), 162621 same. Alpha alone (RGB clamped)
    moved 201540 further; with RGB both together are best. Now the default. Blending still clamps As at 1.0 in the
-   shader (the As > 0x80 blend question below). Still open: mode-3 alpha for native lightmaps (VU 16 per draw, from the fog the driver sets). P5 and P9
+   shader (the As > 0x80 blend question below). **Lightmap fade done the same night:** CLMElementList::Render
+   (`004b7b80.c`) selects fog zone (entry bits 14-17) + 0x10, and table entries 16-31 are entries 0-15 x 127/255
+   (all 361 zones of 56 saves, within 3e-5). The native lightmap draw now carries that zone's constants as its fog
+   (`zoneFog`) and `Material::fogAlpha` (flags 0x30284) makes `mesh.frag` use F / 128 as vertex alpha with no fog
+   colour. Against the GS-only saves: 202314 6.70 -> 6.60, 162246 2.44 -> 2.27, 134636 11.05 -> 11.04, others same;
+   mean brightness of the changed pixels moves towards the GS (202314 110.6 -> 114.2, GS 116.9; 162246 216.7 ->
+   220.6, GS 222.5; 162621 174.5 -> 177.6, GS 174.9, its sun glow differs anyway). Was open: mode-3 alpha for native lightmaps (VU 16 per draw, from the fog the driver sets). P5 and P9
    (ported) write their own alpha: their ports decide what the GS gets for particles and sprites.
    **Blending with As > 0x80 (user, 27 Oct: needed natively in 0.13, not left to 0.2; user suggested dual-source
    blending).** On the GS As up to 0xFF scales the blend up to ~2x. Vulkan clamps blend factors (dual-source ones
