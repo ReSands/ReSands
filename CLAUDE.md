@@ -56,7 +56,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   Borrowed fixes placed by milestone (MOVZ/MOVN with the next full rebuild, etc.): `docs/roadmap.md`.
 - **First (user, 27 Oct): the renderer audit's five steps, one at a time** (top of `docs/native_bugs.md`; findings
   `docs/renderer_audit.md`): shader alpha test + one-liners, validation layer, alpha/GS-register census, nightly
-  output gate, N6 profile.
+  output gate, N6 profile. Step 1 done 27 Oct (df6c15d; audit item 2 rejected, see
+  `docs/renderer_audit.md`); **next: step 2** (the three targeted reads, then validation layer + index bounds check).
 - **Next (agreed order, revised 26 Oct evening; full list `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look
   at every repeatable bug before 0.13, starting with the GS-only A/B of the baths saves (N13-N16, needs the TV), then
   the rewind at 30 fps (155110). **Rule (user): a bug caused by the hybrid native/GS frame is parked until fully native
