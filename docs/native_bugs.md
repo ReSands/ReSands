@@ -15,8 +15,15 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    the audit). `score_saves` over 22 saves: unchanged within 0.07 (184926 +0.07: a faint ring in the sword glow's
    alpha). Live A/B on the PC (`tools/windows/oct27.ps1`, saves 184926 / 115837 / 115853): counters and fps
    unchanged, screenshots look the same.
-2. Validation-layer switch + index bounds check in `FrameLoader::load`, run over the saves offline (audit 8). Do the
-   three targeted reads (audit, last section) first, so their fixes join this batch.
+2. **Done 27 Oct.** The three targeted reads (results in the audit's last section): one fix (odd AREF turns the
+   inverted alpha test into GREATER, as the GS does), one open question for step 3's census (pass 0 / pass 1 share
+   the frame-seen key). Validation
+   layer (`POP_VK_VALIDATION=1`; Mac: `brew install vulkan-validationlayers`, `VK_LAYER_PATH=/opt/homebrew/share/vulkan/explicit_layer.d`)
+   + index bounds check in `FrameLoader::load` (drops the batch, prints it). Over 51 saves (`score_saves.sh`,
+   `world_saves.sh` with characters): one defect, a zero-size map/copy in `uploadBuffer` on frames with no per-frame
+   meshes (8 saves; fixed: skipped); no index out of bounds; scores unchanged. Live A/B on the PC (`oct27.ps1 -Tag
+   oct27b`, the 3 saves; no validation layer there, no SDK): counters and fps unchanged, no dropped or missing batches,
+   screenshots the same.
 3. Census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
    GS trace per area type (audit 9, 10): decides the fidelity work before 0.2.
 4. `score_saves` over a fixed save set in the nightly with per-save thresholds, plus a one-quad-per-blend-kind test

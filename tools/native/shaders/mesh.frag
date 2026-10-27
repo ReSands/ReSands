@@ -29,8 +29,10 @@ void main()
     if ((flags & 1) != 0) {
         // on the PS2 scale, as the GS: texel alpha is stored doubled (0x80 = 255), AREF = cutoff byte / 2
         float as = floor(floor(t.a * 127.5 + 0.5) * min(vColour.a, 1.0) + 0.001);
-        float aref = float(int(pc.params.y * 255.0 + 0.5) >> 1);
-        bool pass = (flags & 4) != 0 ? as < aref : as > aref;
+        int top = int(pc.params.y * 255.0 + 0.5);
+        float aref = float(top >> 1);
+        // FUN_004B2000 ORs the byte in at bit 3, so an odd byte's low bit lands in ATST: LESS (2) becomes GREATER (6)
+        bool pass = (flags & 4) != 0 && (top & 1) == 0 ? as < aref : as > aref;
         if (pass == ((flags & 16) != 0))
             discard;
     }

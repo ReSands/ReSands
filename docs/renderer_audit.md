@@ -36,7 +36,7 @@ walls of 160002 / 134531 / 145139 warmer than the GS picture (`score_saves` 1.67
 
 ## Risks to investigate
 
-8. **No Vulkan validation anywhere** (medium, now). Env switch in `Renderer::init` for `VK_LAYER_KHRONOS_validation`;
+8. **No Vulkan validation anywhere** (medium, now; done 27 Oct, see `docs/native_bugs.md` step 2). Env switch in `Renderer::init` for `VK_LAYER_KHRONOS_validation`;
    run over the saves offline (`pop_native_view`, `pop_world_test`). Also check index < vertex count in
    `FrameLoader::load` (no robustBufferAccess).
 9. **Alpha above 0x80 lost** (medium, measure first). Texture alpha: `assets.cpp:124`, `pop_native_live.cpp:3187`
@@ -75,3 +75,17 @@ walls of 160002 / 134531 / 145139 warmer than the GS picture (`score_saves` 1.67
 The PNF writer in `pop_native_live.cpp` (sender half of `frame_loader.cpp`), the skip decisions (`displayRecord` and
 the other "drawn natively, skip the GS call" paths), and `currentMaterial` + fog/FBMSK capture. The rest is better
 covered by validation and output scoring than by reading.
+
+**Done 27 Oct.** (a) PNF writer (`writeFrame`) against `FrameLoader::load`: consistent. The worker queue drops no
+frame, so a texture key or batch marked sent always reaches the renderer. Shadow and recoloured-palette keys
+(`kShadowKey` .. +0x10000 holds `kPaletteKey`) are resent with pixels every frame. (b) Skip decisions
+(`displayRecord`): one open question, not a confirmed bug. Pass 0 and the lit pass 1 share the frame-seen key
+(element, index, alpha bit; only passes 2 and 3 add bits). An element displayed with pass 0 and then pass 1 at the same
+matrix index in one frame would get its pass-1 call skipped on the GS (`worldSeen` + `g_worldBase`) with nothing
+recorded natively for it. Unknown whether the game ever does that: count it in step 3's census before changing keys
+(shadows' `callKey` and the posed path use the same scheme). (c) `currentMaterial` against `FUN_004B2000`
+(`game/analysis/native/decomp/004b2000.c`): FBMSK, ZTST, AFAIL, alpha-test enable match. One defect fixed: TEST is
+written as `byte << 3 | 4` for the inverted test, so an odd AREF byte sets ATST bit 2 and LESS becomes GREATER;
+`mesh.frag` now does the same (no score change on 51 saves: no such draw in them). Not checked: the GS re-sends FBMSK
+only when flag bits 0x68 change (or on a forced reset), while the native side reads render state 0x44 per draw; they
+differ if 0x44 changes alone between two draws with the same flags (who writes 0x44 not traced).

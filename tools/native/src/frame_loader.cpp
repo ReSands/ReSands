@@ -7,6 +7,7 @@
 // follows (5, 6 or 7), then that layout with fog min, max after fog b per draw (the VU1 drivers clamp F to them).
 #include "frame_loader.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -165,6 +166,14 @@ namespace pop_native
                 mesh.indices.resize(ni);
                 f.read(reinterpret_cast<char *>(mesh.vertices.data()), std::streamsize(nv) * sizeof(Vertex));
                 f.read(reinterpret_cast<char *>(mesh.indices.data()), std::streamsize(ni) * 4);
+                // no robustBufferAccess: an index past the vertices reads arbitrary GPU memory, so drop the batch
+                if (f)
+                    if (const auto bad = std::find_if(mesh.indices.begin(), mesh.indices.end(), [nv](uint32_t x) { return x >= nv; });
+                        bad != mesh.indices.end())
+                    {
+                        std::fprintf(stderr, "frame %s: draw %u batch %u index %u >= %u vertices, batch dropped\n", name, i, b, *bad, nv);
+                        continue;
+                    }
                 mesh.material = material;
                 vertexTotal += nv;
                 triTotal += ni / 3;

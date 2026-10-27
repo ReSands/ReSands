@@ -6,6 +6,8 @@
 #include <volk.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
@@ -382,6 +384,8 @@ namespace pop_native
         {
             if (!createBuffer(size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, out, error))
                 return false;
+            if (size == 0) // a frame of kept meshes only: the buffer stays empty (a zero-size map or copy is invalid)
+                return true;
             Buffer staging;
             if (!createBuffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, error))
@@ -1315,6 +1319,22 @@ namespace pop_native
         app.apiVersion = VK_API_VERSION_1_1;
         VkInstanceCreateInfo ii{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         ii.pApplicationInfo = &app;
+        // POP_VK_VALIDATION=1: the Khronos validation layer (messages go to stdout without a messenger)
+        const char *validation = "VK_LAYER_KHRONOS_validation";
+        if (std::getenv("POP_VK_VALIDATION"))
+        {
+            uint32_t layerCount = 0;
+            vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+            std::vector<VkLayerProperties> layers(layerCount);
+            vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
+            if (std::any_of(layers.begin(), layers.end(), [&](const VkLayerProperties &l) { return std::strcmp(l.layerName, validation) == 0; }))
+            {
+                ii.enabledLayerCount = 1;
+                ii.ppEnabledLayerNames = &validation;
+            }
+            else
+                std::fprintf(stderr, "POP_VK_VALIDATION: %s not installed\n", validation);
+        }
         ii.enabledExtensionCount = static_cast<uint32_t>(enable.size());
         ii.ppEnabledExtensionNames = enable.data();
         if (portability)
