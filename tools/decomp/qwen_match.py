@@ -159,6 +159,10 @@ def main(argv):
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     prev = (open(os.path.join(att, done[-1])).read(), open(os.path.join(att, done[-1][:-4] + '.report.txt')).read()) \
         if done else None
+    if prev and prev[1].startswith('MATCH'):  # an earlier run died between judging and writing PASS (28 Oct, over ssh)
+        open(os.path.join(out, 'PASS'), 'w').write(done[-1][:-4] + '\n')
+        say('PASS in %s (found on resume)' % done[-1][:-4])
+        return 0
     best = -2
     last = max((int(f[5:7]) for f in done), default=0)
     for n in range(last + 1, max(rounds, last) + 1):

@@ -9,7 +9,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 - **Done:** DWARF reader, header generator, disassembler and match judge (commit cb17d50). The generated
   `dare.h` compiles cleanly with every size and offset check passing. **First DARE function byte-matched on the
   first try against it:** `GetPos__17OneShotSAMPLEPathFv` (0x167e40, 40 bytes).
-- **Not done:** the Qwen runner, the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
+- **Not done:** the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
   yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
 - **Hand matches (C function, `switch` shape, constructor with vptr store): all three match (below).** Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
@@ -47,6 +47,13 @@ the compiler check: `docs/roadmap.md` "2.0".
   with `PoPDisasm.java` and `PoPDecompileTo.java` on `game/decomp/dare/addrs.txt` (outputs `asm/`, `ghidra_c/`).
   **Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`** (as in
   `tools/rebuild.sh`), or it fails with "Unable to prompt user for JDK path".
+- `qwen_match.py <mangled | addr hex> [--rounds 8] [--url ...]` (PC): the Qwen loop for one function. Prompt =
+  retail asm, Ghidra C, declaration, parameter / local names from `protos.tsv`, the dare.h excerpt the function needs
+  (its class, bases, member types, enums and C declarations it names; capped at 30 KB) and the compiler lessons
+  from the hand matches. Feedback = `match.py`'s diff. Results: `game/analysis/qwen/dare_<addr>/` (`match.log`,
+  `attempts/`, `best.cpp` = most matching instructions, `PASS`, or `HEADER` when Qwen reports a header change is
+  needed). `--prompt` prints the prompt (works on the Mac); `--try <file>` judges a file like a round. Needs
+  `game/decomp/dare/` on the PC (copied 28 Oct; recopy after regenerating: `tar czf - -C game/decomp dare | ssh ...`).
 - `game/decomp/dare/pccc.sh <file> [flags]`: copies `dare.h` + the file to the PC and compiles it (error check only).
 
 ## Numbers
@@ -87,14 +94,15 @@ the compiler check: `docs/roadmap.md` "2.0".
 ## Next steps (in order)
 
 1. ~~Finish the three hand matches~~ done 28 Oct (all three matched; no per-file C switch needed).
-2. Qwen runner (`tools/decomp/qwen_match.py` or under `tools/llm_port/`, reusing `ask()` from
-   `tools/llm_port/meshdecode/port.py`, with a fresh seed per request). Prompt: the retail assembly (`mipsdis` text,
-   callee names from `units.tsv` / Ghidra), Ghidra's C, the function's declaration, parameter and local names from
-   `protos.tsv`, the definitions of its class and of the types it touches (trimmed from `dare.h`; the whole header
-   is ~265 KB, too big for a prompt). Qwen writes one `.cpp` that includes `dare.h`; it may add extern declarations
-   but must not edit the header (it reports "needs header change"). Judge = `match.py`; feedback = its diff.
-   Results per function under `game/analysis/qwen/dare_<addr>/` (`PASS` file + `best.cpp`).
-3. Test the runner end to end with GetPos (known good) before any night.
+2. ~~Qwen runner~~ built 28 Oct: `tools/decomp/qwen_match.py` (see Tools). Known gaps: callees that retail leaves
+   unnamed (`FUN_00173140`) are not resolved in the prompt (fix: disassemble POP1's copy of the function, whose
+   `jal`s have symbols, and name the retail callees by position); free C++ `extern` declarations are pulled in by
+   short name next to methods of the same name (e.g. `extern int GetPos(int)` beside `BranchPath::GetPos`).
+3. ~~Smoke test~~ done 28 Oct: Qwen matched `GetPos` in round 5 of 8 (about 6 min in all; rounds 1-4 each had one
+   instruction wrong, the `0xffff0000` return). **Run it with output to a file** (`... > game\jobs\<x>.log 2>&1`,
+   or under `start-job.ps1`): the first run, with stdout over plain ssh, died between judging a MATCH and writing
+   PASS (no traceback reached the Mac), and both ssh sessions hung after Python had exited. A restart now finds such
+   a MATCH and writes PASS.
 4. Queue: the 311 same-size functions first, smallest first, then the other 358.
 5. Night job `tools/windows/<date>.ps1` copied from `oct26.ps1` (llama-server checks, passes until two bring nothing
    new, then shut down; "Stop Qwen" cancels), plus the desktop shortcut **"Qwen DARE audio decomp"**.
