@@ -79,6 +79,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   (slow fight), GS-only references `gsref1027/`.
 - **VU1 ports:** every reachable VU1 program is ported (`tools/vu1port/ported/`; P4 and P5 pass whole-run chains but
   are not in the game yet; `docs/native_renderer.md` "VU1 program inventory").
+- **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** Header from POP1's DWARF compiles,
+  first function byte-matched; the Qwen runner, queue and desktop shortcut are not built yet (next steps listed there).
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
 

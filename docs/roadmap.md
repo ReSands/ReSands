@@ -178,6 +178,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   - Next steps if the user goes ahead: a whole small translation unit (one `.cpp` from POP1.ELF's file list, e.g. a
     DARE file, with its DWARF types), splitting the ELF into units (splat), a linker check with `mwldps2`; then
     decide the scope (one subsystem first).
+- **Started 27-28 Oct 2026 with DARE (byte matching, user's choice): `docs/decomp_dare.md`.**
 - **Rules to settle first:** the leaked Jade source stays off limits; Sony library code in the ELF stays assembly or
   is decompiled from our own binary only, never from memory; a decomp reconstructs Ubisoft's code, so it stays
   private unless the user decides otherwise (the ground rules share only our own code).
