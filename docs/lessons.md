@@ -219,3 +219,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   `pop_state_frame` frames, which draw every list natively (late lists, sprites, particles) and no HUD, against GS-only
   saves: fights score 8-13 with nothing broken. Read the side-by-side before treating a high score as a bug, and
   only a rise above the save's own baseline as a regression.
+- **Byte matching: read the compiler flags off the retail code before blaming the model** (28 Oct, DARE). Every
+  global in DARE is reached as `lui at` / `lw (at)` and never via `gp`, which only `-sdatathreshold 0` reproduces;
+  without the flag no function with a global could match, whatever Qwen wrote. Count such patterns across all target
+  functions (gp uses, float constants, tail calls) when a whole class of attempts misses.

@@ -4,39 +4,87 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (28 Oct, late morning)
+## State (28 Oct night; start here)
 
-- **Done:** DWARF reader, header generator, disassembler and match judge (commit cb17d50). The generated
-  `dare.h` compiles cleanly with every size and offset check passing. **First DARE function byte-matched on the
-  first try against it:** `GetPos__17OneShotSAMPLEPathFv` (0x167e40, 40 bytes).
-- **Ready for a night (28 Oct):** runner, callee names from POP1, queue, night job `tools/windows/oct28.ps1` and the
-  PC desktop shortcut **"Qwen DARE audio decomp"** (cancel: "Stop Qwen"). Not run yet beyond the `GetPos` smoke test;
-  first do a short trial (about 10 functions: `oct28.ps1 -Until <in ~1 h> -NoShutdown`) to see the hit rate.
-- **Hand matches (C function, `switch` shape, constructor with vptr store): all three match (below).** Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
-  `ghidra_c/`.
-- **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
-  (`game/decomp/dare/snd_b.cpp`): a `switch (pstBRDisk->eType)` with `TYPE_SAMPLE` -> `SND_fn_bIsResourceStreamedSxd`,
-  `TYPE_MULTITRACK` -> `..MultiTrack`, `default: return 0`. The `if` / `else if` version of the same logic does not
-  match (it inverts the branches): **two `beq`s up front, then the default, then the case bodies = a `switch`**
-  (a hint for the Qwen prompt). The callees are unnamed in retail (0x173140 / 0x1731c0); the mapping comes from the
-  enum, and the judge masks call targets. Compiling a `.c` source as C++ was fine here (no language switch needed yet).
-- **28 Oct: `__ct__5CToolFv` (0x161380, 32 bytes) MATCHES** (`game/decomp/dare/ct_c.cpp`): body assignments
-  `m_lNbChildren = 0; m_eState = C_PLAYING-equivalent 0; m_pRes = 0;`. **CodeWarrior keeps the source order of the
-  stores**: forward order and an initialiser list both swap the +4 / +0xc stores. The vptr goes in first by itself, so
-  the header's vtable symbol (`__vt__5CTool`) and the member offsets are right.
-- **28 Oct: `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes) MATCHES** on the first try
-  (`game/decomp/dare/rt_a.cpp`): `if (pr1) *pr1 = (rtwin >> 16) << 8; if (pr2) *pr2 = (rtwin << 16) >> 8;`. A
-  `(short)` cast version adds `dsll32` / `dsra32` pairs: plain `int` shifts are what DARE wrote. **The hand matches
-  are done; next is step 2 (the Qwen runner).**
+- **Run 2 is running overnight on the PC** (started 28 Oct evening from `tools/windows/oct28.ps1` via `start-job.ps1`,
+  4 rounds per function, no end time; **the user stops it with the "Stop Qwen" desktop shortcut**, which never shuts
+  the PC down; nobody watches it). It is the first run with fixes 1-6 below. Its queue starts with run 1's 10
+  remaining misses (their old attempts moved to `game\analysis\qwen_run1_misses\` on the PC), then the untried
+  functions, same-size ones first, smallest first.
+- **Matched so far: 22 of 669** = 18 by Qwen (17 in run 1 + `GetPos` in the smoke test) + 4 by hand
+  (`SND_fn_bIsResourceStreamedSnd`, and after the fixes `SND_fn_vResetStack`, `SND_fn_pvGetStackHead`,
+  `SND_fn_vDesInitTheme`, all three run-1 misses). The 18 Qwen passes and every hand match were re-judged under
+  the new flag on 28 Oct: all still MATCH.
+- **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
+  (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
+  or `no match after 4 more rounds`). **The first ~10 lines are the run-1 misses retried: compare them with run 1
+  (below) to see whether fixes 1-6 helped.** For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
+  (retail | yours, `>>` = differs) and `best.cpp`; copy the folders to the Mac with
+  `ssh 10.0.0.202 "cd /d C:\dev\PoP_Decomp\game\analysis\qwen && tar czf - dare_*" | tar xzf - -C game/analysis/qwen_pc`.
+  Resume: the "Qwen DARE audio decomp" desktop shortcut (continues the queue). Shut the PC down when done.
+- **Shortcuts on the PC desktop:** "Qwen DARE audio decomp" (`oct28.ps1`) and "Stop Qwen" (`qwen-stop.ps1`, ends a
+  DARE or VU1 job and llama-server); both are remade by `oct28.ps1 -Shortcut`.
+
+## Runs
+
+- **Smoke test (28 Oct morning):** Qwen matched `GetPos` in round 5 of 8 (~6 min).
+- **Run 1 (28 Oct 15:37-17:44, stopped by hand): 17 of 29 matched (59%)**, the smallest same-size functions (32-44
+  bytes), ~4.2 min per function, many in round 1-2. 12 misses (best attempts 0-6 of 8-12 instructions; 2 never
+  compiled), copied to `game/analysis/qwen_pc/` on the Mac. Why they missed -> fixes 1-6.
+- **Run 2 (28 Oct night):** results not read yet.
+
+## Fixes after run 1 (all done 28 Oct night)
+
+1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669
+   functions, zero `gp`), and the prompt did not say which global is where. `dare_callees.py` also writes
+   `globals.tsv` (pairs retail and POP1 absolute data accesses like the calls; 234 addresses named, no disagreeing
+   votes). The prompt puts `; = name` on each instruction that reaches one, replaces Ghidra's `DAT_` / `iRam...`
+   names, and lists the globals with sizes ("declared in dare.h" or "declare it yourself": most are file statics,
+   not in dare.h).
+2. **Compiler flag `-sdatathreshold 0`** (in `match.py` FLAGS and `pccc.sh`). Without it an `extern` global compiles
+   to `lw 0(gp)`; with it to retail's `lui at` / `lw (at)`. Before this, no function with a global could match.
+3. **Member offsets in the header excerpt** (`// +0x14` per member, `// size N` per struct, from the DARE_CHECK
+   lines). Run 1 picked wrong members (`LoadBinaryResourceSilence`) or cast raw offsets (`TTransition::RemoveChild`).
+4. **Float constants**: `; = 3276.8f` on an `mtc1` of a `lui`/`ori` constant (`GetLatency` returns `(int)3276.8f`;
+   run 1 wrote 1000).
+5. **Switch hint reworded**: "two or more tests of the same value against different constants"; a single test is
+   an if (run 1 wrote a switch for `TVirtualSample::Resume`).
+6. **Rules**: never write a type definition (run 1 redefined `sndCList`); a method called without `this` that is
+   not declared static = NEEDS HEADER CHANGE (`RPS2::GetResLength` is called with a0 = the union by value: probably
+   static, DWARF lost it; not fixed in `dare.h`). Still open: `fn_lSendSoundRequestOnChannelWithFadeIn` (0x15d940,
+   7 args incl. a float) is neither in dare.h nor in the callee map, and retail tail-calls it (`j`).
+- Review fix (28 Oct): the `lui` pairing forgets a register's value when another instruction writes it (a stale
+  value gave bogus names such as 0x10000 `@150`; a self-check in the session confirmed no float note survives an
+  overwrite).
+
+## Hand matches (28 Oct; sources in `game/decomp/dare/` and `game/decomp/try/`)
+
+- `SND_fn_bIsResourceStreamedSnd` (0x17dc40, `snd_b.cpp`): a `switch (pstBRDisk->eType)`; the `if` / `else if`
+  version inverts the branches. Compiling a `.c` source as C++ is fine.
+- `__ct__5CToolFv` (0x161380, `ct_c.cpp`): **stores come out in source order** (`m_lNbChildren`, `m_eState`, `m_pRes`);
+  the vptr store is generated first.
+- `SND_fn_vSndRealTwinToSndReal` (0x1612c0, `rt_a.cpp`): plain `int` shifts; `(short)` casts add `dsll32`/`dsra32`.
+- `SND_fn_vResetStack` / `SND_fn_pvGetStackHead` / `SND_fn_vDesInitTheme` (`try/reset.cpp`, `head.cpp`, `theme.cpp`):
+  matched once globals had names and the flag was on (`delete g_pThemeManager;` = the `__dt__(p, 1)` call).
+
+## Useful beyond the decomp (for 0.3)
+
+- DARE's real build settings: CodeWarrior 3.0.3, `-O4,p -enum min -sdatathreshold 0`.
+- Every match confirms POP1's struct layouts, enums, vtables and member offsets for retail DARE.
+- `callees.tsv` (406 call targets) and `globals.tsv` (234 data addresses) name retail code and data that Ghidra
+  shows as `FUN_` / `DAT_`: applying them to the Ghidra project `PoP_SLUS20743` would make retail DARE readable for
+  the 0.3 design (not done).
 
 ## Tools (all in `tools/decomp/`)
 
 - `dwarf1.py`: DWARF version 1 reader (`dies(elf)` -> DIE tree).
-- `dare_callees.py <POP1.ELF> <SLUS_207.43> <units.tsv> <callees.tsv>`: names retail call targets: the k-th `jal`
+- `dare_callees.py <POP1.ELF> <SLUS_207.43> <units.tsv> <callees.tsv> [<globals.tsv>]`: names retail call targets: the k-th `jal`
   of a retail function calls what the k-th `jal` of POP1's copy calls (only when both have the same count; 322
   functions differ, probably POP1's extra asserts), votes across all functions. 406 targets named, 14 with
   disagreeing votes (the prompt uses a name only when it outvotes all others): **704 of 863 unnamed retail calls
   named.** Confirmed 0x173140 = `SND_fn_bIsResourceStreamedSxd`. Self-check: 0x163100 = `BranchPath::GetPos`.
+  `globals.tsv`: the same for absolute data addresses (columns: retail addr, POP1 symbol[+off], size, votes, other).
+  Rerun after regenerating `units.tsv`, then copy both files to `game\decomp\dare\` on the PC.
 - `dare_units.py <POP1.ELF> <retail_names_from_proto.tsv> <out.tsv>`: every DARE function in POP1, joined by
   mangled name with retail (columns: file, mangled, POP1 size, retail addr, retail size, same size).
 - `dare_header.py <POP1.ELF> <dare.h> [protos.tsv]`: the header. `protos.tsv` = per function: file, declaration,
@@ -53,10 +101,10 @@ the compiler check: `docs/roadmap.md` "2.0".
   with `PoPDisasm.java` and `PoPDecompileTo.java` on `game/decomp/dare/addrs.txt` (outputs `asm/`, `ghidra_c/`).
   **Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`** (as in
   `tools/rebuild.sh`), or it fails with "Unable to prompt user for JDK path".
-- `qwen_match.py <mangled | addr hex> [--rounds 8] [--url ...]` (PC): the Qwen loop for one function. Prompt =
-  retail asm, Ghidra C, declaration, parameter / local names from `protos.tsv`, the dare.h excerpt the function needs
-  (its class, bases, member types, enums and C declarations it names; capped at 30 KB) and the compiler lessons
-  from the hand matches. Feedback = `match.py`'s diff. Results: `game/analysis/qwen/dare_<addr>/` (`match.log`,
+- `qwen_match.py <mangled | addr hex> [--rounds 8] [--until <unix>] [--url ...]` (PC): the Qwen loop for one
+  function. Prompt = retail asm (callees, globals and float constants named), Ghidra C (same names), declaration,
+  parameter / local names from `protos.tsv`, the globals it uses with sizes, the dare.h excerpt it needs (class,
+  bases, member types with offsets, enums, C declarations, globals; capped at 30 KB) and the compiler lessons. Feedback = `match.py`'s diff. Results: `game/analysis/qwen/dare_<addr>/` (`match.log`,
   `attempts/`, `best.cpp` = most matching instructions, `PASS`, or `HEADER` when Qwen reports a header change is
   needed). `--prompt` prints the prompt (works on the Mac); `--try <file>` judges a file like a round. Needs
   `game/decomp/dare/` on the PC (copied 28 Oct; recopy after regenerating: `tar czf - -C game/decomp dare | ssh ...`).
@@ -75,7 +123,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## What the DWARF and compiler taught us
 
-- **Compiler flags: `-O4,p -enum min`.** DWARF gives many enums a byte size of 1; `-enum min` reproduces that
+- **Compiler flags: `-O4,p -enum min -sdatathreshold 0`** (the last found 28 Oct: globals via `lui at`, never `gp`). DWARF gives many enums a byte size of 1; `-enum min` reproduces that
   (without it every struct with a small enum lays out wrong). The four 26 Oct test functions have no enums.
 - CodeWarrior makes **one compile unit per function**, with that function's types copied into it. Types are
   deduplicated by name (the most common layout wins; only `sndCNode` has two: 16 or 12 bytes).
@@ -99,45 +147,14 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## Next steps (in order)
 
-1. ~~Finish the three hand matches~~ done 28 Oct (all three matched; no per-file C switch needed).
-2. ~~Qwen runner~~ built 28 Oct: `tools/decomp/qwen_match.py` (see Tools). Callee names: `dare_callees.py` (see
-   Tools). Known gap: free C++ `extern` declarations are pulled in by short name next to methods of the same name
-   (e.g. `extern int GetPos(int)` beside `BranchPath::GetPos`).
-3. ~~Smoke test~~ done 28 Oct: Qwen matched `GetPos` in round 5 of 8 (about 6 min in all; rounds 1-4 each had one
-   instruction wrong, the `0xffff0000` return). **Run it with output to a file** (`... > game\jobs\<x>.log 2>&1`,
-   or under `start-job.ps1`): the first run, with stdout over plain ssh, died between judging a MATCH and writing
-   PASS (no traceback reached the Mac), and both ssh sessions hung after Python had exited. A restart now finds such
-   a MATCH and writes PASS.
-4. ~~Queue~~ built 28 Oct: `qwen_match.py --queue` = functions without PASS / HEADER, untried first, then the 311
-   same-size ones, smallest first, then the other 358. `--summary` = counts plus the 15 nearest misses.
-- **First run, 28 Oct 15:37-17:44 (`oct28.ps1`, 4 rounds, stopped by hand): 17 of 29 functions matched (59%)**, plus
-  `GetPos` from the smoke test = 18 of 669. All were the smallest same-size functions (32-44 bytes); ~4.2 min per
-  function on average, many PASS in round 1-2. 12 missed: best attempts 0-6 of 8-12 instructions; 2 never compiled
-  (`SND_fn_rGetLengthMultiTrack`, `SndManager::AddCallBack`). Not looked into yet: why the misses fail (read their
-  `attempts\roundNN.report.txt` on the PC). Resume: start "Qwen DARE audio decomp" again (it continues the queue).
-- **Why the 12 misses missed (28 Oct evening; attempts copied to `game/analysis/qwen_pc/`). Fixes, in order of
-  value; 1 done, the rest NOT done yet:**
-  1. *Globals have no names.* DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 functions,
-     zero `gp`). **Done:** `dare_callees.py` now also writes `game/decomp/dare/globals.tsv` (retail data address ->
-     POP1 symbol [+offset], size; 237 named, e.g. 0x680c80 `gs_bStackInitialised`, 0x680c98 `g_pStackHead`,
-     0x6a42b0 `g_pThemeManager`). To do: annotate the asm (`; name`) and Ghidra's `DAT_` names in the prompt, and
-     tell Qwen to declare globals that are not in dare.h as `extern <type> <name>;` (most are file statics).
-  2. *Compiler flag missing: `-sdatathreshold 0`.* Without it an `extern` global compiles to `lw 0(gp)`; with it
-     to retail's `lui at` / `lw (at)` (tested on the PC 28 Oct). Add to `match.py` FLAGS, then re-judge the 18
-     passes (`qwen_match.py <addr> --try game\analysis\qwen\dare_<addr>\best.cpp`) to make sure none breaks.
-  3. *No member offsets in the header excerpt* (`header_blocks` keeps the struct but drops its DARE_CHECK lines):
-     Qwen picks the wrong member (`LoadBinaryResourceSilence`) or casts raw offsets (`TTransition::RemoveChild`).
-     Fix: comment each member with its offset from the `DARE_OFS(...) == N` checks.
-  4. *Float constants:* `GetLatency` returns `(int)3276.8f` (`lui 0x454c; ori 0xcccd; mtc1`); Qwen wrote 1000.
-     Fix: annotate lui/ori pairs that feed mtc1 with the float value.
-  5. *The switch hint misleads:* `TVirtualSample::Resume` (one test) came out as a switch. Reword: "two or more
-     tests of the same value against different constants".
-  6. *Header problems Qwen cannot see:* `RPS2::GetResLength` is called with no `this` (a0 = the union by value),
-     so it is probably static (DWARF lost it); `sndCList` got redefined by Qwen (tell it never to redefine a
-     dare.h type); `fn_lSendSoundRequestOnChannelWithFadeIn` (0x15d940, 7 args incl. a float) is not in dare.h or
-     the callee map, and retail tail-calls it (`j`).
-5. ~~Night job~~ built 28 Oct: `tools/windows/oct28.ps1` (from `oct26.ps1`: llama-server checked before every
-   function, one pass of `-Rounds 4` per function, summary into `game\jobs\qwen-night.log`, then shutdown; `-Until`,
-   `-NoShutdown`, `-Shortcut` remakes the desktop shortcut). "Stop Qwen" now also ends `qwen_match.py`. A pass over
-   all 668 at 4 rounds is several nights (estimate: 1-4 min per round); it resumes where it stopped.
-6. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
+1. Read run 2 (see the morning check above); if fixes 1-6 helped, keep the queue running on later nights.
+2. Header fixes Qwen reports (`HEADER` files; `RPS2::GetResLength` static) go in `dare_fix.h` / `dare_header.py`.
+3. Apply `callees.tsv` / `globals.tsv` names to the Ghidra project (cheap; helps 0.3).
+4. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
+
+Built and done (28 Oct): three hand matches; `qwen_match.py` runner; smoke test; queue (`--queue`, `--summary`);
+night job `oct28.ps1`. Lessons: run the runner with output to a file or under `start-job.ps1` (a run with stdout
+over plain ssh died between a MATCH and writing PASS, and ssh hung after Python exited; a restart now finds such a
+MATCH). `--rounds N` = N more rounds; no-code rounds leave `roundNN.nocode.txt` and count on resume; a draft in
+the reasoning is judged when the answer has none. Known gap: free C++ `extern` declarations are pulled into the
+excerpt by short name next to methods of the same name (e.g. `extern int GetPos(int)` beside `BranchPath::GetPos`).

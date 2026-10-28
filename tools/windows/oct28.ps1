@@ -10,6 +10,8 @@
 # Cancelling, at any time: the desktop shortcut "Stop Qwen" (tools\windows\qwen-stop.ps1: ends this job and
 # llama-server, frees the GPU, never shuts down). Nothing done is lost: every round is on disk as it finishes, and
 # the next run resumes. Needs game\decomp\dare\ on this PC (copied from the Mac; see docs/decomp_dare.md).
+# Run 2 (28 Oct night) is the first with -sdatathreshold 0, global names, float constants and member offsets in
+# the prompt; the queue starts with run 1's misses (moved to game\analysis\qwen_run1_misses\ to retry them).
 # -Until HH:mm: no new round after that time. -NoShutdown keeps the PC on. -Shortcut: (re)make the desktop shortcut.
 param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -21,8 +23,17 @@ if ($Shortcut) {
     $lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     $lnk.WorkingDirectory = $Root
+    $lnk.Description = 'Qwen byte-matches DARE sound functions (oct28.ps1, resumes the queue; log game\jobs\qwen-night.log). Cancel: Stop Qwen.'
     $lnk.Save()
     "shortcut: $desk\Qwen DARE audio decomp.lnk"
+    # Stop Qwen ends this job too (qwen-stop.ps1 knows qwen_match.py)
+    $stop = (New-Object -ComObject WScript.Shell).CreateShortcut("$desk\Stop Qwen.lnk")
+    $stop.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $stop.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Root\tools\windows\qwen-stop.ps1`""
+    $stop.WorkingDirectory = $Root
+    $stop.Description = 'Stops any Qwen job (DARE decomp or VU1 port) and llama-server; frees the GPU; never shuts down.'
+    $stop.Save()
+    "shortcut: $desk\Stop Qwen.lnk"
     return
 }
 
