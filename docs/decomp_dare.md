@@ -11,8 +11,7 @@ the compiler check: `docs/roadmap.md` "2.0".
   first try against it:** `GetPos__17OneShotSAMPLEPathFv` (0x167e40, 40 bytes).
 - **Not done:** the Qwen runner, the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
   yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
-- **Was in progress:** hand-matching a C function and a constructor before trusting the header more widely:
-  all three now match (below). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
+- **Hand matches (C function, `switch` shape, constructor with vptr store): all three match (below).** Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
 - **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
   (`game/decomp/dare/snd_b.cpp`): a `switch (pstBRDisk->eType)` with `TYPE_SAMPLE` -> `SND_fn_bIsResourceStreamedSxd`,
@@ -87,8 +86,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## Next steps (in order)
 
-1. Finish the three hand matches above (C function, `if` / `else` call shape, constructor with vptr store). If the C
-   function only matches when compiled as C, `match.py` needs a per-file language switch (sources ending in `.c`).
+1. ~~Finish the three hand matches~~ done 28 Oct (all three matched; no per-file C switch needed).
 2. Qwen runner (`tools/decomp/qwen_match.py` or under `tools/llm_port/`, reusing `ask()` from
    `tools/llm_port/meshdecode/port.py`, with a fresh seed per request). Prompt: the retail assembly (`mipsdis` text,
    callee names from `units.tsv` / Ghidra), Ghidra's C, the function's declaration, parameter and local names from
