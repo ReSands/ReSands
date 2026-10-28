@@ -4,13 +4,14 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State when stopped (28 Oct morning)
+## State (28 Oct, late morning)
 
 - **Done:** DWARF reader, header generator, disassembler and match judge (commit cb17d50). The generated
   `dare.h` compiles cleanly with every size and offset check passing. **First DARE function byte-matched on the
   first try against it:** `GetPos__17OneShotSAMPLEPathFv` (0x167e40, 40 bytes).
-- **Not done:** the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
-  yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
+- **Ready for a night (28 Oct):** runner, callee names from POP1, queue, night job `tools/windows/oct28.ps1` and the
+  PC desktop shortcut **"Qwen DARE audio decomp"** (cancel: "Stop Qwen"). Not run yet beyond the `GetPos` smoke test;
+  first do a short trial (about 10 functions: `oct28.ps1 -Until <in ~1 h> -NoShutdown`) to see the hit rate.
 - **Hand matches (C function, `switch` shape, constructor with vptr store): all three match (below).** Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
 - **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
@@ -31,6 +32,11 @@ the compiler check: `docs/roadmap.md` "2.0".
 ## Tools (all in `tools/decomp/`)
 
 - `dwarf1.py`: DWARF version 1 reader (`dies(elf)` -> DIE tree).
+- `dare_callees.py <POP1.ELF> <SLUS_207.43> <units.tsv> <callees.tsv>`: names retail call targets: the k-th `jal`
+  of a retail function calls what the k-th `jal` of POP1's copy calls (only when both have the same count; 322
+  functions differ, probably POP1's extra asserts), votes across all functions. 406 targets named, 14 with
+  disagreeing votes (the prompt uses a name only when it outvotes all others): **704 of 863 unnamed retail calls
+  named.** Confirmed 0x173140 = `SND_fn_bIsResourceStreamedSxd`. Self-check: 0x163100 = `BranchPath::GetPos`.
 - `dare_units.py <POP1.ELF> <retail_names_from_proto.tsv> <out.tsv>`: every DARE function in POP1, joined by
   mangled name with retail (columns: file, mangled, POP1 size, retail addr, retail size, same size).
 - `dare_header.py <POP1.ELF> <dare.h> [protos.tsv]`: the header. `protos.tsv` = per function: file, declaration,
@@ -94,16 +100,18 @@ the compiler check: `docs/roadmap.md` "2.0".
 ## Next steps (in order)
 
 1. ~~Finish the three hand matches~~ done 28 Oct (all three matched; no per-file C switch needed).
-2. ~~Qwen runner~~ built 28 Oct: `tools/decomp/qwen_match.py` (see Tools). Known gaps: callees that retail leaves
-   unnamed (`FUN_00173140`) are not resolved in the prompt (fix: disassemble POP1's copy of the function, whose
-   `jal`s have symbols, and name the retail callees by position); free C++ `extern` declarations are pulled in by
-   short name next to methods of the same name (e.g. `extern int GetPos(int)` beside `BranchPath::GetPos`).
+2. ~~Qwen runner~~ built 28 Oct: `tools/decomp/qwen_match.py` (see Tools). Callee names: `dare_callees.py` (see
+   Tools). Known gap: free C++ `extern` declarations are pulled in by short name next to methods of the same name
+   (e.g. `extern int GetPos(int)` beside `BranchPath::GetPos`).
 3. ~~Smoke test~~ done 28 Oct: Qwen matched `GetPos` in round 5 of 8 (about 6 min in all; rounds 1-4 each had one
    instruction wrong, the `0xffff0000` return). **Run it with output to a file** (`... > game\jobs\<x>.log 2>&1`,
    or under `start-job.ps1`): the first run, with stdout over plain ssh, died between judging a MATCH and writing
    PASS (no traceback reached the Mac), and both ssh sessions hung after Python had exited. A restart now finds such
    a MATCH and writes PASS.
-4. Queue: the 311 same-size functions first, smallest first, then the other 358.
-5. Night job `tools/windows/<date>.ps1` copied from `oct26.ps1` (llama-server checks, passes until two bring nothing
-   new, then shut down; "Stop Qwen" cancels), plus the desktop shortcut **"Qwen DARE audio decomp"**.
+4. ~~Queue~~ built 28 Oct: `qwen_match.py --queue` = functions without PASS / HEADER, untried first, then the 311
+   same-size ones, smallest first, then the other 358. `--summary` = counts plus the 15 nearest misses.
+5. ~~Night job~~ built 28 Oct: `tools/windows/oct28.ps1` (from `oct26.ps1`: llama-server checked before every
+   function, one pass of `-Rounds 4` per function, summary into `game\jobs\qwen-night.log`, then shutdown; `-Until`,
+   `-NoShutdown`, `-Shortcut` remakes the desktop shortcut). "Stop Qwen" now also ends `qwen_match.py`. A pass over
+   all 668 at 4 rounds is several nights (estimate: 1-4 min per round); it resumes where it stopped.
 6. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
