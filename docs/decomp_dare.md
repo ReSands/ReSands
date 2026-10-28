@@ -12,7 +12,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 - **Not done:** the Qwen runner, the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
   yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
 - **Was in progress:** hand-matching a C function and a constructor before trusting the header more widely:
-  `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes, sndreal.c, still to do). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
+  all three now match (below). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
 - **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
   (`game/decomp/dare/snd_b.cpp`): a `switch (pstBRDisk->eType)` with `TYPE_SAMPLE` -> `SND_fn_bIsResourceStreamedSxd`,
@@ -24,6 +24,10 @@ the compiler check: `docs/roadmap.md` "2.0".
   `m_lNbChildren = 0; m_eState = C_PLAYING-equivalent 0; m_pRes = 0;`. **CodeWarrior keeps the source order of the
   stores**: forward order and an initialiser list both swap the +4 / +0xc stores. The vptr goes in first by itself, so
   the header's vtable symbol (`__vt__5CTool`) and the member offsets are right.
+- **28 Oct: `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes) MATCHES** on the first try
+  (`game/decomp/dare/rt_a.cpp`): `if (pr1) *pr1 = (rtwin >> 16) << 8; if (pr2) *pr2 = (rtwin << 16) >> 8;`. A
+  `(short)` cast version adds `dsll32` / `dsra32` pairs: plain `int` shifts are what DARE wrote. **The hand matches
+  are done; next is step 2 (the Qwen runner).**
 
 ## Tools (all in `tools/decomp/`)
 
