@@ -12,8 +12,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 - **Not done:** the Qwen runner, the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
   yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
 - **Was in progress:** hand-matching a C function and a constructor before trusting the header more widely:
-  `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes, sndreal.c), `__ct__5CToolFv` (0x161380,
-  32 bytes: vptr store plus three member clears). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
+  `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes, sndreal.c, still to do). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
 - **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
   (`game/decomp/dare/snd_b.cpp`): a `switch (pstBRDisk->eType)` with `TYPE_SAMPLE` -> `SND_fn_bIsResourceStreamedSxd`,
@@ -21,6 +20,10 @@ the compiler check: `docs/roadmap.md` "2.0".
   match (it inverts the branches): **two `beq`s up front, then the default, then the case bodies = a `switch`**
   (a hint for the Qwen prompt). The callees are unnamed in retail (0x173140 / 0x1731c0); the mapping comes from the
   enum, and the judge masks call targets. Compiling a `.c` source as C++ was fine here (no language switch needed yet).
+- **28 Oct: `__ct__5CToolFv` (0x161380, 32 bytes) MATCHES** (`game/decomp/dare/ct_c.cpp`): body assignments
+  `m_lNbChildren = 0; m_eState = C_PLAYING-equivalent 0; m_pRes = 0;`. **CodeWarrior keeps the source order of the
+  stores**: forward order and an initialiser list both swap the +4 / +0xc stores. The vptr goes in first by itself, so
+  the header's vtable symbol (`__vt__5CTool`) and the member offsets are right.
 
 ## Tools (all in `tools/decomp/`)
 
