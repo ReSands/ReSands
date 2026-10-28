@@ -9,7 +9,8 @@ from mipsdis import dis
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 CC = os.path.join(ROOT, 'game', 'decomp', 'compilers', '3.0.3-020716', 'mwccps2.exe')
-FLAGS = ['-c', '-nostdinc', '-O4,p', '-enum', 'min']
+# -sdatathreshold 0: DARE reaches every global via lui at / lw (at), never gp (checked 28 Oct)
+FLAGS = ['-c', '-nostdinc', '-O4,p', '-enum', 'min', '-sdatathreshold', '0']
 ELF = os.path.join(ROOT, 'game', 'ps2', 'disc', 'SLUS_207.43')
 R_MIPS_26 = 4
 

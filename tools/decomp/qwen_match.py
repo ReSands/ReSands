@@ -6,14 +6,15 @@ Usage (on the PC, where mwccps2 and llama-server run):
   python tools/decomp/qwen_match.py <...> --try <file>  judge a file as a round would (runner test without the model)
   python tools/decomp/qwen_match.py --queue | --summary  the night queue (addrs left, in order) / the results so far
 --rounds N = N more rounds; --until <unix time>: no new round after it.
-Needs game/decomp/dare/ (dare.h, dare_fix.h, units.tsv, protos.tsv, callees.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
+Needs game/decomp/dare/ (dare.h, dare_fix.h, units.tsv, protos.tsv, callees.tsv, globals.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
 """
-import os, re, shutil, sys, time
+import os, re, shutil, struct, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'llm_port', 'meshdecode'))
 import match  # noqa: E402
 from dare_header import mangled_class  # noqa: E402
+from dare_callees import data_refs  # noqa: E402
 from port import ask, extract  # noqa: E402  (meshdecode/port.py: model API with a fresh seed, code extraction)
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -21,7 +22,7 @@ DARE = os.path.join(ROOT, 'game', 'decomp', 'dare')
 QWEN = os.path.join(ROOT, 'game', 'analysis', 'qwen')
 HEADER_BUDGET = 30000  # characters of dare.h per prompt (the whole header is ~265 KB)
 
-TASK = """Write C++ source that compiles with Metrowerks CodeWarrior for PS2 3.0.3 (mwccps2 -O4,p -enum min) to
+TASK = """Write C++ source that compiles with Metrowerks CodeWarrior for PS2 3.0.3 (mwccps2 -O4,p -enum min -sdatathreshold 0) to
 EXACTLY the retail machine code below (byte-matching decompilation of Ubisoft's DARE sound engine).
 
 Function: {name}   ({size} bytes at 0x{addr:x}, original source file {file})
@@ -29,7 +30,8 @@ Declaration: {decl}
 Parameter names: {params}
 Original local variable names: {locals}
 
-## Retail assembly (branch delay slots are written with a leading _; call targets are named with mangled names)
+## Retail assembly (branch delay slots are written with a leading _; call targets are named with mangled names;
+## "; = name" names the global an instruction reaches, "; = 1.5f" the float constant an mtc1 moves)
 ```
 {asm}
 ```
@@ -39,18 +41,25 @@ Original local variable names: {locals}
 {ghidra}
 ```
 
+## Globals this function uses (names and sizes from the developer's symbols)
+{globals}
+
 ## Excerpt of dare.h (the real header, generated from the developer's debug info; your file must #include "dare.h")
 ```cpp
 {header}
 ```
 
 ## Rules
-- Your file starts with #include "dare.h" and defines only this function ({how}). You may add extern
-  declarations, but never redefine or change a type from dare.h. If the function cannot be written without a
-  header change (a missing member or type), reply with one line "NEEDS HEADER CHANGE: <what>" and no code.
+- Your file starts with #include "dare.h" and defines only this function ({how}). dare.h already defines every
+  class, struct, union, enum and template it uses: never write a type definition yourself. You may add extern
+  declarations (functions, and globals that dare.h does not declare: extern <type of that size> <name>;). If the
+  function cannot be written without a header change (a missing member, type or declaration, or a method that is
+  called with no `this` but is not declared static), reply with one line "NEEDS HEADER CHANGE: <what>" and no code.
+- Use members by name: the header excerpt gives each member's offset (// +0x..); never cast raw offsets.
 - The judge compares every instruction; call targets and global addresses only need the right symbol.
 - What earlier matches taught us about this compiler:
-  - Two beq tests up front, then the default path, then the case bodies = a switch statement, not if/else.
+  - Two or more tests of the same value against different constants up front, then the default path, then the
+    case bodies = a switch statement. A single test is an if.
   - Stores come out in source order: write member assignments in the order the assembly stores them.
   - Plain int shifts give sll/sra; casts to short add dsll32/dsra32 pairs.
   - The constructor's vptr store is generated; write only the member assignments.
@@ -68,19 +77,29 @@ def row(key):
 
 
 def header_blocks():
-    # top-level struct definitions (with their DARE_CHECK lines dropped), enums and C declarations, by name
+    # top-level struct definitions (members commented with their offsets from the DARE_CHECK lines, which are
+    # dropped), enums, C declarations and globals, by name
+    lines = open(os.path.join(DARE, 'dare.h')).read().splitlines(True)
+    ofs = {(m.group(1), m.group(2)): int(m.group(3)) for m in
+           (re.search(r'DARE_OFS\((\w+), (\w+)\) == (\d+)', l) for l in lines) if m}
+    size = {m.group(1): int(m.group(2)) for m in (re.search(r'sizeof\((\w+)\) == (\d+)', l) for l in lines) if m}
     blocks, cur, name = {}, [], None
-    for line in open(os.path.join(DARE, 'dare.h')):
+    for line in lines:
         if name:
+            m = re.search(r'\b(\w+)(\[[^\]]*\])?;\s*$', line)
+            if m and '(' not in line and (name, m.group(1)) in ofs:
+                line = '%s  // +0x%x\n' % (line.rstrip(), ofs[(name, m.group(1))])
             cur.append(line)
             if line.startswith('};'):
                 blocks[name], name = ''.join(cur), None
             continue
         m = re.match(r'(struct|union) (\w+)\b[^;]*\{\s*$', line)
         if m:
-            name, cur = m.group(2), [line]
+            name = m.group(2)
+            cur = [line.rstrip() + ('  // size %d\n' % size[name] if name in size else '\n')]
             continue
-        m = re.match(r'enum (\w+) \{', line) or re.match(r'[\w \*]*?\b(\w+)\(.*\);$', line)
+        m = (re.match(r'enum (\w+) \{', line) or re.match(r'[\w \*]*?\b(\w+)\(.*\);$', line)
+             or re.match(r'extern [^(]*?\b(\w+)(\[[^\]]*\])?;$', line))
         if m and not line.startswith('DARE_'):
             blocks[m.group(1)] = line
     return blocks
@@ -129,17 +148,53 @@ def name_callees(asm, ghidra):
     return asm, ghidra, ' '.join(used | {mangled_class(n)[0] or '' for n in used})
 
 
+def annotate(asm, ghidra, addr, size):
+    # globals.tsv names on the instructions that reach them (and Ghidra's DAT_ names); float constants on mtc1
+    p = os.path.join(DARE, 'globals.tsv')
+    rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
+    gl = {int(a, 16): (n, int(sz)) for a, n, sz, v, other in rows if int(v) > int(other)}
+    elf = open(match.ELF, 'rb').read()
+    word = lambda a: struct.unpack_from('<I', elf, a - 0x100000 + 0x100)[0]
+    notes, used = {}, {}
+    for ia, t in data_refs(word, addr, size):
+        if t in gl:
+            notes[ia] = gl[t][0]
+            used[gl[t][0].split('+')[0]] = gl[t][1]
+    const = {}
+    for a in range(addr, addr + size, 4):
+        w = word(a)
+        op, rs, rt, rd = w >> 26, (w >> 21) & 31, (w >> 16) & 31, (w >> 11) & 31
+        if op == 0x0f:
+            const[rt] = (w & 0xffff) << 16
+        elif op == 0x0d and rs in const:  # ori
+            const[rt] = const[rs] | (w & 0xffff)
+        elif op == 0x11 and rs == 4:  # mtc1 rt -> f(rd)
+            v = 0 if rt == 0 else const.get(rt)
+            if v is not None:
+                notes[a] = '%gf' % struct.unpack('<f', struct.pack('<I', v))[0]
+    asm = '\n'.join(l + '   ; = ' + notes[int(l[:8], 16)] if re.match(r'[0-9a-f]{8} ', l) and int(l[:8], 16) in notes
+                    else l for l in asm.splitlines())
+    names = {t: n for t, (n, sz) in gl.items()}
+    # Ghidra writes DAT_00680c80, _DAT_..., PTR_..., or a type prefix + Ram00680c80 (iRam, puRam, ...)
+    ghidra = re.sub(r'\b(?:_?DAT_|PTR_|[a-z]*Ram)([0-9a-f]{8})\b', lambda m: names.get(int(m.group(1), 16), m.group(0)),
+                    ghidra)
+    return asm, ghidra, used
+
+
 def prompt(mangled, addr, size, file):
     proto = next((l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'protos.tsv'))
                   if l.split('\t')[0] == mangled), [mangled, file, '?', '', ''])
     asm = open(os.path.join(DARE, 'asm', '%08x.s' % addr)).read().strip()
     ghidra = open(os.path.join(DARE, 'ghidra_c', '%08x.c' % addr)).read().strip()
     asm, ghidra, callees = name_callees(asm, ghidra)
-    header, cls = header_for(mangled, proto[2], asm + ' ' + callees, ghidra)
+    asm, ghidra, used = annotate(asm, ghidra, addr, size)
+    header, cls = header_for(mangled, proto[2], asm + ' ' + callees + ' ' + ' '.join(used), ghidra)
+    globs = '\n'.join('- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
+                       else 'not in dare.h: declare it yourself') for n, sz in sorted(used.items())) or 'none'
     how = 'as %s::<name>' % cls if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
-                       header=header, how=how)
+                       header=header, how=how, globals=globs)
 
 
 def judge(path, mangled, addr, size, elf):

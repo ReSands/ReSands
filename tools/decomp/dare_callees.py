@@ -23,7 +23,7 @@ LOADSTORE = {0x08, 0x09, 0x20, 0x21, 0x23, 0x24, 0x25, 0x27, 0x28, 0x29, 0x2b, 0
 
 
 def data_refs(word, addr, size):
-    # absolute addresses: lui rX,hi then addiu / load / store with base rX (lo sign-extended)
+    # absolute addresses: lui rX,hi then addiu / load / store with base rX (lo sign-extended) -> [(instr addr, target)]
     out, hi = [], {}
     for a in range(addr, addr + size, 4):
         w = word(a)
@@ -32,7 +32,7 @@ def data_refs(word, addr, size):
             hi[rt] = (w & 0xffff) << 16
             continue
         if op in LOADSTORE and rs in hi:
-            out.append((hi[rs] + ((w & 0xffff) ^ 0x8000) - 0x8000) & 0xffffffff)
+            out.append((a, (hi[rs] + ((w & 0xffff) ^ 0x8000) - 0x8000) & 0xffffffff))
             if op == 0x09 or rt == rs:  # addiu, or a load into the base register, ends the pair
                 hi.pop(rs, None)
     return out
@@ -68,7 +68,7 @@ def main(pop1, retail_elf, units, out, out_globals=None):
         for x, y in zip(a, b):
             if y in names:
                 votes[x][names[y]] += 1
-        a, b = data_refs(rword, ra, rs), data_refs(pword, pa, ps)
+        a, b = [t for _, t in data_refs(rword, ra, rs)], [t for _, t in data_refs(pword, pa, ps)]
         if len(a) == len(b):
             for x, y in zip(a, b):
                 n, sz = obj_name(y)
