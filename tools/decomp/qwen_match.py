@@ -71,7 +71,7 @@ def row(key):
     # units.tsv: file, mangled, POP1 size, retail addr, retail size, same size
     for line in open(os.path.join(DARE, 'units.tsv')):
         f = line.rstrip('\n').split('\t')
-        if f[3] != '-' and key in (f[1], f[3], f[3].lstrip('0')):
+        if f[3] != '-' and key in (f[1], f[3], f[3].lstrip('0')) or f[3] == key.lstrip('0'):
             return f[1], int(f[3], 16), int(f[4]), f[0]
     sys.exit('not in units.tsv with a retail address: ' + key)
 
@@ -172,6 +172,10 @@ def annotate(asm, ghidra, addr, size):
             v = 0 if rt == 0 else const.get(rt)
             if v is not None:
                 notes[a] = '%gf' % struct.unpack('<f', struct.pack('<I', v))[0]
+        elif op in (0, 0x1c):  # R-type / MMI: writes rd
+            const.pop(rd, None)
+        elif op not in (0x28, 0x29, 0x2b, 0x3f, 0x1f, 0x39, 0x3d) and op >> 3 != 0 or op == 0x09:
+            const.pop(rt, None)  # I-type ALU ops and loads write rt (stores and branches do not)
     asm = '\n'.join(l + '   ; = ' + notes[int(l[:8], 16)] if re.match(r'[0-9a-f]{8} ', l) and int(l[:8], 16) in notes
                     else l for l in asm.splitlines())
     names = {t: n for t, (n, sz) in gl.items()}

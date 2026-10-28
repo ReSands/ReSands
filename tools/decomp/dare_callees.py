@@ -22,6 +22,9 @@ def jals(word, addr, size):
 LOADSTORE = {0x08, 0x09, 0x20, 0x21, 0x23, 0x24, 0x25, 0x27, 0x28, 0x29, 0x2b, 0x31, 0x37, 0x39, 0x3f, 0x1e, 0x1f}
 
 
+WRITES_RT = {0x09, 0x1a, 0x1b, 0x1e, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x37}
+
+
 def data_refs(word, addr, size):
     # absolute addresses: lui rX,hi then addiu / load / store with base rX (lo sign-extended) -> [(instr addr, target)]
     out, hi = [], {}
@@ -33,8 +36,12 @@ def data_refs(word, addr, size):
             continue
         if op in LOADSTORE and rs in hi:
             out.append((a, (hi[rs] + ((w & 0xffff) ^ 0x8000) - 0x8000) & 0xffffffff))
-            if op == 0x09 or rt == rs:  # addiu, or a load into the base register, ends the pair
-                hi.pop(rs, None)
+        # any other write to a register forgets its lui value: I-type ALU ops and GPR loads write rt, R-type and MMI
+        # ops rd, mfc1 rt (jumps, branches and stores write none)
+        if op in WRITES_RT or 0x08 <= op <= 0x0e or (op == 0x11 and rs == 0):
+            hi.pop(rt, None)
+        elif op in (0x00, 0x1c):
+            hi.pop((w >> 11) & 31, None)
     return out
 
 
