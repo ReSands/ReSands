@@ -12,9 +12,9 @@ if (Test-Path $pidFile) {
     } else { 'no Qwen job running' }
     Remove-Item -Force $pidFile
 } else { 'no Qwen job running' }
-# a port.py left from a job started some other way
+# a port.py / qwen_match.py left from a job started some other way
 Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
-    Where-Object { $_.CommandLine -match 'vu1port\\port\.py' } |
+    Where-Object { $_.CommandLine -match 'vu1port\\port\.py|decomp\\qwen_match\.py' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force; "stopped port.py (process $($_.ProcessId))" }
 & "$PSScriptRoot\llama-serve.ps1" -Stop | Out-Null
 'llama-server stopped; the GPU is free'

@@ -4,17 +4,21 @@ Usage (on the PC, where mwccps2 and llama-server run):
   python tools/decomp/qwen_match.py <mangled name | retail addr hex> [--rounds 8] [--url http://127.0.0.1:8033]
   python tools/decomp/qwen_match.py <...> --prompt      print the first prompt only (no model, no compiler)
   python tools/decomp/qwen_match.py <...> --try <file>  judge a file as a round would (runner test without the model)
-Needs game/decomp/dare/ (dare.h, dare_fix.h, units.tsv, protos.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
+  python tools/decomp/qwen_match.py --queue | --summary  the night queue (addrs left, in order) / the results so far
+--rounds N = N more rounds; --until <unix time>: no new round after it.
+Needs game/decomp/dare/ (dare.h, dare_fix.h, units.tsv, protos.tsv, callees.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
 """
 import os, re, shutil, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'llm_port', 'meshdecode'))
 import match  # noqa: E402
+from dare_header import mangled_class  # noqa: E402
 from port import ask, extract  # noqa: E402  (meshdecode/port.py: model API with a fresh seed, code extraction)
 
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
 DARE = os.path.join(ROOT, 'game', 'decomp', 'dare')
+QWEN = os.path.join(ROOT, 'game', 'analysis', 'qwen')
 HEADER_BUDGET = 30000  # characters of dare.h per prompt (the whole header is ~265 KB)
 
 TASK = """Write C++ source that compiles with Metrowerks CodeWarrior for PS2 3.0.3 (mwccps2 -O4,p -enum min) to
@@ -25,7 +29,7 @@ Declaration: {decl}
 Parameter names: {params}
 Original local variable names: {locals}
 
-## Retail assembly (branch delay slots are written with a leading _)
+## Retail assembly (branch delay slots are written with a leading _; call targets are named with mangled names)
 ```
 {asm}
 ```
@@ -84,11 +88,7 @@ def header_blocks():
 
 def header_for(mangled, decl, asm, ghidra):
     blocks = header_blocks()
-    m = re.search(r'__(?:Q2\d+\w+?)?(\d+)', mangled)  # method: __<len><Class>F...
-    cls = mangled[m.end():m.end() + int(m.group(1))] if m and not mangled.startswith('__') else None
-    if mangled.startswith('__'):  # __ct__5CToolFv: operator / constructor / destructor
-        m2 = re.match(r'__\w\w__(\d+)', mangled)
-        cls = mangled[m2.end():m2.end() + int(m2.group(1))] if m2 else None
+    cls = mangled_class(mangled)[0]
     seeds = ([cls] if cls else []) + re.findall(r'\w+', decl + ' ' + asm + ' ' + ghidra)
     out, seen, size, queue = [], set(), 0, [s for s in seeds if s in blocks]
     while queue:
@@ -107,12 +107,35 @@ def header_for(mangled, decl, asm, ghidra):
     return ''.join(out), cls
 
 
+def callee_names():
+    # callees.tsv (dare_callees.py): retail call target -> POP1 name, kept only when it outvotes all other names
+    p = os.path.join(DARE, 'callees.tsv')
+    rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
+    return {int(a, 16): n for a, n, v, other in rows if int(v) > int(other)}
+
+
+def name_callees(asm, ghidra):
+    # retail jal comments and Ghidra's FUN_<addr> -> POP1 names; returns the texts and the names' classes
+    names, used = callee_names(), set()
+
+    def sub(m):
+        a = int(m.group(1), 16)
+        if a not in names:
+            return m.group(0)
+        used.add(names[a])
+        return m.group(0).split(';')[0] + '; ' + names[a] if ';' in m.group(0) else names[a]
+    asm = re.sub(r'jal 0x([0-9a-f]+)\s+; \S+', sub, asm)
+    ghidra = re.sub(r'\bFUN_([0-9a-f]{8})\b', sub, ghidra)
+    return asm, ghidra, ' '.join(used | {mangled_class(n)[0] or '' for n in used})
+
+
 def prompt(mangled, addr, size, file):
     proto = next((l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'protos.tsv'))
                   if l.split('\t')[0] == mangled), [mangled, file, '?', '', ''])
     asm = open(os.path.join(DARE, 'asm', '%08x.s' % addr)).read().strip()
     ghidra = open(os.path.join(DARE, 'ghidra_c', '%08x.c' % addr)).read().strip()
-    header, cls = header_for(mangled, proto[2], asm, ghidra)
+    asm, ghidra, callees = name_callees(asm, ghidra)
+    header, cls = header_for(mangled, proto[2], asm + ' ' + callees, ghidra)
     how = 'as %s::<name>' % cls if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
@@ -130,13 +153,54 @@ def judge(path, mangled, addr, size, elf):
     if not ok:
         return False, -1, 'COMPILE ERROR\n' + msg
     matched, text = match.objdiff(obj, mangled, addr, size, elf)
-    rows = text.splitlines()[2:]
-    return matched, sum(not r.startswith('>>') for r in rows), text
+    return matched, score(text), text
+
+
+def score(report):
+    # matching instructions in a judge report (-1 = did not compile)
+    return -1 if report.startswith('COMPILE') else sum(not r.startswith('>>') for r in report.splitlines()[2:])
+
+
+def queue():
+    # functions not yet PASS / HEADER: untried first, then the same-size ones (most likely to match POP1's layouts), smallest first
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
+    at = lambda r, f: os.path.exists(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16), f))
+    rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (at(r, 'attempts'), r[5] != '1', int(r[4]), r[3]))
+    done = lambda r: at(r, 'PASS') or at(r, 'HEADER')
+    return [r[3] for r in rows if not done(r)]
+
+
+def summary():
+    # one line per state, then the near misses (best attempt, matching instructions of the retail size)
+    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+             if f[3] != '-'}
+    state, near = {'PASS': 0, 'HEADER': 0, 'tried': 0}, []
+    for d in sorted(os.listdir(QWEN)) if os.path.isdir(QWEN) else []:
+        if not d.startswith('dare_') or int(d[5:], 16) not in units:
+            continue
+        u, path = units[int(d[5:], 16)], os.path.join(QWEN, d)
+        flag = next((f for f in ('PASS', 'HEADER') if os.path.exists(os.path.join(path, f))), 'tried')
+        state[flag] += 1
+        if flag == 'tried':
+            att = os.path.join(path, 'attempts')
+            best = max((score(open(os.path.join(att, f)).read()) for f in os.listdir(att) if f.endswith('.report.txt')),
+                       default=-1)
+            near.append((best / (int(u[4]) // 4), best, int(u[4]) // 4, u[1]))
+    print('DARE: %d of %d passed, %d need a header change, %d tried without a match, %d not tried' % (
+        state['PASS'], len(units), state['HEADER'], state['tried'], len(units) - sum(state.values())))
+    for frac, best, n, name in sorted(near, reverse=True)[:15]:
+        print('  near miss: %d of %d instructions  %s' % (best, n, name))
 
 
 def main(argv):
     opt = lambda k, v: argv[argv.index(k) + 1] if k in argv else v
-    url, rounds = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '8'))
+    url, rounds, until = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '8')), int(opt('--until', '0'))
+    if argv[0] == '--queue':
+        print('\n'.join(queue()))
+        return 0
+    if argv[0] == '--summary':
+        summary()
+        return 0
     mangled, addr, size, file = row(argv[0])
     first = prompt(mangled, addr, size, file)
     if '--prompt' in argv:
@@ -145,10 +209,10 @@ def main(argv):
         return 0
     elf = open(match.ELF, 'rb').read()
     if '--try' in argv:
-        ok, score, text = judge(opt('--try', ''), mangled, addr, size, elf)
+        ok, _n, text = judge(opt('--try', ''), mangled, addr, size, elf)
         print(text)
         return 0 if ok else 1
-    out = os.path.join(ROOT, 'game', 'analysis', 'qwen', 'dare_%08x' % addr)
+    out = os.path.join(QWEN, 'dare_%08x' % addr)
     att = os.path.join(out, 'attempts')
     os.makedirs(att, exist_ok=True)
     if os.path.exists(os.path.join(out, 'PASS')):
@@ -163,9 +227,13 @@ def main(argv):
         open(os.path.join(out, 'PASS'), 'w').write(done[-1][:-4] + '\n')
         say('PASS in %s (found on resume)' % done[-1][:-4])
         return 0
-    best = -2
-    last = max((int(f[5:7]) for f in done), default=0)
-    for n in range(last + 1, max(rounds, last) + 1):
+    best = max((score(open(os.path.join(att, f[:-4] + '.report.txt')).read()) for f in done), default=-2)
+    # --rounds = this many more rounds; rounds that wrote no code leave a .nocode.txt so a resume counts them
+    last = max((int(f[5:7]) for f in os.listdir(att) if f.startswith('round')), default=0)
+    for n in range(last + 1, last + rounds + 1):
+        if until and time.time() > until:
+            say('round%02d: past --until, stopping' % n)
+            return 1
         messages = [{'role': 'user', 'content': first}]
         if prev:
             messages += [{'role': 'assistant', 'content': '```cpp\n' + prev[0] + '```'},
@@ -173,34 +241,36 @@ def main(argv):
                           prev[1] + '\n\nChange the source so the compiler produces the retail instructions, and '
                           'reply with the complete file in one ```cpp block. Keep your reasoning short.'}]
         try:
-            content, _r, usage, secs = ask(url, messages)
+            content, reasoning, usage, secs = ask(url, messages)
         except Exception as e:  # server hiccup: try the round again later
             say('round%02d: request failed (%s); waiting 60 s' % (n, str(e)[:100]))
             time.sleep(60)
             continue
-        code = extract(content)
+        # a draft inside the reasoning still gets judged when the answer has none (lesson from 23 Oct)
+        code = extract(content) or extract(reasoning)
         if code is None:
             need = re.search(r'NEEDS HEADER CHANGE:.*', content)
             if need:
                 say('round%02d: %s' % (n, need.group(0)[:200]))
                 open(os.path.join(out, 'HEADER'), 'w').write(need.group(0) + '\n')
                 return 3
+            open(os.path.join(att, 'round%02d.nocode.txt' % n), 'w').write((content or reasoning)[-4000:])
             say('round%02d: no code block (%.0f s, %s tokens)' % (n, secs, usage.get('completion_tokens')))
             continue
         path = os.path.join(att, 'round%02d.cpp' % n)
         open(path, 'w').write(code)
-        ok, score, text = judge(path, mangled, addr, size, elf)
+        ok, got, text = judge(path, mangled, addr, size, elf)
         open(path[:-4] + '.report.txt', 'w').write(text)
         say('round%02d: %s; %.0f s, %s tokens' % (n, text.splitlines()[0][:100], secs, usage.get('completion_tokens')))
-        if score > best:
-            best = score
+        if got > best:
+            best = got
             open(os.path.join(out, 'best.cpp'), 'w').write(code)
         prev = (code, text)
         if ok:
             open(os.path.join(out, 'PASS'), 'w').write('round%02d\n' % n)
             say('PASS in round%02d' % n)
             return 0
-    say('stopped after %d rounds' % rounds)
+    say('no match after %d more rounds' % rounds)
     return 1
 
 
