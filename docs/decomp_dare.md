@@ -12,10 +12,15 @@ the compiler check: `docs/roadmap.md` "2.0".
 - **Not done:** the Qwen runner, the queue, the night job and the PC desktop shortcut. **There is no Qwen shortcut
   yet.** The planned name is "Qwen DARE audio decomp"; only put it on the desktop after a smoke run passes end to end.
 - **Was in progress:** hand-matching a C function and a constructor before trusting the header more widely:
-  `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes, sndreal.c), `SND_fn_bIsResourceStreamedSnd` (0x17dc40,
-  76 bytes, sndplay.c: compares `eType` with 0xd / 1 and calls the Sxd / Snd variants), `__ct__5CToolFv` (0x161380,
+  `SND_fn_vSndRealTwinToSndReal` (0x1612c0, 40 bytes, sndreal.c), `__ct__5CToolFv` (0x161380,
   32 bytes: vptr store plus three member clears). Their assembly and Ghidra C are in `game/decomp/dare/asm/` and
   `ghidra_c/`.
+- **28 Oct: `SND_fn_bIsResourceStreamedSnd` (0x17dc40, 76 bytes) MATCHES** compiled as C++ against `dare.h`
+  (`game/decomp/dare/snd_b.cpp`): a `switch (pstBRDisk->eType)` with `TYPE_SAMPLE` -> `SND_fn_bIsResourceStreamedSxd`,
+  `TYPE_MULTITRACK` -> `..MultiTrack`, `default: return 0`. The `if` / `else if` version of the same logic does not
+  match (it inverts the branches): **two `beq`s up front, then the default, then the case bodies = a `switch`**
+  (a hint for the Qwen prompt). The callees are unnamed in retail (0x173140 / 0x1731c0); the mapping comes from the
+  enum, and the judge masks call targets. Compiling a `.c` source as C++ was fine here (no language switch needed yet).
 
 ## Tools (all in `tools/decomp/`)
 
