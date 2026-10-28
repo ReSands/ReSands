@@ -110,6 +110,11 @@ the compiler check: `docs/roadmap.md` "2.0".
    a MATCH and writes PASS.
 4. ~~Queue~~ built 28 Oct: `qwen_match.py --queue` = functions without PASS / HEADER, untried first, then the 311
    same-size ones, smallest first, then the other 358. `--summary` = counts plus the 15 nearest misses.
+- **First run, 28 Oct 15:37-17:44 (`oct28.ps1`, 4 rounds, stopped by hand): 17 of 29 functions matched (59%)**, plus
+  `GetPos` from the smoke test = 18 of 669. All were the smallest same-size functions (32-44 bytes); ~4.2 min per
+  function on average, many PASS in round 1-2. 12 missed: best attempts 0-6 of 8-12 instructions; 2 never compiled
+  (`SND_fn_rGetLengthMultiTrack`, `SndManager::AddCallBack`). Not looked into yet: why the misses fail (read their
+  `attempts\roundNN.report.txt` on the PC). Resume: start "Qwen DARE audio decomp" again (it continues the queue).
 5. ~~Night job~~ built 28 Oct: `tools/windows/oct28.ps1` (from `oct26.ps1`: llama-server checked before every
    function, one pass of `-Rounds 4` per function, summary into `game\jobs\qwen-night.log`, then shutdown; `-Until`,
    `-NoShutdown`, `-Shortcut` remakes the desktop shortcut). "Stop Qwen" now also ends `qwen_match.py`. A pass over
