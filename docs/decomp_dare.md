@@ -115,6 +115,27 @@ the compiler check: `docs/roadmap.md` "2.0".
   function on average, many PASS in round 1-2. 12 missed: best attempts 0-6 of 8-12 instructions; 2 never compiled
   (`SND_fn_rGetLengthMultiTrack`, `SndManager::AddCallBack`). Not looked into yet: why the misses fail (read their
   `attempts\roundNN.report.txt` on the PC). Resume: start "Qwen DARE audio decomp" again (it continues the queue).
+- **Why the 12 misses missed (28 Oct evening; attempts copied to `game/analysis/qwen_pc/`). Fixes, in order of
+  value; 1 done, the rest NOT done yet:**
+  1. *Globals have no names.* DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 functions,
+     zero `gp`). **Done:** `dare_callees.py` now also writes `game/decomp/dare/globals.tsv` (retail data address ->
+     POP1 symbol [+offset], size; 237 named, e.g. 0x680c80 `gs_bStackInitialised`, 0x680c98 `g_pStackHead`,
+     0x6a42b0 `g_pThemeManager`). To do: annotate the asm (`; name`) and Ghidra's `DAT_` names in the prompt, and
+     tell Qwen to declare globals that are not in dare.h as `extern <type> <name>;` (most are file statics).
+  2. *Compiler flag missing: `-sdatathreshold 0`.* Without it an `extern` global compiles to `lw 0(gp)`; with it
+     to retail's `lui at` / `lw (at)` (tested on the PC 28 Oct). Add to `match.py` FLAGS, then re-judge the 18
+     passes (`qwen_match.py <addr> --try game\analysis\qwen\dare_<addr>\best.cpp`) to make sure none breaks.
+  3. *No member offsets in the header excerpt* (`header_blocks` keeps the struct but drops its DARE_CHECK lines):
+     Qwen picks the wrong member (`LoadBinaryResourceSilence`) or casts raw offsets (`TTransition::RemoveChild`).
+     Fix: comment each member with its offset from the `DARE_OFS(...) == N` checks.
+  4. *Float constants:* `GetLatency` returns `(int)3276.8f` (`lui 0x454c; ori 0xcccd; mtc1`); Qwen wrote 1000.
+     Fix: annotate lui/ori pairs that feed mtc1 with the float value.
+  5. *The switch hint misleads:* `TVirtualSample::Resume` (one test) came out as a switch. Reword: "two or more
+     tests of the same value against different constants".
+  6. *Header problems Qwen cannot see:* `RPS2::GetResLength` is called with no `this` (a0 = the union by value),
+     so it is probably static (DWARF lost it); `sndCList` got redefined by Qwen (tell it never to redefine a
+     dare.h type); `fn_lSendSoundRequestOnChannelWithFadeIn` (0x15d940, 7 args incl. a float) is not in dare.h or
+     the callee map, and retail tail-calls it (`j`).
 5. ~~Night job~~ built 28 Oct: `tools/windows/oct28.ps1` (from `oct26.ps1`: llama-server checked before every
    function, one pass of `-Rounds 4` per function, summary into `game\jobs\qwen-night.log`, then shutdown; `-Until`,
    `-NoShutdown`, `-Shortcut` remakes the desktop shortcut). "Stop Qwen" now also ends `qwen_match.py`. A pass over
