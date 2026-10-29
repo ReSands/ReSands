@@ -244,3 +244,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   with the same matrix. Offline, with only the colour pass, the water landed in a screen corner. Before wiring a port
   in, run it against the interpreter on the new caller's inputs (same VU memory and registers, compare the data
   memory after each run), not only on the traces' run order.
+- PowerShell unrolls a one-element array returned from an `if` expression: `$r = if (c) { ,@('a','b') }` iterates the
+  strings, so `$r[0]` is 'a'[0]. Build the list first and narrow it with `$runs = @(,$runs[0])`; echo the run names before
+  booting (29 Oct: a job booted without its save). Stop a job's game with `taskkill /f /pid` for each process and check
+  `tasklist` before the next boot: `Stop-ScheduledTask` leaves the game (and a looping script's next run) going.

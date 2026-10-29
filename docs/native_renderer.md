@@ -512,7 +512,15 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   fountain save (TBP 0x3480, FBW 4) matches the formula (no systematic error; later passes change the saved frame).
   Sweep of the 53 water saves vs their GS picture: 22 better, 6 worse, mean -0.09; GS-only 184926 8.29 -> 7.70, 145139
   11.33 -> 10.75, fountain 8.88 -> 7.62. The worse ones (193004, 192947 +0.6) have a native base frame darker than the
-  game's under the water, which the tint (0.80, 0.88, 0.99) darkens further. Awaiting the user's sheet review.
+  game's under the water, which the tint (0.80, 0.88, 0.99) darkens further. User sheet review: the water itself is
+  fine; the mist around feet and pillars standing in water is missing from both native columns (likely the GFX particles
+  of +0x88, which the offline tool lists but never draws; unproven).
+- **Water step 4 done (29 Oct night): live behind `POP_NATIVE_P6=1`** (needs the late lists, `-NativeLate`: the water is
+  in +0x88). Two live-only fixes the offline runs could not show: `worldFinish` refuses draws without a real texture, so
+  waterRecord marks its draws native itself; and the mask call (returns to 0x4B9FF8) is skipped when the colour pass can be
+  native (on the GS it closed the frame's purity: "ended by water +0x88" in 1,929 of 2,400 frames without P6). Fountain save
+  202926, 45 s hands-off: water draws 6,099, native 2,232, not replayed 0, 60 fps; the rest stay on the GS because a GS GFX
+  draw earlier in +0x88 ends the purity first (2,285 frames; the prefix rule, 0.2). The user watched it: looks good.
 - **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
   livecmp, ~1 s per save on the Mac): all 49 saves of 19 Oct render (`game/analysis/play1019/native/`,
   `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD
