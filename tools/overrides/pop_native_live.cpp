@@ -80,8 +80,10 @@ namespace vu1_impl
     inline thread_local Vu1PacketSink *packetSink = nullptr;
 }
 #define VU_TASK_R 1 // P9 uses R (VuState carries it)
+#define VU_PORT_NO_STAGE // two ports in one file: no harness entry
 #include "../../../../../../tools/vu1port/vu_gif.h"
 #include "../../../../../../tools/vu1port/ported/p9.cpp"
+#include "../../../../../../tools/vu1port/ported/p5.cpp" // GFX particles
 // the port's XGKICK: the packet as the interpreter's transfer would send it (the judge compares the two)
 void xgkick(VuState &vu, uint32_t qwordAddress)
 {
@@ -93,6 +95,9 @@ namespace pop_native_live
     // offline only (pop_state_frame_vu1 POP_P9_TRACE, tools/native/src/p9trace.cpp): runs a sprite VU run itself and
     // records it in the runtime's PS2X_VU1_TRACE format, the cases of the P9 port (tools/vu1port); null in the game
     void (*g_spriteRunHook)(VU1Interpreter &vu, uint8_t *code, uint8_t *data, GS &gs, int32_t pc, uint32_t tops) = nullptr;
+    // offline only (pop_state_frame_vu1): a GFX draw's particle packets (SetParticleEnv + CGraphicParticle DMA records,
+    // [start, end)) in the save's last chain, as FUN_004584C0 wrote them; 0 = none. Null in the game (captured there).
+    uint32_t (*g_particlePackets)(uint32_t element, uint32_t &end) = nullptr;
 }
 #else
 #define POP_SPRITE_VU1 0
@@ -1409,8 +1414,43 @@ namespace pop_native_live
             }
             return o;
         }
+#if POP_SPRITE_VU1
+        bool particleRecord(uint8_t *rdram, uint32_t start, uint32_t end, bool &recorded); // P5, below
+        const bool g_p5 = [] { const char *e = std::getenv("POP_NATIVE_P5"); return e && *e && *e != '0'; }();
+        // true: handled (the original ran, or offline the P5 geometry is in the frame); false: the CPU quads below
+        bool particlesP5(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            bool recorded = false;
+            if (g_particlePackets)
+            {
+                uint32_t end = 0;
+                const uint32_t start = g_particlePackets(getRegU32(ctx, 4), end);
+                particleRecord(rdram, start, end, recorded);
+                return recorded;
+            }
+            // the game builds the packets; drawn natively, the DMA pointer goes back so the GS never sees them
+            const uint32_t gso = guestAny(rdram, 0x00675148u), before = guestAny(rdram, gso + 0xEC), ra = getRegU32(ctx, 31);
+            g_origParticles(rdram, ctx, runtime);
+            if (ctx->pc != ra)
+                return true; // the scheduler unwound inside the call (override rule): its packets go to the GS
+            const uint32_t after = guestAny(rdram, gso + 0xEC);
+            if (particleRecord(rdram, before, after, recorded))
+            {
+                std::memcpy(getMemPtr(rdram, gso + 0xEC), &before, 4);
+                if (g_currentList == 0x88u || g_currentList == 0xA8u)
+                    ++g_lateStats.native;
+            }
+            else if (after != before)
+                worldOnGs(rdram, "gfx");
+            return true;
+        }
+#endif
         void particles(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+#if POP_SPRITE_VU1
+            if (g_frameCapturing && g_p5 && particlesP5(rdram, ctx, runtime))
+                return;
+#endif
             if (g_frameCapturing)
             {
                 const uint32_t element = getRegU32(ctx, 4);
@@ -1748,26 +1788,35 @@ namespace pop_native_live
         // The port (POP_NATIVE_P9=0: the interpreter only) keeps the registers in `port`; its data memory is the one
         // both run on. A run from 0x340 ends at the E bit at 0x380, so the packet's MSCNT goes on at 0x390; the
         // port does not report where other runs end (pc 0xffffffff), the interpreter does.
-        struct SpriteVu
+        // GFX particles (P5, ELF MPG 0x4D948C) run the same way: MSCALF 0x68 = 0x340 calls the matrix set-up at 0 and
+        // ends at the E bit at 0x370, the MSCNT goes on at 0x380 (docs/native_renderer.md "P4 and P5 in the game").
+        struct VuProg
         {
+            const char *name;                 // for the log
+            uint32_t mpg, size, resume;       // ELF MPG chain, its code bytes, where an MSCNT goes on after a run from 0x340
+            void (*portRun)(VuState &);
+            const char *env;                  // "0" or "interp": the interpreter only (to judge the port)
             std::unique_ptr<VU1Interpreter> vu;
             std::unique_ptr<VuState> port;
             std::vector<uint8_t> code;
             uint32_t tops = 0, cl = 4, wl = 4, next = 0xFFFFFFFFu;
             bool loaded = false, broken = false, usePort = false;
+            uint64_t runs = 0, interpreted = 0;
             uint8_t *data() { return port->mem; }
-        } g_spriteVu;
+        };
+        VuProg g_spriteVu{"sprite", 0x004E338Cu, 0x13A0u, 0x390u, vu1_p9::run, "POP_NATIVE_P9"};
+        VuProg g_particleVu{"particle", 0x004D948Cu, 0x17C0u, 0x380u, vu1_p5::run, "POP_NATIVE_P5"};
         alignas(16) unsigned char g_spriteGsStandIn[64]; // the GS reference execute() wants; never touched (forward = false)
         struct SpriteStats
         {
-            uint64_t draws = 0, native = 0, quads = 0, failed = 0, runs = 0, interpreted = 0;
-        } g_spriteStats;
+            uint64_t draws = 0, native = 0, quads = 0, failed = 0;
+        } g_spriteStats, g_particleStats;
 
-        bool spriteLoadProgram(uint8_t *rdram)
+        bool vuLoad(VuProg &s, uint8_t *rdram)
         {
             // MPG chain as tools/vu1progs.py reads it: each MPG word followed by its code, the next MPG word after it
-            g_spriteVu.code.assign(0x4000, 0);
-            uint32_t p = 0x004E338Cu, next = 0;
+            s.code.assign(0x4000, 0);
+            uint32_t p = s.mpg, next = 0;
             for (int k = 0; k < 64; ++k)
             {
                 const uint32_t w = guestAny(rdram, p);
@@ -1776,21 +1825,23 @@ namespace pop_native_live
                 const uint32_t num = ((w >> 16) & 0xFF) ? ((w >> 16) & 0xFF) : 256u, addr = (w & 0xFFFF) * 8;
                 if (addr != next || addr + num * 8 > 0x4000)
                     break;
-                std::memcpy(g_spriteVu.code.data() + addr, getConstMemPtr(rdram, p + 4), num * 8);
+                std::memcpy(s.code.data() + addr, getConstMemPtr(rdram, p + 4), num * 8);
                 next = addr + num * 8;
                 p += 4 + num * 8 + 4;
             }
-            if (next != 0x13A0)
+            if (next != s.size)
             {
-                std::fprintf(stderr, "[pop:native] sprite program: read 0x%x bytes at 0x4E338C (expected 0x13A0); sprites stay on the GS\n", next);
+                std::fprintf(stderr, "[pop:native] %s program: read 0x%x bytes at 0x%X (expected 0x%x); %ss stay on the GS\n", s.name, next, s.mpg,
+                             s.size, s.name);
                 return false;
             }
-            g_spriteVu.vu = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
-            g_spriteVu.port = std::make_unique<VuState>();
-            std::memset(g_spriteVu.port.get(), 0, sizeof(VuState));
-            g_spriteVu.port->vf[0][3] = 1.0f;
-            const char *e = std::getenv("POP_NATIVE_P9");
-            g_spriteVu.usePort = !g_spriteRunHook && !(e && *e == '0'); // the P9 trace records interpreter runs
+            s.vu = std::make_unique<VU1Interpreter>(VU1Interpreter::Unit::VU1);
+            s.port = std::make_unique<VuState>();
+            std::memset(s.port.get(), 0, sizeof(VuState));
+            s.port->vf[0][3] = 1.0f;
+            const char *e = std::getenv(s.env);
+            // the P9 trace records interpreter runs
+            s.usePort = !(&s == &g_spriteVu && g_spriteRunHook) && !(e && (*e == '0' || *e == 'i'));
             return true;
         }
 
@@ -1812,13 +1863,12 @@ namespace pop_native_live
 
         // one VU run: from `pc` (MSCAL/MSCALF) or on from where the last one ended (MSCNT, pc < 0); false = the
         // port cannot tell where to go on (the sprites then stay on the GS for the session)
-        bool spriteRun(int32_t pc)
+        bool vuRun(VuProg &s, int32_t pc)
         {
-            SpriteVu &s = g_spriteVu;
             GS &gs = *reinterpret_cast<GS *>(g_spriteGsStandIn);
             const unsigned csr = _mm_getcsr();
             _mm_setcsr(csr | 0x6000u); // round toward zero, as the runtime runs VU code
-            ++g_spriteStats.runs;
+            ++s.runs;
             if (s.usePort)
             {
                 VuState &v = *s.port;
@@ -1826,25 +1876,25 @@ namespace pop_native_live
                 if (entry == 0xFFFFFFFFu)
                 {
                     _mm_setcsr(csr);
-                    std::fprintf(stderr, "[pop:native] sprite program: MSCNT after a run the port cannot place; sprites stay on the GS\n");
+                    std::fprintf(stderr, "[pop:native] %s program: MSCNT after a run the port cannot place; %ss stay on the GS\n", s.name, s.name);
                     return false;
                 }
                 v.pc = entry;
                 v.top = s.tops;
-                vu1_p9::run(v);
-                s.next = entry == 0x340 ? 0x390u : 0xFFFFFFFFu;
+                s.portRun(v);
+                s.next = entry == 0x340 ? s.resume : 0xFFFFFFFFu;
                 if (v.pc != 0xFFFFFFFFu)
                 {
                     // a pc no stage starts at (a branch the traces never took): the interpreter takes the run over
-                    if (g_spriteStats.interpreted++ < 8)
-                        std::fprintf(stderr, "[pop:native] sprite program: no port stage at pc 0x%x (run from 0x%x); interpreter\n", v.pc, entry);
+                    if (s.interpreted++ < 8)
+                        std::fprintf(stderr, "[pop:native] %s program: no port stage at pc 0x%x (run from 0x%x); interpreter\n", s.name, v.pc, entry);
                     spriteToInterpreter(v, s.vu->state());
                     s.vu->execute(s.code.data(), 0x4000, s.data(), 0x4000, gs, nullptr, v.pc, s.tops, 0, 1u << 20);
                     spriteFromInterpreter(s.vu->state(), v);
                     s.next = s.vu->state().pc;
                 }
             }
-            else if (g_spriteRunHook)
+            else if (g_spriteRunHook && &s == &g_spriteVu)
                 g_spriteRunHook(*s.vu, s.code.data(), s.data(), gs, pc, s.tops);
             else if (pc >= 0)
                 s.vu->execute(s.code.data(), 0x4000, s.data(), 0x4000, gs, nullptr, uint32_t(pc), s.tops, 0, 1u << 20);
@@ -1854,8 +1904,9 @@ namespace pop_native_live
             return true;
         }
 
-        // VIF codes of one DMA packet (source chain, TTE: each tag's upper 64 bits are two VIF codes; CALL / RET nest)
-        bool spriteVif(uint8_t *rdram, uint32_t start)
+        // VIF codes of one DMA packet (source chain, TTE: each tag's upper 64 bits are two VIF codes; CALL / RET nest),
+        // up to `end` if given (the particle records are a run of CNTs)
+        bool vuVif(VuProg &s, uint8_t *rdram, uint32_t start, uint32_t end = 0)
         {
             std::vector<uint32_t> words;
             uint32_t addr = start;
@@ -1864,6 +1915,8 @@ namespace pop_native_live
             {
                 if (rec > 4096 || words.size() > (1u << 18))
                     return false;
+                if (end && addr >= end)
+                    break;
                 const uint32_t t0 = guestAny(rdram, addr), t1 = guestAny(rdram, addr + 4);
                 const uint32_t qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7, ta = t1 & 0x7FFFFFF0u;
                 words.push_back(guestAny(rdram, addr + 8));
@@ -1887,7 +1940,6 @@ namespace pop_native_live
                 else
                     addr = after;
             }
-            SpriteVu &s = g_spriteVu;
             uint32_t base = 0, offset = 0;
             for (size_t i = 0; i < words.size();)
             {
@@ -1958,7 +2010,7 @@ namespace pop_native_live
                     break;
                 case 0x14: case 0x15:
                 case 0x17:
-                    if (!spriteRun(cmd == 0x17 ? -1 : int32_t(imm) * 8))
+                    if (!vuRun(s, cmd == 0x17 ? -1 : int32_t(imm) * 8))
                     {
                         s.broken = true;
                         return false;
@@ -1979,18 +2031,201 @@ namespace pop_native_live
             return true;
         }
 
+        // XGKICK packets (PACKED ST / RGBAQ / XYZF2) -> world-space geometry: each GS screen point unprojected through the
+        // graphics object's +0x200 (world -> GS screen); sprites (two corners) as quads, triangles / strips / fans as
+        // triangles. false: a primitive these programs do not send (the call then goes to the GS)
+        bool gifToBatch(uint8_t *rdram, const std::vector<std::vector<uint8_t>> &packets, pop_assets::Batch &b, uint64_t &prims)
+        {
+            const uint32_t gso = guestAny(rdram, 0x00675148u);
+            bool ok = true;
+            // world <- GS screen: solve M p = s for the screen point (x, y, z) (M = +0x200, PS2 layout: rows of memory are
+            // the columns: s_c = sum_k M[k][c] p_k + M[3][c], divided by the same with c = 3)
+            float M[4][4];
+            for (int k = 0; k < 4; ++k)
+                for (int c = 0; c < 4; ++c)
+                    M[k][c] = guestF(rdram, gso + 0x200u + 16 * k + 4 * c);
+            const auto unproject = [&M](double x, double y, double z, float out[3]) {
+                const double sc[3] = {x, y, z};
+                double A[3][4];
+                for (int c = 0; c < 3; ++c)
+                {
+                    for (int k = 0; k < 3; ++k)
+                        A[c][k] = double(M[k][c]) - sc[c] * double(M[k][3]);
+                    A[c][3] = sc[c] * double(M[3][3]) - double(M[3][c]);
+                }
+                for (int col = 0; col < 3; ++col) // Gaussian elimination with partial pivoting
+                {
+                    int piv = col;
+                    for (int r = col + 1; r < 3; ++r)
+                        if (std::fabs(A[r][col]) > std::fabs(A[piv][col]))
+                            piv = r;
+                    std::swap(A[col], A[piv]);
+                    if (std::fabs(A[col][col]) < 1e-12)
+                        return false;
+                    for (int r = 0; r < 3; ++r)
+                        if (r != col)
+                        {
+                            const double f = A[r][col] / A[col][col];
+                            for (int k = col; k < 4; ++k)
+                                A[r][k] -= f * A[col][k];
+                        }
+                }
+                for (int k = 0; k < 3; ++k)
+                    out[k] = float(A[k][3] / A[k][k]);
+                return true;
+            };
+            uint32_t prim = 6, nv = 0;
+            pop_native::Vertex tri[3]{};
+            bool ok3[3]{};
+            for (const auto &pk : packets)
+            {
+                size_t q = 0;
+                const size_t nq = pk.size() / 16;
+                while (q < nq)
+                {
+                    uint64_t lo, hi;
+                    std::memcpy(&lo, pk.data() + q * 16, 8);
+                    std::memcpy(&hi, pk.data() + q * 16 + 8, 8);
+                    ++q;
+                    const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t(lo >> 58) & 3, nreg = (uint32_t(lo >> 60) & 0xF) ? uint32_t(lo >> 60) & 0xF : 16;
+                    const bool eop = (lo >> 15) & 1;
+                    if (flg != 0)
+                    {
+                        q += flg == 1 ? (size_t(nloop) * nreg + 1) / 2 : nloop; // not PACKED: not P9's
+                        if (eop)
+                            break;
+                        continue;
+                    }
+                    if ((lo >> 46) & 1)
+                    {
+                        prim = uint32_t(lo >> 47) & 0x7FF;
+                        nv = 0;
+                        if ((prim & 7) < 3 || (prim & 7) > 6)
+                        {
+                            ok = false; // points / lines: not these programs'
+                            break;
+                        }
+                    }
+                    float S = 0, T = 0, Q = 1;
+                    uint32_t rgba = 0;
+                    struct Corner
+                    {
+                        float x, y, u, v;
+                        uint32_t z;
+                    } c[2];
+                    int nc = 0;
+                    for (uint32_t l = 0; l < nloop && q < nq; ++l)
+                        for (uint32_t r = 0; r < nreg && q < nq; ++r, ++q)
+                        {
+                            const uint32_t reg = uint32_t(hi >> (4 * r)) & 0xF;
+                            uint32_t v[4];
+                            std::memcpy(v, pk.data() + q * 16, 16);
+                            if (reg == 2) // ST (+ Q in PACKED)
+                            {
+                                std::memcpy(&S, &v[0], 4);
+                                std::memcpy(&T, &v[1], 4);
+                                std::memcpy(&Q, &v[2], 4);
+                            }
+                            else if (reg == 1)
+                                rgba = (v[0] & 0xFF) | (v[1] & 0xFF) << 8 | (v[2] & 0xFF) << 16 | (v[3] & 0xFF) << 24;
+                            else if ((reg == 4 || reg == 5) && (prim & 7) != 6) // XYZF2 / XYZ2 of a triangle, strip or fan
+                            {
+                                const bool adc = (v[3] >> 15) & 1;
+                                const float qq = Q != 0.0f ? Q : 1.0f;
+                                pop_native::Vertex vx{};
+                                const bool good = unproject(float(v[0] & 0xFFFF) / 16.0f, float(v[1] & 0xFFFF) / 16.0f,
+                                                            double(reg == 4 ? (v[2] >> 4) & 0xFFFFFF : v[2]), vx.pos);
+                                vx.uv[0] = S / qq;
+                                vx.uv[1] = T / qq;
+                                for (int ch = 0; ch < 4; ++ch)
+                                    vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
+                                // the GS vertex queue: list = every third, strip = the last three, fan = the first and the last two
+                                if ((prim & 7) == 3 && nv == 3)
+                                    nv = 0;
+                                else if ((prim & 7) == 4 && nv == 3)
+                                    tri[0] = tri[1], tri[1] = tri[2], ok3[0] = ok3[1], ok3[1] = ok3[2], nv = 2;
+                                else if ((prim & 7) == 5 && nv == 3)
+                                    tri[1] = tri[2], ok3[1] = ok3[2], nv = 2;
+                                tri[nv] = vx;
+                                ok3[nv++] = good;
+                                if (nv == 3 && !adc && ok3[0] && ok3[1] && ok3[2])
+                                {
+                                    const uint32_t base0 = uint32_t(b.vertices.size());
+                                    for (int k = 0; k < 3; ++k)
+                                    {
+                                        b.vertices.push_back(tri[k]);
+                                        if (!(prim & 8)) // flat shading: the last vertex's colour
+                                            std::memcpy(b.vertices.back().colour, tri[2].colour, sizeof tri[2].colour);
+                                    }
+                                    b.indices.insert(b.indices.end(), {base0, base0 + 1, base0 + 2});
+                                    ++prims;
+                                }
+                            }
+                            else if (reg == 0) // PRIM
+                            {
+                                prim = v[0] & 0x7FF;
+                                nv = 0;
+                            }
+                            else if (reg == 4 || reg == 5) // XYZF2 / XYZ2 of a sprite
+                            {
+                                const bool adc = (v[3] >> 15) & 1;
+                                const float qq = Q != 0.0f ? Q : 1.0f;
+                                c[nc] = {float(v[0] & 0xFFFF) / 16.0f, float(v[1] & 0xFFFF) / 16.0f, S / qq, T / qq,
+                                         reg == 4 ? (v[2] >> 4) & 0xFFFFFF : v[2]};
+                                if (++nc == 2)
+                                {
+                                    nc = 0;
+                                    if (adc)
+                                        continue;
+                                    static const bool spriteLog = std::getenv("POP_SPRITE_LOG") != nullptr;
+                                    static int spriteLogged = 0;
+                                    if (spriteLog && spriteLogged++ < 24)
+                                        std::fprintf(stderr, "[pop:sprite] (%.1f %.1f) uv (%.3f %.3f) - (%.1f %.1f) uv (%.3f %.3f) z %u rgba %08x Q %.4g\n", c[0].x,
+                                                     c[0].y, c[0].u, c[0].v, c[1].x, c[1].y, c[1].u, c[1].v, c[1].z, rgba, Q);
+                                    // a sprite: corners 0 and 1, colour and Z of the second
+                                    const float xs[4] = {c[0].x, c[1].x, c[1].x, c[0].x}, ys[4] = {c[0].y, c[0].y, c[1].y, c[1].y};
+                                    const float us[4] = {c[0].u, c[1].u, c[1].u, c[0].u}, vs[4] = {c[0].v, c[0].v, c[1].v, c[1].v};
+                                    const uint32_t base0 = uint32_t(b.vertices.size());
+                                    bool good = true;
+                                    for (int k = 0; k < 4 && good; ++k)
+                                    {
+                                        pop_native::Vertex vx{};
+                                        good = unproject(xs[k], ys[k], double(c[1].z), vx.pos);
+                                        vx.uv[0] = us[k];
+                                        vx.uv[1] = vs[k];
+                                        for (int ch = 0; ch < 4; ++ch)
+                                            vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
+                                        b.vertices.push_back(vx);
+                                    }
+                                    if (!good)
+                                    {
+                                        b.vertices.resize(base0);
+                                        continue;
+                                    }
+                                    b.indices.insert(b.indices.end(), {base0, base0 + 1, base0 + 2, base0, base0 + 2, base0 + 3});
+                                    ++prims;
+                                }
+                            }
+                        }
+                    if (eop || !ok)
+                        break;
+                }
+            }
+            return ok;
+        }
+
         // the frame's sprites drawn natively: false = this call goes to the GS (it is emulated all the same, so the
         // data later elements reuse stays right)
         bool spriteRecord(uint8_t *rdram, R5900Context *ctx)
         {
-            SpriteVu &s = g_spriteVu;
+            VuProg &s = g_spriteVu;
             static const bool off = [] { const char *e = std::getenv("POP_NATIVE_SPRITES"); return e && *e == '0'; }();
             if (off || s.broken || getRegU32(ctx, 6) == 0)
                 return false; // kind 7: SetParticleEnv and program 4, not read
             if (!s.loaded)
             {
                 s.loaded = true;
-                s.broken = !spriteLoadProgram(rdram);
+                s.broken = !vuLoad(s, rdram);
                 if (s.broken)
                     return false;
             }
@@ -2040,7 +2275,7 @@ namespace pop_native_live
                 std::memcpy(d + 17 * 16, lo, 16);
                 std::memcpy(d + 18 * 16, hi, 16);
                 vu1_impl::packetSink = &sink;
-                ok = spriteVif(rdram, packet) && ok;
+                ok = vuVif(s, rdram, packet) && ok;
                 vu1_impl::packetSink = nullptr;
             }
             if (!ok)
@@ -2049,138 +2284,8 @@ namespace pop_native_live
                     std::fprintf(stderr, "[pop:native] sprite element %08x: packet not replayed; on the GS\n", element);
                 return false;
             }
-            // world <- GS screen: solve M p = s for the screen point (x, y, z) (M = +0x200, PS2 layout: rows of memory are
-            // the columns: s_c = sum_k M[k][c] p_k + M[3][c], divided by the same with c = 3)
-            float M[4][4];
-            for (int k = 0; k < 4; ++k)
-                for (int c = 0; c < 4; ++c)
-                    M[k][c] = guestF(rdram, gso + 0x200u + 16 * k + 4 * c);
-            const auto unproject = [&M](double x, double y, double z, float out[3]) {
-                const double sc[3] = {x, y, z};
-                double A[3][4];
-                for (int c = 0; c < 3; ++c)
-                {
-                    for (int k = 0; k < 3; ++k)
-                        A[c][k] = double(M[k][c]) - sc[c] * double(M[k][3]);
-                    A[c][3] = sc[c] * double(M[3][3]) - double(M[3][c]);
-                }
-                for (int col = 0; col < 3; ++col) // Gaussian elimination with partial pivoting
-                {
-                    int piv = col;
-                    for (int r = col + 1; r < 3; ++r)
-                        if (std::fabs(A[r][col]) > std::fabs(A[piv][col]))
-                            piv = r;
-                    std::swap(A[col], A[piv]);
-                    if (std::fabs(A[col][col]) < 1e-12)
-                        return false;
-                    for (int r = 0; r < 3; ++r)
-                        if (r != col)
-                        {
-                            const double f = A[r][col] / A[col][col];
-                            for (int k = col; k < 4; ++k)
-                                A[r][k] -= f * A[col][k];
-                        }
-                }
-                for (int k = 0; k < 3; ++k)
-                    out[k] = float(A[k][3] / A[k][k]);
-                return true;
-            };
             pop_assets::Batch b;
-            for (const auto &pk : sink.packets)
-            {
-                size_t q = 0;
-                const size_t nq = pk.size() / 16;
-                while (q < nq)
-                {
-                    uint64_t lo, hi;
-                    std::memcpy(&lo, pk.data() + q * 16, 8);
-                    std::memcpy(&hi, pk.data() + q * 16 + 8, 8);
-                    ++q;
-                    const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t(lo >> 58) & 3, nreg = (uint32_t(lo >> 60) & 0xF) ? uint32_t(lo >> 60) & 0xF : 16;
-                    const bool eop = (lo >> 15) & 1;
-                    if (flg != 0)
-                    {
-                        q += flg == 1 ? (size_t(nloop) * nreg + 1) / 2 : nloop; // not PACKED: not P9's
-                        if (eop)
-                            break;
-                        continue;
-                    }
-                    if ((lo >> 46) & 1)
-                    {
-                        const uint32_t prim = uint32_t(lo >> 47) & 0x7FF;
-                        if ((prim & 7) != 6)
-                        {
-                            ok = false; // not sprites
-                            break;
-                        }
-                    }
-                    float S = 0, T = 0, Q = 1;
-                    uint32_t rgba = 0;
-                    struct Corner
-                    {
-                        float x, y, u, v;
-                        uint32_t z;
-                    } c[2];
-                    int nc = 0;
-                    for (uint32_t l = 0; l < nloop && q < nq; ++l)
-                        for (uint32_t r = 0; r < nreg && q < nq; ++r, ++q)
-                        {
-                            const uint32_t reg = uint32_t(hi >> (4 * r)) & 0xF;
-                            uint32_t v[4];
-                            std::memcpy(v, pk.data() + q * 16, 16);
-                            if (reg == 2) // ST (+ Q in PACKED)
-                            {
-                                std::memcpy(&S, &v[0], 4);
-                                std::memcpy(&T, &v[1], 4);
-                                std::memcpy(&Q, &v[2], 4);
-                            }
-                            else if (reg == 1)
-                                rgba = (v[0] & 0xFF) | (v[1] & 0xFF) << 8 | (v[2] & 0xFF) << 16 | (v[3] & 0xFF) << 24;
-                            else if (reg == 4 || reg == 5) // XYZF2 / XYZ2
-                            {
-                                const bool adc = (v[3] >> 15) & 1;
-                                const float qq = Q != 0.0f ? Q : 1.0f;
-                                c[nc] = {float(v[0] & 0xFFFF) / 16.0f, float(v[1] & 0xFFFF) / 16.0f, S / qq, T / qq,
-                                         reg == 4 ? (v[2] >> 4) & 0xFFFFFF : v[2]};
-                                if (++nc == 2)
-                                {
-                                    nc = 0;
-                                    if (adc)
-                                        continue;
-                                    static const bool spriteLog = std::getenv("POP_SPRITE_LOG") != nullptr;
-                                    static int spriteLogged = 0;
-                                    if (spriteLog && spriteLogged++ < 24)
-                                        std::fprintf(stderr, "[pop:sprite] (%.1f %.1f) uv (%.3f %.3f) - (%.1f %.1f) uv (%.3f %.3f) z %u rgba %08x Q %.4g\n", c[0].x,
-                                                     c[0].y, c[0].u, c[0].v, c[1].x, c[1].y, c[1].u, c[1].v, c[1].z, rgba, Q);
-                                    // a sprite: corners 0 and 1, colour and Z of the second
-                                    const float xs[4] = {c[0].x, c[1].x, c[1].x, c[0].x}, ys[4] = {c[0].y, c[0].y, c[1].y, c[1].y};
-                                    const float us[4] = {c[0].u, c[1].u, c[1].u, c[0].u}, vs[4] = {c[0].v, c[0].v, c[1].v, c[1].v};
-                                    const uint32_t base0 = uint32_t(b.vertices.size());
-                                    bool good = true;
-                                    for (int k = 0; k < 4 && good; ++k)
-                                    {
-                                        pop_native::Vertex vx{};
-                                        good = unproject(xs[k], ys[k], double(c[1].z), vx.pos);
-                                        vx.uv[0] = us[k];
-                                        vx.uv[1] = vs[k];
-                                        for (int ch = 0; ch < 4; ++ch)
-                                            vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
-                                        b.vertices.push_back(vx);
-                                    }
-                                    if (!good)
-                                    {
-                                        b.vertices.resize(base0);
-                                        continue;
-                                    }
-                                    b.indices.insert(b.indices.end(), {base0, base0 + 1, base0 + 2, base0, base0 + 2, base0 + 3});
-                                    ++g_spriteStats.quads;
-                                }
-                            }
-                        }
-                    if (eop || !ok)
-                        break;
-                }
-            }
+            ok = gifToBatch(rdram, sink.packets, b, g_spriteStats.quads);
             static int logged = 0;
             if (logged++ < 6)
                 std::fprintf(stderr, "[pop:native] sprite element %08x matrix %u: %zu packets, %zu quads%s\n", element, index, sink.packets.size(),
@@ -2213,6 +2318,64 @@ namespace pop_native_live
                 return true;
             }
             return false;
+        }
+
+        // GFX particles through P5 (POP_NATIVE_P5=1, off by default; =interp: the interpreter only): the DMA records
+        // FUN_004584C0 wrote, [start, end) (SetParticleEnv's 23 qw at VU 0, then CGraphicParticle's batch at TOPS: STCYCL,
+        // BASE 0x18, OFFSET 0, MSCALF 0x68, UNPACKs, MSCNT; tools/p5packets.py lists them in a save), replayed into the
+        // program's data image; its triangle strips become world-space triangles. recorded: the geometry is in the
+        // frame (offline that is all); true: drawn natively, the packets must not reach the GS.
+        bool particleRecord(uint8_t *rdram, uint32_t start, uint32_t end, bool &recorded)
+        {
+            VuProg &s = g_particleVu;
+            recorded = false;
+            if (s.broken || end <= start)
+                return false;
+            if (!s.loaded)
+            {
+                s.loaded = true;
+                s.broken = !vuLoad(s, rdram);
+                if (s.broken)
+                    return false;
+            }
+            ++g_particleStats.draws;
+            if (g_world && !(g_worldLate && worldStateOk(rdram)))
+                return false;
+            vu1_impl::Vu1PacketSink sink;
+            sink.forward = false;
+            vu1_impl::packetSink = &sink;
+            const bool ok = vuVif(s, rdram, start, end);
+            vu1_impl::packetSink = nullptr;
+            pop_assets::Batch b;
+            if (!ok || !gifToBatch(rdram, sink.packets, b, g_particleStats.quads))
+            {
+                if (g_particleStats.failed++ < 4)
+                    std::fprintf(stderr, "[pop:native] particle packets %08x-%08x: not replayed; on the GS\n", start, end);
+                return false;
+            }
+            static int logged = 0;
+            if (logged++ < 6)
+                std::fprintf(stderr, "[pop:native] particles (P5 %s) %08x-%08x: %zu packets, %zu triangles\n", s.usePort ? "port" : "interpreter",
+                             start, end, sink.packets.size(), b.indices.size() / 3);
+            recorded = true;
+            if (!b.indices.empty())
+            {
+                std::vector<pop_assets::Batch> bs;
+                bs.push_back(std::move(b));
+                DrawMaterial dm = currentMaterial(rdram);
+                dm.hasUvm = false;
+                dm.constColour = dm.constAlpha = -1; // P5 writes RGBAQ itself
+                const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
+                std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+                if (!(g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {})))
+                    return false;
+            }
+            else if (!(g_world && g_worldLate && worldStateOk(rdram)))
+                return false; // every particle clipped away: skipping the call keeps the frame pure
+            ++g_particleStats.native;
+            ++g_worldStats.particles;
+            return true;
         }
 #endif
 
@@ -3949,8 +4112,15 @@ namespace pop_native_live
                                  !g_spriteVu.loaded ? "not loaded yet" : g_spriteVu.usePort ? "port" : "on the interpreter",
                                  (unsigned long long)g_spriteStats.draws,
                                  (unsigned long long)g_spriteStats.native, (unsigned long long)g_spriteStats.quads,
-                                 (unsigned long long)g_spriteStats.failed, (unsigned long long)g_spriteStats.runs,
-                                 (unsigned long long)g_spriteStats.interpreted);
+                                 (unsigned long long)g_spriteStats.failed, (unsigned long long)g_spriteVu.runs,
+                                 (unsigned long long)g_spriteVu.interpreted);
+                    if (g_p5)
+                        std::fprintf(stderr, "[pop:world] particles (P5 %s): draws %llu, native %llu, triangles %llu, not replayed %llu; VU runs %llu, "
+                                             "handed to the interpreter %llu\n",
+                                     !g_particleVu.loaded ? "not loaded yet" : g_particleVu.usePort ? "port" : "on the interpreter",
+                                     (unsigned long long)g_particleStats.draws, (unsigned long long)g_particleStats.native,
+                                     (unsigned long long)g_particleStats.quads, (unsigned long long)g_particleStats.failed,
+                                     (unsigned long long)g_particleVu.runs, (unsigned long long)g_particleVu.interpreted);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)

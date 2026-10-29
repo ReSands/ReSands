@@ -83,8 +83,10 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   run 2's header requests fixed in the generator, sndCList template; near misses by hand; names in the Mac Ghidra
   project). Queue resumes with the "Qwen DARE audio decomp" shortcut (the PC has the new prompt).
 - **29 Oct (Mac):** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written, not applied on the PC; the gate's
-  three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P5 plan and P4's role in
-  `docs/native_renderer.md` "P4 and P5 in the game" (P5 next, offline first, off by default live).
+  three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P4's role in `docs/native_renderer.md`
+  "P4 and P5 in the game"; P5 (GFX particles) works offline (port = interpreter, better than the CPU quads in 10
+  of 11 saves), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not on the PC yet). Bug checks:
+  `play.ps1 -Mode hybrid|gs|native -Save <name>`.
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
 

@@ -62,6 +62,70 @@ namespace
     void noop(uint8_t *, R5900Context *, PS2Runtime *) {}
     void gfxEntry(uint8_t *, R5900Context *ctx, PS2Runtime *);
 
+#if POP_SPRITE_VU1
+    // GFX particle packets in the save's last VIF1 chain (as tools/statechain.py walks it): each run of SetParticleEnv
+    // records (CNT, UNPACK V4-32 0x17 qw at 0) and CGraphicParticle batches (CNT, STCYCL 4/4, FLUSHA, ..., positions at
+    // TOPS) is one FUN_004584C0 call (a call starts a new pair only after one at its cap: GIF count 200 billboard /
+    // 150 oriented); the frame's GFX draws take them in order (POP_NATIVE_P5)
+    std::vector<std::pair<uint32_t, uint32_t>> g_particleRanges;
+    size_t g_particleNext = 0;
+    void findParticlePackets()
+    {
+        const uint32_t g = 0x70000620u;
+        uint32_t addr = rd32(g + 0xE4 + 4 * (rd32(g + 0xF4) ^ 1)), start = 0, end = 0, lastCount = 0;
+        std::vector<uint32_t> stack;
+        for (int rec = 0; rec < 200000; ++rec)
+        {
+            const uint32_t t0 = rd32(addr), qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7, ta = rd32(addr + 4) & 0x7FFFFFF0u;
+            const bool refType = id == 0 || id == 3 || id == 4, cnt = id == 1;
+            const uint32_t after = addr + 16 + (refType ? 0 : qwc * 16);
+            const bool env = cnt && rd32(addr + 12) == 0x6C170000u;
+            const bool batch = cnt && rd32(addr + 8) == 0x01000404u && rd32(addr + 16) == 0x13000000u && (rd32(addr + 32) & 0xFB00FFFFu) == 0x68008000u;
+            if (env && start && lastCount != 200 && lastCount != 150)
+            {
+                g_particleRanges.emplace_back(start, end); // the next call's env
+                start = 0;
+            }
+            if (env)
+                lastCount = rd32(addr + 16 + 16 * 16) & 0x7FFF; // the GIF tag at VU qw 16
+            if (env || batch)
+            {
+                if (!start)
+                    start = addr;
+                end = after;
+            }
+            else if (start)
+            {
+                g_particleRanges.emplace_back(start, end);
+                start = 0;
+            }
+            if (id == 0 || id == 7)
+                break;
+            if (id == 2)
+                addr = ta;
+            else if (id == 5)
+                stack.push_back(after), addr = ta;
+            else if (id == 6)
+            {
+                if (stack.empty())
+                    break;
+                addr = stack.back();
+                stack.pop_back();
+            }
+            else
+                addr = after;
+        }
+        std::fprintf(stderr, "[state] particle packets in the last chain: %zu draws\n", g_particleRanges.size());
+    }
+    uint32_t particlePackets(uint32_t, uint32_t &end)
+    {
+        if (g_particleNext >= g_particleRanges.size())
+            return 0;
+        end = g_particleRanges[g_particleNext].second;
+        return g_particleRanges[g_particleNext++].first;
+    }
+#endif
+
     // CElementList::Render (0x4B9440) over one list: entries of 16 bytes at *list, count at list + 4.
     void renderList(uint8_t *, R5900Context *ctx, PS2Runtime *)
     {
@@ -434,6 +498,13 @@ int main(int argc, char **argv)
     alignas(PS2Runtime) static unsigned char storage[sizeof(PS2Runtime)];
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
     pop_native_live::install(runtime);
+#if POP_SPRITE_VU1
+    if (const char *e = std::getenv("POP_NATIVE_P5"); e && *e && *e != '0')
+    {
+        findParticlePackets();
+        pop_native_live::g_particlePackets = particlePackets;
+    }
+#endif
     for (uint32_t p : packs)
         pop_native_live::onBigfileLookup(p);
     for (int waited = 0;; ++waited)
@@ -581,9 +652,12 @@ int main(int argc, char **argv)
                      (unsigned long long)ws.posed, (unsigned long long)ws.drivers, (unsigned long long)ws.skinGs[0],
                      (unsigned long long)ws.skinGs[1], (unsigned long long)ws.skinGs[2]);
 #if POP_SPRITE_VU1
-        const auto &ss = pop_native_live::g_spriteStats;
+        const auto &ss = pop_native_live::g_spriteStats, &ps = pop_native_live::g_particleStats;
         std::fprintf(stderr, "[state] sprites: draws %llu, native %llu, quads %llu, not replayed %llu\n", (unsigned long long)ss.draws,
                      (unsigned long long)ss.native, (unsigned long long)ss.quads, (unsigned long long)ss.failed);
+        std::fprintf(stderr, "[state] particles (P5): draws %llu, triangles %llu, not replayed %llu; VU runs %llu, to the interpreter %llu\n",
+                     (unsigned long long)ps.draws, (unsigned long long)ps.quads, (unsigned long long)ps.failed,
+                     (unsigned long long)pop_native_live::g_particleVu.runs, (unsigned long long)pop_native_live::g_particleVu.interpreted);
 #endif
         const auto &ls = pop_native_live::g_lateStats;
         std::string by;

@@ -689,7 +689,7 @@ def chain(program='p6'):
     src += ['// runs from vu.pc to the program end (pc 0xffffffff) or to a pc no stage starts at (left in vu.pc)',
             'void run(VuState &vu)', '{', '    for (int n = 0; vu.pc != 0xffffffffu && n < 100000; ++n)',
             '        switch (vu.pc)', '        {'] + table + ['        default: return; // no stage starts here', '        }', '}',
-            '}', 'void stage(VuState &vu) { vu1_%s::run(vu); }' % program]
+            '}', '#ifndef VU_PORT_NO_STAGE // the harness entry; a file holding several ports defines this', 'void stage(VuState &vu) { vu1_%s::run(vu); }' % program, '#endif']
     path = os.path.join(HERE, 'ported', '%s.cpp' % program)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, 'w').write('\n'.join(src) + '\n')

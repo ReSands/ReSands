@@ -4042,4 +4042,6 @@ void run(VuState &vu)
         }
 }
 }
+#ifndef VU_PORT_NO_STAGE // the harness entry; a file holding several ports defines this
 void stage(VuState &vu) { vu1_p9::run(vu); }
+#endif
