@@ -17,6 +17,38 @@ RECORD = ('class_type', 'structure_type', 'union_type')
 # members whose type the DWARF lost ({} = the member name)
 MEMBER_TYPES = {('TAdder', 'm_pGetDataSampleProc'):
                 'int (TAdder::*{})(_SND_tdstToolBufferSample *, unsigned int *, unsigned int)'}
+# sndCList is a template in the source; DWARF keeps only "sndCList" (args from the mangled method names)
+SNDCLIST = '''template <class TYPE, class ARG_TYPE> struct sndCList {
+    struct sndCNode {
+        sndCNode*pNext;
+        sndCNode*pPrev;
+        TYPE data;
+    };
+    sndCNode*m_pNodeHead;
+    sndCNode*m_pNodeTail;
+    unsigned int m_nCount;
+    sndCList(void);
+    ~sndCList();
+    __sndPos*AddHead(ARG_TYPE newElement);
+    __sndPos*AddTail(ARG_TYPE newElement);
+    __sndPos*Find(ARG_TYPE searchValue, __sndPos *startAfter) const;
+    __sndPos*FindIndex(unsigned int nIndex) const;
+    void FreeNode(sndCNode *pNode);
+    void RemoveAll(void);
+    void RemoveAt(__sndPos *position);
+    TYPE RemoveHead(void);
+    TYPE RemoveTail(void);
+};'''
+SNDCLIST_ARGS = {('CTheme', 'm_PartList'): 'CThemePart *, CThemePart *',
+                 ('CThemeChannel', 'm_OldThemeList'): 'CTheme *, CTheme *',
+                 ('CThemeChannel', 'm_PartSentList'): '_stPartInfo, _stPartInfo',
+                 ('CThemeManager', 'm_ThemeChannelList'): 'CThemeChannel *, CThemeChannel *',
+                 (None, 'gs_CallBackRequestList'): 'stCallBackRequest_, stCallBackRequest_'}
+TEMPLATED = {'sndCList', 'sndCNode'}
+# methods retail calls without 'this' (DWARF does not mark static)
+STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength')}
+# C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
+C_PARAMS = {'MouchardThreadTool': 'char *file, int line', 'SND_fn_vMouchardThreadsnd': 'char *file, int line'}
 
 
 def symbols(d):
@@ -347,7 +379,6 @@ def main(elf_path, out_h, out_tsv=None):
         sm = split_mangled(m)
         name = x.attrs['name'] if x is not None else (sm[0] if sm else m)
         dw = [] if x is None else [t[c] for c in x.children if t[c].tag in ('formal_parameter', 'unspecified_parameters')]
-        has_this = any(p.attrs.get('name') == 'this' for p in dw)
         dw = [p for p in dw if p.attrs.get('name') != 'this']
         ps = None
         if sm:
@@ -362,6 +393,7 @@ def main(elf_path, out_h, out_tsv=None):
         if ps is None:
             ps = ', '.join(params(x)) if x is not None else '...'
             ps = ps or 'void'
+        ps = C_PARAMS.get(m, ps) if not in_class else ps
         if name == '__ct' or m.startswith('__ct__'):
             return '%s(%s);' % (in_class, ps)
         if name == '__dt' or m.startswith('__dt__'):
@@ -369,8 +401,7 @@ def main(elf_path, out_h, out_tsv=None):
         if name.startswith('__') and name[2:4] in ('nw', 'dl', 'as', 'eq', 'ne', 'pl', 'mi', 'ml', 'dv', 'vc', 'cl', 'op'):
             return '/* %s: operator, not declared */' % m
         ret = g.render(x.attrs, name + '(%s)' % ps) if x is not None else 'void %s(%s) /* return type unknown */' % (name, ps)
-        # a method is static only when DWARF lists its parameters without 'this'
-        static = in_class and not virtual and not const and not has_this and (dw or ps == 'void') and x is not None and False
+        static = (in_class, name) in STATIC_METHODS
         pre = ('virtual ' if virtual else '') + ('static ' if static else '')
         return pre + ret + (' const' if const else '') + ';'
 
@@ -405,7 +436,7 @@ def main(elf_path, out_h, out_tsv=None):
         return x.tag == 'union_type' or (len(mems) > 1 and n not in vt and len(mems) == len(x.children) and
                                          all(member_offset(m.attrs.get('location')) == 0 for m in mems))
     unions = {n for n, x in records.items() if is_union(n, x)}
-    L += ['%s %s;' % ('union' if n in unions else 'struct', n) for n in sorted(records)]
+    L += ['%s %s;' % ('union' if n in unions else 'struct', n) for n in sorted(records) if n not in TEMPLATED]
     # records only ever used through pointers in DARE (defined elsewhere): forward declarations
     extra = sorted({g.name(o) for cu in g.cus for k in cu.children for o in refs(t, t[k])
                     if t[o].tag in RECORD} - set(records))
@@ -427,7 +458,24 @@ def main(elf_path, out_h, out_tsv=None):
         L.append('enum %s { %s };' % (n, ', '.join(vals)))
     L.append('')
     vtable_of = {}
+    plain = {s[0] for s in syms}
+    # globals whose POP1 symbol is name__<n>Class are static data members
+    static_members = {}
+    for s in syms:
+        mm = re.match(r'(\w+?)__(\d+)(\w+)$', s[0])
+        k = int(mm.group(2)) if mm else 0
+        if (mm and mm.group(1) in globals_ and mm.group(1) not in plain and mm.group(3)[:k] in records
+                and not mm.group(3)[k:].lstrip('C').startswith('F')):
+            static_members[mm.group(1)] = mm.group(3)[:k]
+
+    def gdecl(n):
+        if (None, n) in SNDCLIST_ARGS:
+            return 'sndCList<%s> %s' % (SNDCLIST_ARGS[None, n], n)
+        return g.render(globals_[n][0].attrs, n)
+    L += [SNDCLIST, '']
     for n in order:
+        if n in TEMPLATED:
+            continue
         if n in typedefs:
             x = typedefs[n]
             mods, b = g.base(x.attrs)
@@ -466,6 +514,7 @@ def main(elf_path, out_h, out_tsv=None):
         for m, fx, c in methods.get(n, []):
             if m not in virt:
                 mlines.append('    ' + decl(m, fx, n, c))
+        mlines += ['    static %s;' % gdecl(k) for k in sorted(static_members) if static_members[k] == n]
         pos = max([member_offset(b.attrs.get('location')) + records.get(g.render(b.attrs).strip(), x).attrs.get(
             'byte_size', 0) for b in bases] or [0])
         if n in vt and not bases:
@@ -484,6 +533,8 @@ def main(elf_path, out_h, out_tsv=None):
                 sz = 12
             elif mbr.attrs.get('fund_type') == 0x14:
                 L.append('    void *%s;  // DWARF lost this type (a function pointer?)' % nm)
+            elif (n, nm) in SNDCLIST_ARGS:
+                L.append('    sndCList<%s> %s;' % (SNDCLIST_ARGS[n, nm], nm))
             else:
                 L.append('    %s;' % g.render(mbr.attrs, nm))
             sz = 12 if (n, nm) in MEMBER_TYPES else (mbr.attrs.get('byte_size') or g_size(g, t, records, mbr.attrs))
@@ -500,12 +551,16 @@ def main(elf_path, out_h, out_tsv=None):
                 L.append('DARE_CHECK(__ofs_%s_%s, DARE_OFS(%s, %s) == %d);' % (
                     n, mbr.attrs['name'], n, mbr.attrs['name'], member_offset(mbr.attrs.get('location'))))
     L.append('')
+    # functions known only by a declaration whose POP1 symbol is mangled were compiled as C++ (fn_vUbiEELoop__FPv)
+    mangled = {s[0].split('__F')[0] for s in syms if '__F' in s[0][1:]}
+    cplus = {n for n in globals_ if n in mangled and n not in plain}
     L.append('extern "C" {')
     for m, x in cfuncs:
         L.append(decl(m, x))
     for n, (x, cu) in sorted(globals_.items()):
-        L.append('extern %s;' % g.render(x.attrs, n))
-    L += ['}', '', '#include "dare_fix.h"', '#endif']
+        if n not in cplus and n not in static_members:
+            L.append('extern %s;' % gdecl(n))
+    L += ['}'] + ['extern %s;' % gdecl(n) for n in sorted(cplus)] + ['', '#include "dare_fix.h"', '#endif']
     open(out_h, 'w').write('\n'.join(L) + '\n')
     print('%d records, %d enums, %d typedefs, %d methods, %d C functions, %d globals, %d vtables -> %s' % (
         len(records), len(enums), len(typedefs), sum(map(len, methods.values())), len(cfuncs), len(globals_),

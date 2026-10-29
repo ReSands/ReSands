@@ -4,7 +4,36 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (29 Oct morning; start here)
+## State (29 Oct afternoon; start here)
+
+- **29 Oct afternoon (Mac + PC compiler, no game boot): 79 of 669 matched**, none waiting on a header change.
+  - **Run 2's 9 header requests checked against the retail assembly:** 3 were Qwen misreadings (172380 and 16f500
+    are nested offsets: `uRes` +0x10 then `stMultiTrack.hFirstElementOpt` +0x50, `m_stOutputFormat` +0x10 then
+    `uFormat.stPCM.ulFreq` +8; 191240's `short` is CodeWarrior's hidden delete flag). The real gaps, fixed in
+    `dare_header.py`: **`sndCList` is a template** (`SNDCLIST`: DWARF keeps only the name; arguments per member /
+    global in `SNDCLIST_ARGS`, from the mangled method names; retail's mangled `AddTail__51sndCList<...>` comes out
+    exactly); **static methods** (`STATIC_METHODS`: `SndManager::GetLengthSample`, `AddCallBack`,
+    `RPS2::GetResLength`; DWARF does not mark them); **`MouchardThreadTool` / `SND_fn_vMouchardThreadsnd` take
+    (`__FILE__`, `__LINE__`)** (`C_PARAMS`); **25 function declarations whose POP1 symbol is mangled** (e.g.
+    `fn_vUbiEELoop__FPv`) moved out of `extern "C"`; **6 static data members** (`SndManager::gs_CallBackRequestList`,
+    `m_pRenderer`, `m_tdeAudioMode*`, `m_tdePositionFormatTOOL`, `RPS2::m_eVSyncMode`) declared in their class
+    instead of as C globals (found from `name__<n>Class` symbols; function symbols of that form are left alone:
+    they collide with overloads). All 9 then matched by hand (`game/decomp/dare/hm_*.cpp`, `hdr2.cpp`).
+  - **Near misses by hand: 6 more** (`game/decomp/dare/nm/`): `RPS2::ASyncLoadResBinary` (calls `LoadResBinary`,
+    slot +0x68), `Create_Source`, `SND_fn_vSynchroSxd`, `CThemeManager::SynchroTheme` (next read before the call),
+    `DesInitMTTrackVolumeArray`, `SND_fn_vStrncpy` (`dest[dest_size - 1]` three times). Plus
+    `SND_fn_lGetSpuBiggestReverbSize`: its round 2 was already a MATCH with no PASS written (a runner gap: check
+    other "tried" folders for a MATCH report). `SND_fn_bCanFreeSubBlock` still misses (case test order 1, 3, 0;
+    seven variants tried). Recorded on the PC as `PASS` = "hand (29 Oct)" + `best.cpp`.
+  - **Prompt lessons added** (`qwen_match.py`): hidden destructor flag, nested offsets, locals in declaration
+    order, the Mouchard locking pattern.
+  - **Ghidra (Mac project only; the PC has its own copy, so PC builds are unchanged):** 158 functions renamed from
+    `callees.tsv` (`tools/decomp/dare_names.py` -> `PoPApplyProtoNames.java <tsv> <comment prefix>`), 180 data
+    labels from `globals.tsv` (`PoPApplyLabels.java`). **One-vote callee names are ~8% wrong** (14 of 177 checked
+    against the prototype names; none of 61 with two or more votes): applied separately, plate comment
+    "POP1 DARE name (one vote; about 8% of these are wrong)". The Qwen prompt still uses one-vote names
+    unmarked (`callee_names()`); the wrong ones are listed in `game/ghidra/headless_dare_names_1vote.log`
+    ("Differs"). Backup before: `game/ghidra/backup_20261029_pre_dare_names.*`.
 
 - **Run 2 is done (stopped 29 Oct 07:31 with "Stop Qwen"); results under "Runs".** The queue resumes from the
   next untried function when the "Qwen DARE audio decomp" shortcut runs again. All attempt folders are copied to
@@ -156,10 +185,9 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## Next steps (in order)
 
-1. Apply run 2's 9 header requests (above; also `RPS2::GetResLength` static) in `dare_fix.h` / `dare_header.py`,
-   then re-queue those functions. Hand-fix the nearest misses.
-2. Keep the queue running on later nights (41% pass on new functions); run 1's old misses need more than prompt fixes.
-3. Apply `callees.tsv` / `globals.tsv` names to the Ghidra project (cheap; helps 0.3).
+1. **Done 29 Oct** (State above): header requests, near misses, Ghidra names.
+2. Drop or mark the one-vote callee names the prototype contradicts in the prompt (`callee_names()`).
+3. Keep the queue running on later nights (41% pass on new functions); run 1's old misses need more than prompt fixes.
 4. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
 
 Built and done (28 Oct): three hand matches; `qwen_match.py` runner; smoke test; queue (`--queue`, `--summary`);

@@ -4,7 +4,7 @@
 // are kept, and differing ones are listed for review. Puts the function in its class
 // namespace and the mangled name in a plate comment.
 // Headless: -process SLUS_207.43 -noanalysis -scriptPath tools/ghidra
-//           -postScript PoPApplyProtoNames.java <proto_names.tsv>
+//           -postScript PoPApplyProtoNames.java <proto_names.tsv> [comment prefix]
 // @category PoP
 
 import ghidra.app.script.GhidraScript;
@@ -21,11 +21,14 @@ import java.util.List;
 
 public class PoPApplyProtoNames extends GhidraScript {
 
-    private static final String COMMENT_PREFIX = "Prototype name: ";
+    private String COMMENT_PREFIX = "Prototype name: ";
 
     @Override
     public void run() throws Exception {
         List<String> lines = Files.readAllLines(Path.of(getScriptArgs()[0]));
+        if (getScriptArgs().length > 1) {
+            COMMENT_PREFIX = getScriptArgs()[1] + ": ";  // e.g. "POP1 DARE name" (tools/decomp/dare_names.py)
+        }
         int renamed = 0, already = 0, noFunction = 0, failed = 0;
         List<String> differing = new ArrayList<>();
 

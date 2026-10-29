@@ -110,7 +110,7 @@ took; whole-run checks on new traces), water (P6), halos, light shafts, flashes,
 2. **Native conversion after a save-state load** (convert the elements already in RAM instead of waiting for
    ReadElement), so saves can be booted with the live renderer path and screenshotted with it on and off.
 
-## N1: enemies slowed by the dagger do not turn sandy brown (24 Oct, play 19:23)
+## N1: enemies slowed by the dagger do not turn sandy brown (24 Oct, play 19:23) (closed 25 Oct)
 
 Long-press triangle (dagger of time) slows an enemy; on the PS2 it turns sandy brown. With the native renderer the
 colour change is missing. Hypothesis: the effect changes something native characters ignore (material constant
@@ -183,7 +183,7 @@ fog). To confirm: the same spot with `play.ps1 -NoNativeWorld` (fully emulated);
 Open side question: does POP_60FPS change how fast the game moves these values (a per-frame lerp would run twice as
 fast)?
 
-## N5: random one-frame flashes = black world frames when the kept meshes were dropped (fix built 24 Oct, in-game check pending)
+## N5: random one-frame flashes = black world frames when the kept meshes were dropped (closed 25 Oct)
 
 Glitch captures 200042 (frame 411, mean 0.5) and 200541 (frame 458, mean 4.5): one native world picture almost
 black, same draw count as its neighbours, injected normally, arriving late (30-40 ms). Each follows a

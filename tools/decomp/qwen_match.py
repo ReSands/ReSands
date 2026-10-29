@@ -63,6 +63,13 @@ Original local variable names: {locals}
   - Stores come out in source order: write member assignments in the order the assembly stores them.
   - Plain int shifts give sll/sra; casts to short add dsll32/dsra32 pairs.
   - The constructor's vptr store is generated; write only the member assignments.
+  - A destructor gets a hidden short argument (a1; delete when > 0) and the `this != 0` test from the compiler:
+    write a plain destructor with only the member assignments.
+  - An offset the excerpt does not list is usually inside a struct or union member: member offset + field offset
+    (e.g. +0x60 = uRes at +0x10, then stMultiTrack.hFirstElementOpt at +0x50).
+  - Locals on the stack are laid out in declaration order, the first at the lowest address.
+  - Locking with a call to (file string, line number) between = EnterCriticalSectionTool_(); MouchardThreadTool(
+    __FILE__, <line>); ... QuitCriticalSectionTool(); (the SND_fn_v...ThreadSnd functions the same way).
 - Write the complete file in ONE ```cpp code block.
 """
 
