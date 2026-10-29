@@ -8,9 +8,10 @@
 PC=${PC:-10.0.0.202}
 POLL=30
 STALL_MIN=${STALL_MIN:-5}
+OUT=${OUT:-recomp}   # rebuild.ps1 -Out folder under game\ (recomp-sotc for the pop-sotc build)
 PROGRESS_MIN=5
 
-probe=$(iconv -f UTF-8 -t UTF-16LE <<'EOF' | base64
+probe=$(sed "s|game\\\\recomp\\\\|game\\\\$OUT\\\\|" <<'EOF' | iconv -f UTF-8 -t UTF-16LE | base64
 $ProgressPreference = 'SilentlyContinue'
 $job = 'C:\dev\PoP_Decomp\game\jobs\job.log'
 $lines = if (Test-Path $job) { @(Get-Content $job) } else { @() }
