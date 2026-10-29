@@ -501,6 +501,18 @@ own camera). The game's own picture of the same moment: `tools/popstate.py <stat
 
 ## Restart, 19 Oct evening: baseline, VU1 inventory, the frame-rate prize
 Back to the native renderer after the VU1 speed work (the fights are VU1-bound: the VU thread is ~88% busy).
+- **Water step 3 done offline (29 Oct night): the full water.** `waterRecord` (colour-pass call) records three draws per
+  refracting water from one P6 run: the frame's alpha cleared (a sprite over the display, alpha only, no Z test), the mask
+  (the same triangles, colour 0x80, alpha only, ZGEQUAL) and the colour pass (PNF image -2 = `kFrameCopyImage` +
+  `Material::refraction` + `copyFrame`: mesh.frag rebuilds the 256x256 buffer per texel from the frame copy, the five
+  copies of FUN_004A6F40 with their boxes, maps, tint and alpha test, then reads it bilinearly at P6's ST), then one more
+  alpha clear (lists before +0x98 never write alpha natively). Fog: P6 writes its own F per vertex (225-255, nearly no
+  fog); the zone's line (F ~90-160 there) fogged the already fogged copy again (091915 washed out): now a least-squares
+  F = a + b * w per water, clamped to P6's range (residual < 5, 18 on one fountain water). The game's own buffer in the
+  fountain save (TBP 0x3480, FBW 4) matches the formula (no systematic error; later passes change the saved frame).
+  Sweep of the 53 water saves vs their GS picture: 22 better, 6 worse, mean -0.09; GS-only 184926 8.29 -> 7.70, 145139
+  11.33 -> 10.75, fountain 8.88 -> 7.62. The worse ones (193004, 192947 +0.6) have a native base frame darker than the
+  game's under the water, which the tint (0.80, 0.88, 0.99) darkens further. Awaiting the user's sheet review.
 - **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
   livecmp, ~1 s per save on the Mac): all 49 saves of 19 Oct render (`game/analysis/play1019/native/`,
   `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD

@@ -109,13 +109,18 @@ namespace pop_native
                         d.fogColour[k] = float((fogColour >> (8 * k)) & 0xFF) / 255.0f;
                 }
                 const bool hasImage = image >= 0 && size_t(image) < imageIndex.size();
+                // image -2: the water's colour pass (pop_native_live waterRecord): the frame is copied before the draw and
+                // read through the refraction buffer
+                const bool refraction = v3 && image == -2;
+                d.copyFrame = refraction;
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
+                    const auto key = std::make_tuple(hasImage ? image : refraction ? -2 : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
-                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : -1;
+                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction ? kFrameCopyImage : -1;
+                        mat.refraction = refraction;
                         if (v3)
                         {
                             materialFromGsFlags(mode, word, mat);
@@ -157,7 +162,7 @@ namespace pop_native
                     if (d.kept < 0)
                         ++keptMissing;
                     else
-                        draws.push_back(d);
+                        draws.push_back(d), d.copyFrame = false;
                     continue;
                 }
                 f.read(reinterpret_cast<char *>(&ni), 4);
@@ -183,13 +188,14 @@ namespace pop_native
                     d.kept = r.keepMesh(key, std::move(mesh));
                     d.material = material;
                     draws.push_back(d);
+                    d.copyFrame = false;
                     continue;
                 }
                 d.mesh = r.addMesh(std::move(mesh));
                 // debug: POP_VIEW_ONLY=<first>-<last> keeps only those element draws (bisecting a frame)
                 static const char *only = std::getenv("POP_VIEW_ONLY");
                 if (!only || (int(i) >= std::atoi(only) && int(i) <= std::atoi(std::strchr(only, '-') ? std::strchr(only, '-') + 1 : only)))
-                    draws.push_back(d);
+                    draws.push_back(d), d.copyFrame = false;
             }
             static const bool listDraws = std::getenv("POP_VIEW_LIST") != nullptr;
             if (listDraws)

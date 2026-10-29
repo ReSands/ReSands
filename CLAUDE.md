@@ -67,7 +67,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   flip). **Now water (P6)**: three passes (mask, refraction copy, colour), read from the fountain save (`docs/native_renderer.md`
   "Water packets"). Plan: (1) **done 29 Oct night**: offline P6 geometry, flat (`POP_NATIVE_P6=1`), all 148 waters
   share one pass structure, the port (one dropped load fixed) matches the interpreter on all 2,987 runs; (2) **done**: mid-frame copy in the renderer (`Draw::copyFrame`, `kFrameCopyImage`; not in PNF / live yet);
-  (3) full water offline vs GS-only; (4) live behind `POP_NATIVE_P6` + user check (baths, fountain 202926). Then
+  (3) **done offline 29 Oct night** (full water: mask, buffer, colour pass, P6's own fog; 22 of 53 saves better, user sheet review pending); (4) live behind `POP_NATIVE_P6` + user check (baths, fountain 202926). Then
   halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera

@@ -344,6 +344,8 @@ namespace pop_native_live
         // texture +4 palette index, +8 flags (0x40: paletted); palette +4 colours (+0x60 when its +8 has 0x40),
         // 256-colour when (+8 & 0x41) is 0 or 0x40.
         constexpr uint32_t kPaletteKey = 0xFE5D8000u;
+        // the water's colour pass (waterRecord): written as image -2, the frame copy read through the refraction buffer
+        constexpr uint32_t kRefractionKey = 0xFE5C0000u;
         std::unordered_map<uint32_t, pop_native::Image> g_framePaletteImages; // texture index -> recoloured this frame
         std::unordered_map<uint32_t, uint32_t> g_framePaletteKeys;            // texture index -> key used this frame
         uint32_t texListEntry(uint8_t *rdram, uint32_t countAddr, uint32_t listAddr, uint32_t index)
@@ -2041,8 +2043,9 @@ namespace pop_native_live
 
         // XGKICK packets (PACKED ST / RGBAQ / XYZF2) -> world-space geometry: each GS screen point unprojected through the
         // graphics object's +0x200 (world -> GS screen); sprites (two corners) as quads, triangle strips / fans as triangles.
-        // false: a primitive these programs do not send (the call then goes to the GS)
-        bool gifToBatch(uint8_t *rdram, const std::vector<std::vector<uint8_t>> &packets, pop_assets::Batch &b, uint64_t &prims)
+        // false: a primitive these programs do not send (the call then goes to the GS). fog: each triangle vertex's XYZF2 F
+        bool gifToBatch(uint8_t *rdram, const std::vector<std::vector<uint8_t>> &packets, pop_assets::Batch &b, uint64_t &prims,
+                        std::vector<float> *fog = nullptr)
         {
             const uint32_t gso = guestAny(rdram, 0x00675148u);
             bool ok = true;
@@ -2085,6 +2088,7 @@ namespace pop_native_live
             uint32_t prim = 6, nv = 0;
             pop_native::Vertex tri[3]{};
             bool ok3[3]{};
+            float triF[3]{};
             for (const auto &pk : packets)
             {
                 size_t q = 0;
@@ -2149,9 +2153,10 @@ namespace pop_native_live
                                     vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
                                 // the GS vertex queue: strip = the last three, fan = the first and the last two
                                 if ((prim & 7) == 4 && nv == 3)
-                                    tri[0] = tri[1], tri[1] = tri[2], ok3[0] = ok3[1], ok3[1] = ok3[2], nv = 2;
+                                    tri[0] = tri[1], tri[1] = tri[2], ok3[0] = ok3[1], ok3[1] = ok3[2], triF[0] = triF[1], triF[1] = triF[2], nv = 2;
                                 else if ((prim & 7) == 5 && nv == 3)
-                                    tri[1] = tri[2], ok3[1] = ok3[2], nv = 2;
+                                    tri[1] = tri[2], ok3[1] = ok3[2], triF[1] = triF[2], nv = 2;
+                                triF[nv] = reg == 4 ? float(v[3] >> 4 & 0xFF) : 255.0f;
                                 tri[nv] = vx;
                                 ok3[nv++] = good;
                                 if (nv == 3 && !adc && ok3[0] && ok3[1] && ok3[2])
@@ -2160,6 +2165,8 @@ namespace pop_native_live
                                     for (int k = 0; k < 3; ++k)
                                     {
                                         b.vertices.push_back(tri[k]);
+                                        if (fog)
+                                            fog->push_back(triF[k]);
                                         if (!(prim & 8)) // flat shading: the last vertex's colour
                                             std::memcpy(b.vertices.back().colour, tri[2].colour, sizeof tri[2].colour);
                                     }
@@ -2382,16 +2389,20 @@ namespace pop_native_live
         // water through P6 (POP_NATIVE_P6=1, off by default; =interp: the interpreter only). CJSmWaterElement::Display
         // CALLs the element's ready packet (*element & 0x0FFFFFFF: BASE / OFFSET (double buffered), the 12 matrix qw
         // from 0x6C5BC0 at VU 1, a DIRECT of GS registers, then per patch 4 UNPACKs at TOPS and MSCAL 0; tools/p6packets.py
-        // lists a save's). A refracting water (element +4) is drawn twice by CElementList::Render: the alpha mask (the
-        // call returning to 0x4B9FF8) and, after the copy into the 256x256 buffer, the colour pass. shortcut: only the
-        // colour pass, flat (no refraction texture; live the mask and the copy stay on the GS): the offline geometry check
-        // of docs/native_renderer.md "Water packets"; upgrade with the native frame copy (0.13 water, steps 2-3).
+        // lists a save's). A refracting water (element +4) is drawn by CElementList::Render as FUN_004A76C0 (the frame's
+        // alpha cleared to 0), Display (the alpha mask: alpha 0x80 where the water passes ZGEQUAL), FUN_004A6F40 (the
+        // frame copied into a 256x256 buffer where the mask is), Display (the colour pass, RGB only, ALPHA 0x44 from the
+        // buffer at P6's ST): docs/native_renderer.md "The refraction copy". Here the colour pass's call records all
+        // three as draws: the clear (a full-screen sprite), the mask (the same triangles) and the colour pass (image -2:
+        // the frame copied before it, read through the buffer in mesh.frag). shortcut: the mask call (returning to
+        // 0x4B9FF8) and the copy stay on the GS live (step 4); offline the colour pass call draws it all.
         bool waterRecord(uint8_t *rdram, R5900Context *ctx)
         {
             VuProg &s = g_waterVu;
             static const bool on = [] { const char *e = std::getenv("POP_NATIVE_P6"); return e && *e && *e != '0'; }();
-            if (!on || s.broken || getRegU32(ctx, 31) == 0x004B9FF8u)
-                return false;
+            const uint32_t element = getRegU32(ctx, 4);
+            if (!on || s.broken || getRegU32(ctx, 31) == 0x004B9FF8u || !guestAny(rdram, element + 4))
+                return false; // a water without refraction: none in the saves (its packet's DIRECT would set the texture)
             if (!s.loaded)
             {
                 s.loaded = true;
@@ -2402,14 +2413,15 @@ namespace pop_native_live
             ++g_waterStats.draws;
             if (g_world && !(g_worldLate && worldStateOk(rdram)))
                 return false;
-            const uint32_t element = getRegU32(ctx, 4), packet = guestAny(rdram, element) & 0x0FFFFFFFu;
+            const uint32_t packet = guestAny(rdram, element) & 0x0FFFFFFFu;
             vu1_impl::Vu1PacketSink sink;
             sink.forward = false;
             vu1_impl::packetSink = &sink;
             const bool ok = vuVif(s, rdram, packet);
             vu1_impl::packetSink = nullptr;
             pop_assets::Batch b;
-            if (!ok || !gifToBatch(rdram, sink.packets, b, g_waterStats.quads))
+            std::vector<float> fogF;
+            if (!ok || !gifToBatch(rdram, sink.packets, b, g_waterStats.quads, &fogF))
             {
                 if (g_waterStats.failed++ < 4)
                     std::fprintf(stderr, "[pop:native] water element %08x packet %08x: not replayed; on the GS\n", element, packet);
@@ -2417,20 +2429,72 @@ namespace pop_native_live
             }
             static int logged = 0;
             if (logged++ < 6)
-                std::fprintf(stderr, "[pop:native] water (P6 %s) element %08x packet %08x refract %u: %zu packets, %zu triangles\n",
-                             s.usePort ? "port" : "interpreter", element, packet, guestAny(rdram, element + 4) != 0, sink.packets.size(),
-                             b.indices.size() / 3);
+                std::fprintf(stderr, "[pop:native] water (P6 %s) element %08x packet %08x: %zu packets, %zu triangles\n",
+                             s.usePort ? "port" : "interpreter", element, packet, sink.packets.size(), b.indices.size() / 3);
             if (b.indices.empty())
                 return false;
-            std::vector<pop_assets::Batch> bs;
-            bs.push_back(std::move(b));
+            // P6's own fog: F per vertex (XYZF2), about 225-255 in the saves, far less than the zone's line (the colour pass
+            // copies a frame that is fogged already). The renderer's F is a + b * w per draw: a least-squares line through
+            // P6's (w, F), clamped to their range. shortcut: up to ~18 off (fountain, 225..255, < 5 elsewhere); F per vertex if it shows.
+            const uint32_t gso = guestAny(rdram, 0x00675148u);
+            double sw = 0, sf = 0, sww = 0, swf = 0, fmin = 255, fmax = 0;
+            for (size_t i = 0; i < b.vertices.size() && i < fogF.size(); ++i)
+            {
+                double w = guestF(rdram, gso + 0x27Cu); // w = the clip matrix's (+0x240, row vectors) last column
+                for (int k = 0; k < 3; ++k)
+                    w += double(guestF(rdram, gso + 0x240u + 16 * k + 12)) * b.vertices[i].pos[k];
+                sw += w, sf += fogF[i], sww += w * w, swf += w * fogF[i];
+                fmin = std::min(fmin, double(fogF[i])), fmax = std::max(fmax, double(fogF[i]));
+            }
+            const double nf = double(std::min(b.vertices.size(), fogF.size())), det = nf * sww - sw * sw;
+            const double fogB = nf > 1 && std::fabs(det) > 1e-9 ? (nf * swf - sw * sf) / det : 0.0, fogA = nf > 0 ? (sf - fogB * sw) / nf : 255.0;
+            // the clear: a GS sprite over the display (2048 -+ half its size, as FUN_004A76C0 draws it), colour and alpha 0,
+            // at the water's first GS Z (any Z inside the view: the clear does not test depth)
+            uint32_t z = 0;
+            if (sink.packets[0].size() >= 64)
+                std::memcpy(&z, sink.packets[0].data() + 3 * 16 + 8, 4), z = (z >> 4) & 0xFFFFFF;
+            const uint32_t w = guestAny(rdram, 0x0066D03Cu), h = guestAny(rdram, 0x0066D040u);
+            std::vector<uint8_t> clear(64, 0);
+            const uint64_t tag[2] = {1u | (1u << 15) | (uint64_t(1) << 46) | (uint64_t(6) << 47) | (uint64_t(3) << 60), 0x551};
+            const uint32_t xy0[4] = {(2048 - w / 2) * 16, (2048 - h / 2) * 16, z, 0}, xy1[4] = {(2048 + w / 2) * 16, (2048 + h / 2) * 16, z, 0};
+            std::memcpy(clear.data(), tag, 16);
+            std::memcpy(clear.data() + 32, xy0, 16);
+            std::memcpy(clear.data() + 48, xy1, 16);
+            pop_assets::Batch cb;
+            uint64_t unused = 0;
+            if (!gifToBatch(rdram, {clear}, cb, unused) || cb.indices.empty())
+                return false;
+            pop_assets::Batch after = cb, mask = b;
+            for (auto &v : mask.vertices)
+                v.colour[0] = v.colour[1] = v.colour[2] = v.colour[3] = 1.0f; // RGBAQ 0x80808080 (FUN_004A76C0)
             DrawMaterial dm = currentMaterial(rdram);
-            dm.textureKey = 0; // flat: the refraction buffer is not native yet
             dm.hasUvm = false;
             dm.constColour = dm.constAlpha = -1; // P6 writes RGBAQ itself
+            dm.ref = 0;
             const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-            g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
-            std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+            std::vector<WorldRecord> recs;
+            // (geometry, texture key, render state flags: 0x200 = no depth write, blend kind 1 = ALPHA 0x44; Z test; FBMSK)
+            const auto add = [&](pop_assets::Batch &&g, uint32_t key, uint32_t flags, uint32_t zTest, uint32_t fbmsk) {
+                DrawMaterial m = dm;
+                m.seq = g_frameSeq++;
+                m.textureKey = key;
+                m.flags = flags;
+                m.zTest = zTest;
+                m.fbmsk = fbmsk;
+                std::vector<pop_assets::Batch> bs;
+                bs.push_back(std::move(g));
+                g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, m));
+                recs.push_back({2, g_frameRefs.size() - 1});
+            };
+            add(std::move(cb), 0, 0x200, 0, 0x00FFFFFFu);              // alpha only, no Z test
+            add(std::move(mask), 0, 0x200, 1, 0x00FFFFFFu);            // alpha only, ZGEQUAL
+            add(std::move(b), kRefractionKey, 0x10200, 1, 0xFF000000u); // RGB only
+            DrawMaterial &cm = g_frameRefs.back().second.second;
+            cm.fogA = float(fogA), cm.fogB = float(fogB), cm.fogMin = float(fmin), cm.fogMax = float(fmax);
+            // the water leaves its mask in the frame's alpha; before list +0x98 EraseAlphaBuffer clears it on the GS, while
+            // natively draws before +0x98 never write alpha (currentMaterial): clear it again so that stays true
+            if (g_currentList != 0xA8u)
+                add(std::move(after), 0, 0x200, 0, 0x00FFFFFFu);
             if (!(g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {})))
                 return false;
             ++g_waterStats.native;
@@ -3632,7 +3696,7 @@ namespace pop_native_live
                 allMaterials.push_back(m);
             }
             for (const DrawMaterial &m : allMaterials)
-                if (m.textureKey && !imageOf.count(m.textureKey))
+                if (m.textureKey && m.textureKey != kRefractionKey && !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
                     bool found = false;
@@ -3790,7 +3854,7 @@ namespace pop_native_live
                     batches = &rec.first;
                 }
                 const DrawMaterial &mat = *matp;
-                const int32_t image = mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
                 putBytes(f, model, size_t(4) * size_t(16));
