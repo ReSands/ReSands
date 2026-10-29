@@ -891,6 +891,13 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "render: %s\n", error.c_str());
         return 1;
     }
+    if (const char *alphaOut = std::getenv("POP_VIEW_ALPHA")) // debug: the frame's alpha (glow mask) before the glow, grey
+    {
+        std::vector<uint8_t> grey(size_t(width) * height * 3);
+        for (size_t i = 0; i < size_t(width) * height; ++i)
+            grey[3 * i] = grey[3 * i + 1] = grey[3 * i + 2] = rgba[4 * i + 3];
+        stbi_write_png(alphaOut, int(width), int(height), 3, grey.data(), int(width * 3));
+    }
     if (glowOn && !noGlow)
         pop_postfx::colorDiffusion(rgba, int(width), int(height), int(glow[0]), int(glow[1]), glow[2] != 0, glow[3] != 0, int(glow[4]));
     if (hazeOn && !noHaze)

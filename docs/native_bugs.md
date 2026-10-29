@@ -65,6 +65,19 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    candidates for 0.13): 145139 the moon blown out to a white blob natively (GS: disc with a soft halo; sprite halo
    in +0x88 or its glow mask), 155110 a bright light patch on the floor natively that the GS frame lacks
    (light shaft?), 115853 the GS's sand particles / haze thicker than native.
+   **First look 29 Oct (offline; none of the three can show in play today: +0x88, +0x98 and the glow stay on the
+   GS live):** moon blob (145139) and floor patch (155110) are both the native **ColorDiffusion** (CPU reference,
+   `postfx.h`) over-brightening a faint +0x98 mask. With `--noglow` the +0x98 draws change no colour (alpha-only is
+   right) and the floor region matches the game (71.0 vs 71.5; with glow 74.8). The moon mask is at most 15/255
+   (~0.06) yet the glow adds +36 to the region: each convolution level gains ~9 x 19/128 = 1.34 and the levels
+   compound. If the GS did the same the moon would blow out there too, so suspect a missing factor in the
+   reference (the ALPHA FIX of the tap adds?); check against a GS trace of ApplyConvolution's blits before 0.2.
+   Sand haze (115853): the cloud and sparkles are 3 GFX draws in +0x88 (FUN_00458FC0: a 37-quad billboard with a
+   64x64 texture, two oriented emitters) that the offline frame does not draw natively; SmartBlur ran with fade 0.
+   Tools added for this: `POP_STATE_SKIP_LIST=<hex offset>` (pop_state_frame leaves out one list),
+   `POP_VIEW_ALPHA=<png>` (pop_native_view writes the alpha mask before the glow), `popstate.py --frame <png>
+   --alpha`. The save's displayed GS buffer alpha is **not** the glow mask (other shapes at save time), so the
+   GS-side mask needs a GS trace.
 5. **Done 27 Oct (two PC boots, TV off, display_active Disabled).** `tools\windows\profile-states.ps1 -States
    play_20261024_200200 -Start 6 -Duration 40` (the script now turns the native switches on as `play.ps1` does; before,
    it booted GS-only). **N6 does not reproduce from its save:** 60 fps for the whole 40 s, GS-only (report kept as

@@ -241,8 +241,11 @@ namespace
     {
         const uint32_t dm = getRegU32(ctx, 4);
         R5900Context sub{};
+        static const char *skip = std::getenv("POP_STATE_SKIP_LIST"); // debug: leave out one list (hex offset, e.g. 88)
         for (uint32_t off : {200u, 0x2Cu, 0x3Cu, 0x68u, 0x78u, 0x4Cu, 0x5Cu, 0x88u, 0x98u, 0xA8u})
         {
+            if (skip && std::strtoul(skip, nullptr, 16) == off)
+                continue;
             if (off == 0x5C)
             {
                 renderLightmaps(dm + off, &sub);

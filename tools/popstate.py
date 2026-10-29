@@ -6,7 +6,7 @@ VU0 code/data (4+4 KB), VU1 code/data (16+16 KB), then serialized fields.
 EGS : GSFE fields, then GSVR: VRAM as u64 size + 4 MB.
 
 Usage as a library: s = State(path); s.ram, s.spr, s.vram, s.gsregs, s.u32(addr), s.f32(addr)
-Command line: python3 -I tools/popstate.py STATE --frame OUT.png   (the displayed framebuffer)
+Command line: python3 -I tools/popstate.py STATE --frame OUT.png [--alpha]   (the displayed framebuffer; --alpha also OUT_alpha.png)
 """
 import struct
 import sys
@@ -118,7 +118,11 @@ def main():
                 a = gsvram.addr(fbp * 32, fbw, x, y)
                 row += s.vram[a:a + 3]
             rows.append(bytes(row))
-        gsvram.png(sys.argv[sys.argv.index('--frame') + 1], w, h, rows)
+        out = sys.argv[sys.argv.index('--frame') + 1]
+        gsvram.png(out, w, h, rows)
+        if '--alpha' in sys.argv:  # the frame's alpha (the glow mask), grey, 0x80 = 1.0 shown as 255
+            gsvram.png(out.replace('.png', '_alpha.png'), w, h, [bytes(min(255, 2 * s.vram[gsvram.addr(fbp * 32, fbw, x, y) + 3])
+                                                                       for x in range(w) for _ in range(3)) for y in range(h)])
         print(f'tick {s.tick} fbp {fbp:#x} fbw {fbw} psm {psm} {w}x{h}')
     else:
         print(f'tick {s.tick}', {k: hex(v) for k, v in s.gsregs.items()})
