@@ -8,7 +8,7 @@ layout(push_constant) uniform Push {
     mat4 mvp;          // game clip matrix * object matrix (column-major)
     vec4 params;       // x: flags (1 alpha test, 2 blended, 4 test LESS, 8 legacy blend), y: cutoff, z: lightmap strength, w: zScale
     vec4 fog;          // GS fog factor F = x + y * w clamped to z..w (the VU1 drivers' min, max; 255 = no fog)
-    vec4 fogColour;    // FOGCOL (0..1)
+    vec4 fogColour;    // FOGCOL (0..1); a: depth bias of draws without depth write, GS Z units
 } pc;
 layout(location = 0) in vec3 inPos;
 layout(location = 1) in vec2 inUv;
@@ -22,9 +22,9 @@ layout(location = 3) noperspective out float vFog;
 void main()
 {
     vec4 c = pc.mvp * vec4(inPos, 1.0);
-    // params.x bit 64 (no depth write): one GS Z unit (2^-25 of the depth, mesh.vert's scale x 2^23 / zScale) nearer:
-    // the GS's integer Z gives a decal and its wall equal values, which pass GEQUAL; float depth flipped between frames
-    float bias = (int(pc.params.x + 0.5) & 64) != 0 ? 1.0 / 33554432.0 : 0.0;
+    // params.x bit 64 (no depth write): fogColour.a GS Z units (2^-25 of the depth each) nearer. A decal passes GEQUAL over
+    // its wall on the GS; our Z differs from VU1's by tens of units, so with float depth it flipped between frames (N16 moss)
+    float bias = (int(pc.params.x + 0.5) & 64) != 0 ? pc.fogColour.a / 33554432.0 : 0.0;
     gl_Position = vec4(c.x, c.y, pc.params.w * (c.w - c.z) + bias * c.w, c.w);
     vUv = inUv;
     vColour = inColour;

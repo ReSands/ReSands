@@ -570,7 +570,7 @@ namespace pop_native
                     // failures instead (the failure pass keeps exactly the pixels the test rejects), bit 5 fog as vertex alpha
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
                     const bool less = mat && mat->alphaTestLess;
-                    // bit 6: no depth write (a decal over its wall): one GS Z unit nearer, as Z24 ties pass GEQUAL (N16 moss)
+                    // bit 6: no depth write (a decal over its wall): moved nearer by the decal bias (mesh.vert, N16 moss)
                     const bool noDepthWrite = !(pipelineKey(afail ? &failMat : mat) & (1u << 6));
                     push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0) | (mat && mat->fogAlpha ? 32 : 0) |
                                            (noDepthWrite ? 64 : 0));
@@ -587,7 +587,12 @@ namespace pop_native
                     push.fogColour[0] = fc[0];
                     push.fogColour[1] = fc[1];
                     push.fogColour[2] = fc[2];
-                    push.fogColour[3] = 1.0f;
+                    // POP_NATIVE_DECAL_ZBIAS (GS Z units, default 1): what bit 64 of params.x moves draws without depth write nearer
+                    static const float decalBias = [] {
+                        const char *e = std::getenv("POP_NATIVE_DECAL_ZBIAS");
+                        return e && *e ? std::strtof(e, nullptr) : 1.0f;
+                    }();
+                    push.fogColour[3] = decalBias;
                     VkDescriptorSet set = mat ? materialSets[r.material] : whiteSet;
                     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &set, 0, nullptr);
                     vkCmdPushConstants(cb, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(Push), &push);
