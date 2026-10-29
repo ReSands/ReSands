@@ -100,6 +100,48 @@ int main()
                         p[0], p[1], p[2], want[0], want[1], want[2], ok ? "ok" : "WRONG");
             failed += !ok;
         }
+    {
+        // mid-frame copy (Draw::copyFrame, the water's refraction): red with alpha 0x40 on the left half, then the right half
+        // blended (0x44) from the copy of the left half: colour and alpha must come through, the left half must survive
+        r.reset();
+        pop_native::Material red, fromCopy;
+        red.writeAlpha = true;
+        pop_native::materialFromGsFlags(0x10000, 0, fromCopy);
+        fromCopy.baseImage = pop_native::kFrameCopyImage;
+        const auto quad = [&](float x0, float u1, const float col[4], int material) {
+            pop_native::Mesh mesh;
+            mesh.material = material;
+            for (int v = 0; v < 4; ++v)
+                mesh.vertices.push_back({{v & 1 ? x0 + 1.0f : x0, v & 2 ? 1.0f : -1.0f, 0.95f}, {v & 1 ? u1 : 0.0f, v & 2 ? 1.0f : 0.0f},
+                                         {col[0], col[1], col[2], col[3]}, {0, 0}});
+            mesh.indices = {0, 1, 2, 2, 1, 3};
+            pop_native::Draw d{};
+            d.mesh = r.addMesh(mesh);
+            std::copy(identity, identity + 16, d.model);
+            return d;
+        };
+        const float redCol[4] = {1, 0, 0, 0x40 / 128.0f}, white[4] = {1, 1, 1, 1};
+        std::vector<pop_native::Draw> draws = {quad(-1.0f, 0.0f, redCol, r.addMaterial(red)), quad(0.0f, 0.5f, white, r.addMaterial(fromCopy))};
+        draws[1].copyFrame = true;
+        std::vector<uint8_t> px;
+        if (!r.upload(error) || !r.renderOffscreen(8, 4, identity, draws, px, error))
+        {
+            std::fprintf(stderr, "frame copy: %s\n", error.c_str());
+            return 2;
+        }
+        const uint8_t *left = &px[(2 * 8 + 1) * 4], *right = &px[(2 * 8 + 6) * 4];
+        const int cs[3] = {255, 0, 0};
+        bool ok = left[0] == 255 && left[1] == 0 && left[2] == 0;
+        int want[3];
+        for (int i = 0; i < 3; ++i)
+        {
+            want[i] = gsBlend(0x44, 0, cs[i], 0x40, kCd[i], kAd);
+            ok &= std::abs(right[i] - want[i]) <= 2;
+        }
+        std::printf("%-22s left %3d %3d %3d, right %3d %3d %3d, GS %3d %3d %3d %s\n", "frame copy", left[0], left[1], left[2], right[0], right[1],
+                    right[2], want[0], want[1], want[2], ok ? "ok" : "WRONG");
+        failed += !ok;
+    }
     std::printf("%d wrong\n", failed);
     return failed ? 1 : 0;
 }

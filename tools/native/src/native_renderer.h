@@ -42,9 +42,13 @@ namespace pop_native
         AddDest = 9,     // 0x09: Cd * As + Cs
     };
 
+    // Material::baseImage: the frame as it was at the last Draw::copyFrame of this frame (colour and alpha; the GS
+    // reading its own frame as a texture, as the water's refraction copy does)
+    constexpr int kFrameCopyImage = -2;
+
     struct Material
     {
-        int baseImage = -1;     // -1: white
+        int baseImage = -1;     // -1: white; kFrameCopyImage: the frame copy
         int lightmapImage = -1; // -1: no lightmap
         float lightmapStrength = 1.0f; // darkening = texel * strength (world lightmaps 1; characters' shading pass Af / 128)
         AlphaMode alphaMode = AlphaMode::Opaque;
@@ -123,6 +127,7 @@ namespace pop_native
         float fogA = 255.0f, fogB = 0.0f, fogMin = 0.0f, fogMax = 255.0f;
         bool ownFogColour = false;     // per draw FOGCOL (live frames: the render state's, 0 for additive blends)
         float fogColour[3] = {0, 0, 0};
+        bool copyFrame = false;        // copy the frame (as drawn so far) for kFrameCopyImage before this draw (one pass in game order only)
     };
 
     // The game's post effects for the window path (present): CAfterEffect::ColorDiffusion (glow) and

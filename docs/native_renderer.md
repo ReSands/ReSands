@@ -477,6 +477,21 @@ own camera). The game's own picture of the same moment: `tools/popstate.py <stat
   2,987 P6 runs of the 59 distinct water saves byte-identical to the interpreter; 53 draw water offline (6 have P6 in the
   chain but no water left in the saved draw list); the fountain's two waters fill their basins exactly, behind Farah.
   The saved frame's alpha cannot outline the water (later passes clear it), so the GS check is the GIF output itself.
+- **The refraction copy, read from the fountain save (FUN_004A6F40):** FRAME 0x1A4 (256x256), sprites with ALPHA 0xA8
+  clear it to black (alpha 0 too); then TEX0 = the frame (640x448, CLAMP 5, bilinear TEX1 0x60), TEST alpha GEQUAL
+  0x7F, ALPHA 0x44, vertex colour (0x67, 0x70, 0x7F, 0x80): five full-frame copies scaled to 256x256 in 32-pixel strips,
+  four shifted by a few pixels (dest y +2; UV v +3, dest y -2; UV u +3, dest y +2; UV u +5 / v +3, dest y -2) and last
+  the plain one. Only texels the mask pass gave alpha 0x80 pass, so the buffer is the tinted water area, grown at its
+  edges by the shifted copies. The colour pass (ZBUF ZMSK, FBMSK RGB only, ALPHA 0x44, TEX0 = the buffer, TCC, MODULATE,
+  bilinear) maps P6's ST into it; where the buffer is black (alpha 0) the frame stays as it was.
+- **Water step 2 done (29 Oct night): mid-frame copy in the renderer.** `Draw::copyFrame` copies the frame as drawn so
+  far (colour and alpha) before that draw; a material with `baseImage = kFrameCopyImage` samples it (clamped,
+  bilinear). The scene pass ends, the colour target is copied into `frameCopy` (same size, made on first use), and the
+  pass resumes in `renderPassLoad` (colour and depth loaded; both passes carry the same two dependencies, which
+  render pass compatibility requires). Copies happen in the first pass, so in practice with `Options::gameOrder`.
+  Check: `pop_blend_test` case "frame copy" (alpha 0x40 red copied and blended back: 158 60 100 vs the GS's 157 60 100),
+  clean under the validation layer; frames without a copy are pixel-identical. Not in the PNF frame format or the live
+  path yet (step 3).
 - Score, mean |difference| over the 51 saves of 17 Oct (`game/analysis/play1017/native/scores_v*.txt`):
   19.96 (geometry, textures, lightmaps, characters) -> 17.44 (+ glow, haze) -> 16.85 (+ particles).
   Plain scenes 3-7; worst: full-screen effects (rewind flash, white-out, explosion), 2D (pause menu),

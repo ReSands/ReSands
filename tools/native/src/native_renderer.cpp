@@ -85,6 +85,9 @@ namespace pop_native
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkRenderPass renderPass = VK_NULL_HANDLE;
+        VkRenderPass renderPassLoad = VK_NULL_HANDLE; // the scene pass resumed after a mid-frame copy (Draw::copyFrame)
+        Texture frameCopy;                            // kFrameCopyImage: the frame at the last copyFrame
+        uint32_t frameCopyW = 0, frameCopyH = 0;
         Buffer vertexBuffer, indexBuffer;
         // kept meshes (keepMesh): append-only device buffers, grown by doubling; pending = not uploaded yet
         struct KeptRange
@@ -490,8 +493,47 @@ namespace pop_native
             return m;
         }
 
-        // the scene pass into `fb` (colour ends in TRANSFER_SRC layout, see the render pass)
-        void recordScene(VkCommandBuffer cb, VkFramebuffer fb, uint32_t width, uint32_t height, const float clip[16],
+        // the frame copy (kFrameCopyImage) at the frame's size, its materials' descriptors pointing at it; only when a
+        // draw asks for it. Call with no frame in flight (descriptor sets are rewritten).
+        bool prepareFrameCopy(const std::vector<Draw> &draws, uint32_t w, uint32_t h, std::string &error)
+        {
+            const bool copies = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.copyFrame; });
+            const bool samples = std::any_of(materials.begin(), materials.end(), [](const Material &mt) { return mt.baseImage == kFrameCopyImage; });
+            if (!copies && !samples)
+                return true;
+            if (!frameCopy.image || frameCopyW != w || frameCopyH != h)
+            {
+                vkDeviceWaitIdle(device);
+                destroyImage(frameCopy);
+                frameCopyW = frameCopyH = 0;
+                if (!createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                 frameCopy, error) ||
+                    !oneShot([&](VkCommandBuffer cb) {
+                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT,
+                                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                    }, error))
+                    return false;
+                frameCopyW = w;
+                frameCopyH = h;
+            }
+            for (size_t i = 0; i < materials.size() && i < materialSets.size(); ++i)
+                if (materials[i].baseImage == kFrameCopyImage)
+                {
+                    const VkDescriptorImageInfo info{clampSampler, frameCopy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                    wr.dstSet = materialSets[i];
+                    wr.dstBinding = 0;
+                    wr.descriptorCount = 1;
+                    wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+                    wr.pImageInfo = &info;
+                    vkUpdateDescriptorSets(device, 1, &wr, 0, nullptr);
+                }
+            return true;
+        }
+
+        // the scene pass into `fb` (colour ends in TRANSFER_SRC layout, see the render pass); `colour` is fb's colour
+        // image, copied into frameCopy at each Draw::copyFrame (prepareFrameCopy first)
+        void recordScene(VkCommandBuffer cb, VkFramebuffer fb, VkImage colour, uint32_t width, uint32_t height, const float clip[16],
                          const std::vector<Draw> &draws)
         {
             // The game's clip matrix is stored for row vectors (clip = [x y z 1] * C), so read as a
@@ -521,6 +563,28 @@ namespace pop_native
                 VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
                 {
+                    if (d.copyFrame && pass == 0 && frameCopy.image && frameCopyW == width && frameCopyH == height)
+                    {
+                        // the frame so far (colour + alpha) into frameCopy, then the pass goes on over it
+                        vkCmdEndRenderPass(cb);
+                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                                VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                        VkImageCopy c{};
+                        c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                        c.extent = {width, height, 1};
+                        vkCmdCopyImage(cb, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                                VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                        VkRenderPassBeginInfo again = rb;
+                        again.renderPass = renderPassLoad;
+                        again.clearValueCount = 0;
+                        again.pClearValues = nullptr;
+                        vkCmdBeginRenderPass(cb, &again, VK_SUBPASS_CONTENTS_INLINE);
+                        vkCmdSetViewport(cb, 0, 1, &vp);
+                        vkCmdSetScissor(cb, 0, 1, &sc);
+                        bound = VK_NULL_HANDLE;
+                        boundBuffers = -1;
+                    }
                     MeshRange r;
                     const bool isKept = d.mesh < 0 && d.kept >= 0;
                     if (isKept)
@@ -717,14 +781,31 @@ namespace pop_native
             dep.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
             dep.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             dep.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            // and, for the pass resumed after a mid-frame copy (Draw::copyFrame), the copy's read of the colour and the
+            // depth writes before it; both passes carry both dependencies (render pass compatibility wants them equal)
+            VkSubpassDependency deps[2] = {dep, {}};
+            deps[1].srcSubpass = VK_SUBPASS_EXTERNAL;
+            deps[1].dstSubpass = 0;
+            deps[1].srcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            deps[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+            deps[1].srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            deps[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
             VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
             rp.attachmentCount = 2;
             rp.pAttachments = at;
             rp.subpassCount = 1;
             rp.pSubpasses = &sub;
-            rp.dependencyCount = 1;
-            rp.pDependencies = &dep;
+            rp.dependencyCount = 2;
+            rp.pDependencies = deps;
             if (!check(vkCreateRenderPass(device, &rp, nullptr, &renderPass), "vkCreateRenderPass", error))
+                return false;
+            // resumed: colour and depth loaded where the first pass left them
+            at[0].loadOp = at[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            at[0].initialLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            at[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            if (!check(vkCreateRenderPass(device, &rp, nullptr, &renderPassLoad), "vkCreateRenderPass (load)", error))
                 return false;
 
             VkDescriptorSetLayoutBinding b[2]{};
@@ -1197,6 +1278,9 @@ namespace pop_native
                 vkDestroyDescriptorSetLayout(m->device, m->setLayout, nullptr);
             if (m->renderPass)
                 vkDestroyRenderPass(m->device, m->renderPass, nullptr);
+            if (m->renderPassLoad)
+                vkDestroyRenderPass(m->device, m->renderPassLoad, nullptr);
+            m->destroyImage(m->frameCopy);
             if (m->sampler)
                 vkDestroySampler(m->device, m->sampler, nullptr);
             if (m->clampSampler)
@@ -1713,10 +1797,11 @@ namespace pop_native
         Texture &colour = o.colour, &depth = o.depth;
         Buffer &readback = o.readback, &depthReadback = o.depthReadback;
         const VkFramebuffer fb = o.fb;
+        ok = ok && m->prepareFrameCopy(draws, width, height, error);
         if (ok)
         {
             ok = m->oneShot([&](VkCommandBuffer cb) {
-                m->recordScene(cb, fb, width, height, clip, draws);
+                m->recordScene(cb, fb, colour.image, width, height, clip, draws);
                 VkBufferImageCopy region{};
                 region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.imageExtent = {width, height, 1};
@@ -1788,7 +1873,8 @@ namespace pop_native
                 return false;
         }
         vkWaitForFences(m->device, 1, &m->frameFence, VK_TRUE, UINT64_MAX); // one frame in flight
-        if (!m->ensureTarget(internalWidth, internalHeight, error) || !m->ensureSwapchain(windowWidth, windowHeight, error))
+        if (!m->ensureTarget(internalWidth, internalHeight, error) || !m->ensureSwapchain(windowWidth, windowHeight, error) ||
+            !m->prepareFrameCopy(draws, internalWidth, internalHeight, error))
             return false;
         if (!m->swapchain)
             return true; // minimised
@@ -1809,7 +1895,7 @@ namespace pop_native
         vkBeginCommandBuffer(cb, &bi);
         const bool overlay = m->overlayOn && m->overlay.image;
         if (!overlay)
-            m->recordScene(cb, m->targetFb, internalWidth, internalHeight, clip, draws);
+            m->recordScene(cb, m->targetFb, m->targetColour.image, internalWidth, internalHeight, clip, draws);
         if (!overlay && (m->post.glow || m->post.haze))
         {
             if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
