@@ -449,6 +449,19 @@ own camera). The game's own picture of the same moment: `tools/popstate.py <stat
   2 at 30, 1 at 32) and runs VU1 program 7: the surface is tessellated on VU1 from control points, so it
   needs that VU1 program ported. With +4 set the game first copies the framebuffer (FUN_004A76C0) and
   draws the water twice (refraction). Not drawn yet.
+- **Water packets, read from a save (29 Oct evening, fountain save `saves1029/play_20261029_202926`, codes 3328-3510 of
+  its last chain; P6 runs in 21 of the 66 Mac saves, `tools/vu1inventory.py`):** three passes per refracting water.
+  (1) **Mask:** FRAME_1 with FBMSK 0x00FFFFFF (alpha only), a 101-qw sprite strip DIRECT clears destination alpha
+  to 0 over the water's screen box, then TEST ZGEQUAL, ALPHA 0x2A (Cs), TEX0 0x620013480 (256x256 CT32 at TBP
+  0x3480 = FBP 0x1A4) and one P6 run per patch: per patch STCYCL 4/4 and V4-32 with FLG (TOPS-relative) 7 qw at
+  +0, 20 qw (15 on the last) at +8, 2 at +0x30 (GIF tag + 0x80 colour), 1 at +0x32 (GIF tag, count 0x12, PRE,
+  tri strip, ST RGBAQ XYZF2), MSCAL 0. (2) **Refraction texture:** FRAME_1 0x401A4 (the 256x256 buffer), ALPHA 0xA8
+  FIX 0 sprites clear it to black; TEX0 0x668028000 (the frame itself, 640 wide), TEST ATE GEQUAL 0x7F, ALPHA 0x44:
+  five sets of strips copy the frame into the buffer, tinted (0x67, 0x70, 0x7F), only where (1) wrote alpha. (3)
+  **Colour:** FRAME_1 back to the frame (FBMSK 0xFF000000: RGB only), TEX0 = the buffer, TEST ZGEQUAL, ALPHA 0x44,
+  XYOFFSET set, and the patches again through P6 (next VU1 run from code 3505). **Natively this needs what the
+  renderer does not have yet: a copy of its own frame in mid-frame** (colour + the alpha (1) wrote; the native
+  frame is only read back at the end, `native_renderer.cpp`), alpha-only and RGB-only writes, and an alpha test.
 - Score, mean |difference| over the 51 saves of 17 Oct (`game/analysis/play1017/native/scores_v*.txt`):
   19.96 (geometry, textures, lightmaps, characters) -> 17.44 (+ glow, haze) -> 16.85 (+ particles).
   Plain scenes 3-7; worst: full-screen effects (rewind flash, white-out, explosion), 2D (pause menu),
