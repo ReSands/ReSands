@@ -17,6 +17,7 @@ namespace
         const char *name;
         uint32_t funct;
         uint32_t sa;
+        uint32_t opcode = 0x1C;
     };
 
     constexpr uint32_t kRs = 5, kRt = 6, kRd = 7;
@@ -52,6 +53,8 @@ namespace
         {"PMADDUW", 0x29, 0}, {"PSRAVW", 0x29, 3}, {"PMTHI", 0x29, 8}, {"PMTLO", 0x29, 9}, {"PINTEH", 0x29, 10},
         {"PMULTUW", 0x29, 12}, {"PDIVUW", 0x29, 13}, {"PCPYUD", 0x29, 14}, {"POR", 0x29, 18}, {"PNOR", 0x29, 19},
         {"PEXCH", 0x29, 26}, {"PCPYH", 0x29, 27}, {"PEXCW", 0x29, 30},
+        // SPECIAL (opcode 0): conditional moves, which keep rd's upper 64 bits
+        {"MOVZ", 0x0A, 0, 0}, {"MOVN", 0x0B, 0, 0},
     };
 }
 
@@ -74,7 +77,7 @@ int main(int argc, char **argv)
         for (const char *name : kNoRd)
             noRd = noRd || std::string(name) == op.name;
         const uint32_t rd = noRd ? 0u : kRd;
-        const uint32_t raw = (0x1Cu << 26) | (kRs << 21) | (kRt << 16) | (rd << 11) | (op.sa << 6) | op.funct;
+        const uint32_t raw = (op.opcode << 26) | (kRs << 21) | (kRt << 16) | (rd << 11) | (op.sa << 6) | op.funct;
         const Instruction inst = decoder.decodeInstruction(0x100000u, raw, false);
         const std::string code = gen.translateInstruction(inst);
         std::fprintf(out, "// %s (%08x)\nstatic void t_%s(R5900Context *ctx, uint8_t *rdram, PS2Runtime *runtime)\n{\n    (void)rdram; (void)runtime;\n    %s\n}\n\n",

@@ -178,6 +178,12 @@ namespace
         if (n == "PEXTLW") return words([&](int i) { return (i & 1) ? rs.w[i / 2] : rt.w[i / 2]; });
         if (n == "PEXTUW") return words([&](int i) { return (i & 1) ? rs.w[2 + i / 2] : rt.w[2 + i / 2]; });
         if (n == "PPACW") { rd = {{rt.w[0], rt.w[2], rs.w[0], rs.w[2]}}; return true; }
+        if (n == "MOVZ" || n == "MOVN")
+        {
+            if ((rt.d(0) == 0) == (n == "MOVZ"))
+                rd.setd(0, rs.d(0));
+            return true;
+        }
         if (n == "PCPYLD") { rd = {{rt.w[0], rt.w[1], rs.w[0], rs.w[1]}}; return true; }
         if (n == "PCPYUD") { rd = {{rs.w[2], rs.w[3], rt.w[2], rt.w[3]}}; return true; }
         if (n == "PEXEW") { rd = {{rt.w[2], rt.w[1], rt.w[0], rt.w[3]}}; return true; }

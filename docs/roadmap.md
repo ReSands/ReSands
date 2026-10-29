@@ -9,10 +9,14 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **0.1 = playable start to finish** with emulated graphics and sound (crash 1 fixed; crash 2, cause unknown and
   seen once, taken off the list 26 Oct and watched through the play-through: on a freeze, take a full dump).
   Borrowed items for 0.1 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **MOVZ/MOVN write only the low 64 bits** (our recompiler copies 128; one line in
-  `special_translator.cpp`): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
+  `special_translator.cpp`; **written 29 Oct as sotc patch 43**, with MOVZ/MOVN cases in `tools/mmitest` that fail
+  without it and pass with it; not applied on the PC yet): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
   the play-through. **IOP `maxFreeMemory()`** never goes back up after frees: fix (`-Fast`) only if import stats
   (patch 11) show PoP calls QueryMaxFreeMemSize.
-  Also with that rebuild (user, 27 Oct): **runtime patch 43, small screenshots.** `PS2X_SCREENSHOT_DIR` shots
+  Also with that rebuild (user, 27 Oct): **runtime patch 44 (written 29 Oct; numbered 43 before), small screenshots.**
+  The shot is read with `rlReadScreenPixels` at the render size (LoadImageFromScreen multiplied by the DPI scale),
+  cut to the game's draw rectangle and resized to 640x448 (RGBA PNG; `livecmp.py` reads it). Compiled on the PC
+  with the play build's flags (single file); first real check = the next `boot.ps1 -Shots` after the rebuild. `PS2X_SCREENSHOT_DIR` shots
   (`ps2_runtime.cpp` ~2911, `LoadImageFromScreen` + `ExportImage`) are 9600x5400 on the 4K TV at 250% DPI with the
   game in a corner, and `livecmp.py` takes minutes per pair. Crop to the game's draw rectangle and resize to 640x448
   before export. Debug shots only; does not change play.

@@ -1,0 +1,53 @@
+From 7ed74113e2b2d302269666464f59d0bb76fbad16 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Thu, 29 Oct 2026 13:25:20 +0000
+Subject: [PATCH] runtime: PS2X_SCREENSHOT_DIR shots read the framebuffer at
+ its real size, cut to the game's rectangle, 640x448
+
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 15 ++++++++++++++-
+ 1 file changed, 14 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ba60afb..58b119c 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2863,6 +2863,7 @@ void PS2Runtime::run()
+ #endif
+         BeginDrawing();
+         ClearBackground(BLACK);
++        Rectangle shotRect{};
+         if (displayTex.id != 0 && presentWidth != 0u && presentHeight != 0u)
+         {
+             const float screenWidth = static_cast<float>(GetScreenWidth());
+@@ -2882,6 +2883,7 @@ void PS2Runtime::run()
+             const Rectangle srcRect{0.0f, 0.0f, static_cast<float>(presentWidth), static_cast<float>(presentHeight)};
+             const Rectangle dstRect{(screenWidth - dstWidth) * 0.5f, (screenHeight - dstHeight) * 0.5f, dstWidth, dstHeight};
+             DrawTexturePro(displayTex, srcRect, dstRect, Vector2{0.0f, 0.0f}, 0.0f, WHITE);
++            shotRect = dstRect;
+         }
+         if (m_debugUiInitialized && m_debugUiDrawCallback)
+         {
+@@ -2908,7 +2910,18 @@ void PS2Runtime::run()
+             {
+                 const auto path = std::filesystem::path(directory) / ("field-" + std::to_string(eeScheduler().currentVSyncTick()) + ".png");
+                 rlDrawRenderBatchActive();
+-                const Image screen = LoadImageFromScreen();
++                // The framebuffer at its real size (LoadImageFromScreen multiplies by the DPI scale: 9600x5400
++                // with the picture in a corner on a 4K screen at 250%), cut to the game's rectangle, 640x448.
++                const int renderWidth = GetRenderWidth(), renderHeight = GetRenderHeight();
++                Image screen{rlReadScreenPixels(renderWidth, renderHeight), renderWidth, renderHeight, 1,
++                             PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
++                if (shotRect.width > 0.0f)
++                {
++                    const float sx = renderWidth / static_cast<float>(GetScreenWidth());
++                    const float sy = renderHeight / static_cast<float>(GetScreenHeight());
++                    ImageCrop(&screen, Rectangle{shotRect.x * sx, shotRect.y * sy, shotRect.width * sx, shotRect.height * sy});
++                    ImageResize(&screen, 640, 448);
++                }
+                 ExportImage(screen, path.string().c_str());
+                 UnloadImage(screen);
+             }
+-- 
+2.54.0 (Apple Git-157)
+
