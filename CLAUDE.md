@@ -62,13 +62,14 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   **All performance (rewind dip 155110, fight fps, N6) waits until fully native, then optimised in one go (user).**
   Rule kept: a bug caused by the hybrid frame is parked until 0.2; bugs in native code are fixed now. Bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`; locate with a `.glitch` capture + the user's red circle on a frame.
-- **Next: 0.13, wiring in the new layers** (agreed 29 Oct). P5 GFX particles done: on by default since 29 Oct evening
-  (user check passed in 3 scenes; `POP_NATIVE_P5=0` off; native only with `-NativeLate`; PC not yet rebuilt with the
-  flip). **Now water (P6)**: three passes (mask, refraction copy, colour), read from the fountain save (`docs/native_renderer.md`
-  "Water packets"). Plan: (1) **done 29 Oct night**: offline P6 geometry, flat (`POP_NATIVE_P6=1`), all 148 waters
-  share one pass structure, the port (one dropped load fixed) matches the interpreter on all 2,987 runs; (2) **done**: mid-frame copy in the renderer (`Draw::copyFrame`, `kFrameCopyImage`; not in PNF / live yet);
-  (3) **done offline 29 Oct night** (full water: mask, buffer, colour pass, P6's own fog; 22 of 53 saves better, user sheet review pending); (4) **done 29 Oct night**: live behind `POP_NATIVE_P6=1` (with `-NativeLate`), user check passed on fountain 202926 (no other baths save yet); default still off. Then
-  halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
+- **Next: 0.13, wiring in the new layers** (agreed 29 Oct). P5 GFX particles: on by default (`POP_NATIVE_P5=0` off).
+  **Water (P6) done 29 Oct night** (`docs/native_renderer.md` "Water step 1-4"): offline full water (mask, the 256x256
+  refraction buffer rebuilt in mesh.frag from a mid-frame copy, colour pass, P6's own fog), live behind `POP_NATIVE_P6=1`
+  (native only with `-NativeLate`; default still off), user check passed on fountain 202926; PC built with it (7f54f75).
+  Open: turn `POP_NATIVE_P6` on by default after more scenes (another baths save); the mist around feet / pillars in
+  water is missing natively (likely GFX particles of +0x88, which `pop_state_frame` lists but never draws; unproven).
+  Then halos (fixes the save-point pop / N10 if it works), light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
   X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
