@@ -79,9 +79,12 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   (slow fight), GS-only references `gsref1027/`.
 - **VU1 ports:** every reachable VU1 program is ported (`tools/vu1port/ported/`; P4 and P5 pass whole-run chains but
   are not in the game yet; `docs/native_renderer.md` "VU1 program inventory").
-- **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** Header from POP1's DWARF compiles,
-  64 of 669 byte-matched. Run 2 (28-29 Oct night): 42 of 103 matched, 9 header requests to apply next (that doc,
-  "Runs"); queue resumes with the "Qwen DARE audio decomp" shortcut.
+- **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** 79 of 669 byte-matched (29 Oct:
+  run 2's header requests fixed in the generator, sndCList template; near misses by hand; names in the Mac Ghidra
+  project). Queue resumes with the "Qwen DARE audio decomp" shortcut (the PC has the new prompt).
+- **29 Oct (Mac):** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written, not applied on the PC; the gate's
+  three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P5 plan and P4's role in
+  `docs/native_renderer.md` "P4 and P5 in the game" (P5 next, offline first, off by default live).
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
 
