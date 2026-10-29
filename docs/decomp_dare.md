@@ -4,14 +4,12 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (28 Oct night; start here)
+## State (29 Oct morning; start here)
 
-- **Run 2 is running overnight on the PC** (started 28 Oct evening from `tools/windows/oct28.ps1` via `start-job.ps1`,
-  4 rounds per function, no end time; **the user stops it with the "Stop Qwen" desktop shortcut**, which never shuts
-  the PC down; nobody watches it). It is the first run with fixes 1-6 below. Its queue starts with run 1's 10
-  remaining misses (their old attempts moved to `game\analysis\qwen_run1_misses\` on the PC), then the untried
-  functions, same-size ones first, smallest first.
-- **Matched so far: 22 of 669** = 18 by Qwen (17 in run 1 + `GetPos` in the smoke test) + 4 by hand
+- **Run 2 is done (stopped 29 Oct 07:31 with "Stop Qwen"); results under "Runs".** The queue resumes from the
+  next untried function when the "Qwen DARE audio decomp" shortcut runs again. All attempt folders are copied to
+  `game/analysis/qwen_pc/` on the Mac.
+- **Matched so far: 64 of 669** (`--summary`, 29 Oct): 42 in run 2, plus earlier 22 = 18 by Qwen (17 in run 1 + `GetPos` in the smoke test) + 4 by hand
   (`SND_fn_bIsResourceStreamedSnd`, and after the fixes `SND_fn_vResetStack`, `SND_fn_pvGetStackHead`,
   `SND_fn_vDesInitTheme`, all three run-1 misses). The 18 Qwen passes and every hand match were re-judged under
   the new flag on 28 Oct: all still MATCH.
@@ -31,7 +29,18 @@ the compiler check: `docs/roadmap.md` "2.0".
 - **Run 1 (28 Oct 15:37-17:44, stopped by hand): 17 of 29 matched (59%)**, the smallest same-size functions (32-44
   bytes), ~4.2 min per function, many in round 1-2. 12 misses (best attempts 0-6 of 8-12 instructions; 2 never
   compiled), copied to `game/analysis/qwen_pc/` on the Mac. Why they missed -> fixes 1-6.
-- **Run 2 (28 Oct night):** results not read yet.
+- **Run 2 (28 Oct 21:44 - 29 Oct 07:31, stopped by the user): 42 of 103 matched (41%)**, ~5.7 min per function;
+  9 stopped with NEEDS HEADER CHANGE, ~52 no match after 4 rounds; 544 of the 647 queued not reached. **Fixes 1-6
+  barely helped run 1's misses:** of the 10 retried, 1 matched (170d40), 2 reached a header request (172380,
+  18ac80), 7 still miss. Most passes are new functions, many in round 1.
+  - Header requests (to apply in `dare_fix.h` / `dare_header.py`): member at 0x60 of `_tdstBlockResourceMem`
+    (172380), `stCallBackRequest_` missing (18ac80), member at 0x18 of `CTool` (16f500),
+    `SndManager::GetLengthSample` static (171a80), `SND_fn_vMouchardThreadsnd` arguments (183780),
+    `~CAsyncTransfer` takes `short param_2` (191240), `sndCList::Find` / `sndPos` (194d00), `MouchardThreadTool`
+    is `(int, int)` (1711c0), `fn_vUbiEELoop` is C++ (`fn_vUbiEELoop__FPv`), not `extern "C"` (160940).
+  - Nearest misses (for a hand fix or the permuter): `RPS2::ASyncLoadResBinary` 16/17, `Create_Source` 13/14,
+    `SND_fn_bCanFreeSubBlock` 20/22, `SND_fn_vSynchroSxd` 19/21, `CThemeManager::SynchroTheme` 16/18,
+    `SndManager::DesInitMTTrackVolumeArray` 15/17, `SND_fn_lGetSpuBiggestReverb` 13/15, `SND_fn_vStrncpy` 16/19.
 
 ## Fixes after run 1 (all done 28 Oct night)
 
@@ -147,8 +156,9 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## Next steps (in order)
 
-1. Read run 2 (see the morning check above); if fixes 1-6 helped, keep the queue running on later nights.
-2. Header fixes Qwen reports (`HEADER` files; `RPS2::GetResLength` static) go in `dare_fix.h` / `dare_header.py`.
+1. Apply run 2's 9 header requests (above; also `RPS2::GetResLength` static) in `dare_fix.h` / `dare_header.py`,
+   then re-queue those functions. Hand-fix the nearest misses.
+2. Keep the queue running on later nights (41% pass on new functions); run 1's old misses need more than prompt fixes.
 3. Apply `callees.tsv` / `globals.tsv` names to the Ghidra project (cheap; helps 0.3).
 4. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
 

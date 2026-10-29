@@ -80,8 +80,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **VU1 ports:** every reachable VU1 program is ported (`tools/vu1port/ported/`; P4 and P5 pass whole-run chains but
   are not in the game yet; `docs/native_renderer.md` "VU1 program inventory").
 - **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** Header from POP1's DWARF compiles,
-  22 of 669 byte-matched (18 by Qwen, 4 by hand). **Run 2 runs overnight 28-29 Oct** (shortcut "Qwen DARE audio
-  decomp", stopped by the user with "Stop Qwen"); in the morning read it per that doc's "Morning check".
+  64 of 669 byte-matched. Run 2 (28-29 Oct night): 42 of 103 matched, 9 header requests to apply next (that doc,
+  "Runs"); queue resumes with the "Qwen DARE audio decomp" shortcut.
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
 
