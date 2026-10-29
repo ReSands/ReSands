@@ -458,8 +458,8 @@ namespace pop_native_live
         // POP_NATIVE_TRANSLUCENT=1 (23 Oct): every draw of the lists Display3DElements draws before
         // the shadows (200, +0x2C, +0x3C, +0x68, +0x78, +0x4C; the lightmaps +0x5C are native already), any blend.
         // The picture is an upload that replaces pixels, so only a prefix of the game's order can be native:
-        // the lists after the shadows wait for POP_NATIVE_LATE (above). Frame alpha needs nothing here: only +0x98
-        // writes it (EraseAlphaBuffer runs before it).
+        // the lists after the shadows wait for POP_NATIVE_LATE (above), and blended draws need a pure frame (29 Oct).
+        // Frame alpha needs nothing here: only +0x98 writes it (EraseAlphaBuffer runs before it).
         bool worldStateOk(uint8_t *rdram)
         {
             static const bool translucent = [] {
@@ -483,13 +483,12 @@ namespace pop_native_live
                 const bool alpha = (flags & 0x60) == 0x40 || (flags & 0x28);
                 return (flags & 0x200) && !alpha;
             }
-            if (translucent)
-                return true;
             const uint32_t flags = guestAny(rdram, sub + 4);
-            if (((flags >> 16) & 0xF) != 0 || (flags & 0x200) || (flags & 0x40) || !guest8(rdram, 0x70000038u) ||
-                guestAny(rdram, 0x70000044u) != 0xFFFFFFFFu)
-                return false;
-            return true;
+            const bool opaque = ((flags >> 16) & 0xF) == 0 && !(flags & 0x200) && !(flags & 0x40) && guest8(rdram, 0x70000038u) &&
+                                guestAny(rdram, 0x70000044u) == 0xFFFFFFFFu;
+            // a blended or Z-less draw keeps the game's order only while nothing before it went to the GS (N13/N14/N16:
+            // instanced walls with lightmaps go to the GS in +0x2C and covered the native +0x4C corner stones over them)
+            return opaque || (translucent && g_worldPure);
         }
 
         // The render state's current sub-material (0x70000034, set by CElementList::Render before

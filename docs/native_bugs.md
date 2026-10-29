@@ -108,14 +108,16 @@ it: fix now. Not in 1: park.
    buffer the native world partly wrote: if so, hybrid -> parked, or picked up with the 0.13 halo work).
    **Checked 29 Oct evening (user, TV):** N13 (162246), N14 (162442), N16 (162819, 163042): seen in hybrid, not in
    gs, seen in native, all four -> a bug in the native world code: **fix now** (one bug, most likely). N15 (162621):
-   seen in gs too ("if anything even worse") -> not ours; a PS2 video decides if it ever matters.
+   seen in gs too ("if anything even worse") -> not ours for now; **user: revisit on real PS2 hardware** to be sure
+   the original looks like that.
 2. **Rewind at 30 fps** (save 155110): reproduce from the save first (115853 did not), then profile; if it is the
    native frame falling back to the GS, it is hybrid -> parked.
    **Checked 29 Oct evening:** reproduces from the save in every mode; `[pop:fps]` lows hybrid 33/30, gs 32/39,
    native 32/30/30/42 (longest). Not the hybrid; not fixed by going native either. Profiles of the 12 s before each
    quick-save (rewind inside): `game/analysis/rewind1029/` (185650 hybrid, 185807 gs, 185943 native + logs). gs:
    VUThread busy (VU1 interpreter); hybrid/native: GameThread busy, top own cost `pop_native_live::rasterAlpha`
-   9%. The 12 s windows blur the 2-3 s dip: a time-sliced look is next if picked up. Joins the fps items (4).
+   9%. The 12 s windows blur the 2-3 s dip: a time-sliced look is next if picked up. Joins the fps items (4):
+   **user, 29 Oct: all performance waits until fully native, then optimised in one go.**
 3. **N7 dagger flash: set aside** (user: seen once, may not be reproducible).
 4. The fps items (N6, fight fps 160324 / 160404 / 184926) wait for 0.2, as before.
 Then 0.13: put P5 into the game (as P9: the port plus an interpreter fallback at branches the traces never
