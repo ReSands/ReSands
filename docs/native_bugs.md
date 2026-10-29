@@ -106,8 +106,9 @@ not build 0.13 on top of broken code.
    native frame falling back to the GS, it is hybrid -> parked.
 3. **N7 dagger flash: set aside** (user: seen once, may not be reproducible).
 4. The fps items (N6, fight fps 160324 / 160404 / 184926) wait for 0.2, as before.
-Then 0.13: put P4 / P5 into the game (as P9: the ports plus an interpreter fallback at branches the traces never
-took; whole-run checks on new traces), water (P6), halos, light shafts, flashes, then retry `-NativeLate`.
+Then 0.13: put P5 into the game (as P9: the port plus an interpreter fallback at branches the traces never
+took; whole-run checks on new traces; plan in `docs/native_renderer.md` "P4 and P5 in the game"; P4 is an offline judge
+for the native characters, not a live path), water (P6), halos, light shafts, flashes, then retry `-NativeLate`.
 
 ## Tooling first (agreed 24 Oct)
 

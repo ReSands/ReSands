@@ -1109,6 +1109,39 @@ the runtime's own VU1 interpreter (`spriteRecord` in `pop_native_live.cpp`):
 - Not sprites: the big light halos and streaks around glowing pickups are the after-effects pass (FUN_004ABFC0),
   still on the GS.
 
+### P4 and P5 in the game: what each is for (29 Oct)
+
+- **P4 (characters) has no place in the live path.** P9 replaced an interpreter the sprite path already ran; native
+  characters run no VU1 program at all (own mesh decode, skinning and lighting on the GPU), so the "P4 into the
+  game as P9" item in `docs/native_bugs.md` was a planning slip. P4's value is as an **offline judge**: the port is
+  bit-exact to the interpreter (673 whole runs), so running it on a save's character packets and comparing vertex
+  positions / colours / UVs with the native path names any shading or skinning mismatch exactly (as the STQ check
+  on 32,940 vertices of 192521 did by hand). Running P4 live would move per-vertex work to the CPU: no.
+- **P5 (GFX particles) replaces a reimplementation with gaps** (the `particles` hook rebuilds quads on the CPU from
+  the particle data: oriented particles, random size ranges and the sheet V direction unverified; offline frames
+  log "GFX draws ... not drawn natively", e.g. 115853's sand cloud). Particles are a few hundred quads per frame, so
+  the exact program on the CPU is cheap. Plan, as P9 (offline first, live behind `POP_NATIVE_P5`, off by default):
+  1. **Packets** (decompiled 29 Oct, retail): `CVuManager::SetParticleEnv` (0x4B6140) appends at the DMA pointer
+     *(gfx +0xEC) a 0x60-word block: DMA CNT 0x17 qw (REF 0x50000017 when the last argument is set), FLUSHA,
+     UNPACK V4-32 0x17 qw at VU 0 (no TOPS): qw 1-4 pool matrix *(0x70000260) + entry u16 at arg3+0x10 * 0x40, 5-8
+     gfx +0x200, 9-12 +0x240, 13 sheet scale (1/cols * a, 1/rows * b), 14 / 15 the two axes, 16 fog zone
+     (0x70000270 + byte arg3+4 * 16), 17 GIF tag (count | 0x8000, 0xC02A4000, 0x12412412, 0x4124), 18 *arg3 / 1,
+     19 GIF tag (0x8000, 0x302AC000, 0x412, 0), 20-23 gfx +0x280. `CGraphicParticle::Initialize` (0x4B5700 billboard,
+     3 outputs; 0x4B54C0 oriented, 4 outputs; at most 200 / 150 particles) appends: DMA CNT, FLUSHA, BASE / OFFSET /
+     MSCALF from the program table (gfx + *(gfx+0xBA0) * 0x30 + 0xA2C / 0xA30 / 0xA28), UNPACK V3-32 n at 0
+     (TOPS) positions, V4-8 n at 0xC8 colours, V4-32 n at 0x190 size x / y, sheet column / row (billboard) or two
+     V4-32 axis rows (oriented, + a flag word), MSCNT, zero padding to a qw. FUN_004584C0 (0x4584C0) fills them.
+  2. **Capture**: in the hook, note *(gfx+0xEC) before calling the original FUN_004584C0 and read the blocks
+     between it and the new value after (check `ctx->pc` against the entry `$ra` first: override rule). No rewrite
+     of the EE side; the existing `particles` reimplementation stays as the fallback.
+  3. **Replay**: the sprite path's VIF replay into one VU data image (BASE/OFFSET double buffer: TOPS flips per
+     MSCALF), run `vu1_p5::run()` (ported/p5.cpp, `--chain p5` PASS 930 runs) from the MSCALF address, the
+     interpreter at any pc no stage starts at; XGKICK output (two GIF tags: the particle prims and the 0x302AC000
+     one) -> native quads as the sprite strips are.
+  4. **Judge** offline over the saves with GFX draws (115853 sand, the balcony rain/smoke/torch sheet): native vs
+     game picture with `POP_STATE_SKIP_LIST` / `livecmp score`, and port vs interpreter byte-identical.
+  Sprite kind 7 (SetParticleEnv + program 4, left to the GS in the sprite path) is the same packet: P5 covers it.
+
 ### The P9 port in place of the interpreter (25 Oct)
 
 P9 is ported (Qwen + hand stages, `docs/llm_jobs.md` "Night of 24-25 Oct results"). `port.py --chain p9` writes
