@@ -1155,7 +1155,7 @@ the runtime's own VU1 interpreter (`spriteRecord` in `pop_native_live.cpp`):
   not replayed; native share 184926 33% (my guess, unchecked: the native run ends at the water draw), 115837 / 115853
   ~99.7%; fps as the 25 Oct runs without P5. User check (`play.ps1 -Mode native -Save ... -Env POP_NATIVE_P5=1`):
   115853 sparks fine; 145139 column good (a glow line two thirds up is in GS-only too); 184926 fight fine (N17 is
-  GS-only too). **Left:** on by default with the late lists;
+  GS-only too). **On by default since then** (`POP_NATIVE_P5=0` off; native only with the late lists);
   sprite kind 7 (SetParticleEnv + program 4, left to the GS in the sprite path) is the same packet: P5 covers it.
 
 ### The P9 port in place of the interpreter (25 Oct)

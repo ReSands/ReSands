@@ -1415,7 +1415,7 @@ namespace pop_native_live
         }
 #if POP_SPRITE_VU1
         bool particleRecord(uint8_t *rdram, uint32_t start, uint32_t end, bool &recorded); // P5, below
-        const bool g_p5 = [] { const char *e = std::getenv("POP_NATIVE_P5"); return e && *e && *e != '0'; }();
+        const bool g_p5 = [] { const char *e = std::getenv("POP_NATIVE_P5"); return !(e && *e == '0'); }(); // on by default (user check 29 Oct)
         // true: handled (the original ran, or offline the P5 geometry is in the frame); false: the CPU quads below
         bool particlesP5(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -2316,7 +2316,7 @@ namespace pop_native_live
             return false;
         }
 
-        // GFX particles through P5 (POP_NATIVE_P5=1, off by default; =interp: the interpreter only): the DMA records
+        // GFX particles through P5 (on by default, POP_NATIVE_P5=0 off; =interp: the interpreter only): the DMA records
         // FUN_004584C0 wrote, [start, end) (SetParticleEnv's 23 qw at VU 0, then CGraphicParticle's batch at TOPS: STCYCL,
         // BASE 0x18, OFFSET 0, MSCALF 0x68, UNPACKs, MSCNT; tools/p5packets.py lists them in a save), replayed into the
         // program's data image; its triangle strips become world-space triangles. recorded: the geometry is in the

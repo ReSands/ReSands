@@ -63,7 +63,7 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   Rule kept: a bug caused by the hybrid frame is parked until 0.2; bugs in native code are fixed now. Bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`; locate with a `.glitch` capture + the user's red circle on a frame.
 - **Next: 0.13, wiring in the new layers** (agreed 29 Oct): P5 GFX particles first (live path written, off:
-  `POP_NATIVE_P5=1`, now on the PC but never run in the game; plan `docs/native_renderer.md` "P4 and P5 in the
+  on by default since 29 Oct evening (user check passed; `POP_NATIVE_P5=0` off; draws natively only with `-NativeLate`); plan `docs/native_renderer.md` "P4 and P5 in the
   game"), then water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
