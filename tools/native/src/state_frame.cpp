@@ -660,6 +660,10 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "[state] particles (P5): draws %llu, triangles %llu, not replayed %llu; VU runs %llu, to the interpreter %llu\n",
                      (unsigned long long)ps.draws, (unsigned long long)ps.quads, (unsigned long long)ps.failed,
                      (unsigned long long)pop_native_live::g_particleVu.runs, (unsigned long long)pop_native_live::g_particleVu.interpreted);
+        const auto &wst = pop_native_live::g_waterStats;
+        std::fprintf(stderr, "[state] water (P6): draws %llu, triangles %llu, not replayed %llu; VU runs %llu, to the interpreter %llu\n",
+                     (unsigned long long)wst.draws, (unsigned long long)wst.quads, (unsigned long long)wst.failed,
+                     (unsigned long long)pop_native_live::g_waterVu.runs, (unsigned long long)pop_native_live::g_waterVu.interpreted);
 #endif
         const auto &ls = pop_native_live::g_lateStats;
         std::string by;

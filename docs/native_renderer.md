@@ -462,6 +462,21 @@ own camera). The game's own picture of the same moment: `tools/popstate.py <stat
   XYOFFSET set, and the patches again through P6 (next VU1 run from code 3505). **Natively this needs what the
   renderer does not have yet: a copy of its own frame in mid-frame** (colour + the alpha (1) wrote; the native
   frame is only read back at the end, `native_renderer.cpp`), alpha-only and RGB-only writes, and an alpha test.
+- **Water step 1 done (29 Oct night): P6 geometry offline, flat.** `tools/p6packets.py ELF STATE [--sig]` lists each
+  water's passes: all 148 waters in the 95 Mac saves with P6 runs have the same structure (only the frame's FBP 0 / 0x8C
+  differs). CElementList::Render (0x4B9440) draws a water with element +4 set as FUN_004A76C0 (mask set-up: VU qw 0 =
+  (1, GIF tag), 0x3E0 a GIF tag), Display (returns to 0x4B9FF8), FUN_004A6F40 (the copy into the 256x256 buffer; VU qw 0.x
+  = 0), Display again, FUN_004A6F00; P6 takes path `b` (0x1648) for qw 0.x = 1, `a` (0x268) for 0. Display only CALLs
+  the element's packet (`*element & 0x0FFFFFFF`): BASE 0xD / OFFSET 0x1D5 (double buffered), REF 12 qw from 0x6C5BC0
+  (= graphics object +0x200, +0x240, then the viewport: 320, 224, Z, 2048 centre) at VU 1, a DIRECT, then per patch
+  REF 7 / 20 / 2 / 1 qw at TOPS +0 / +8 / +0x30 / +0x32 and MSCAL 0. `vuVif` now double-buffers (OFFSET resets TOPS to
+  BASE, each run swaps; every P5/P9 packet sends BASE 0x18, OFFSET 0, so they are unchanged) and skips DIRECT.
+  `waterRecord` (`POP_NATIVE_P6=1`, off by default; `=interp` the interpreter) replays the colour pass through the port
+  and draws its triangle strips untextured. **Port bug found and fixed:** `a_g1_row` dropped `LQ vf4, 4(vi0)` at 0x310
+  (the traces always had vf4 from the mask pass; `known_good/p6_a_g1_row.cpp`, `--chain p6` still PASS 600). Check: all
+  2,987 P6 runs of the 59 distinct water saves byte-identical to the interpreter; 53 draw water offline (6 have P6 in the
+  chain but no water left in the saved draw list); the fountain's two waters fill their basins exactly, behind Farah.
+  The saved frame's alpha cannot outline the water (later passes clear it), so the GS check is the GIF output itself.
 - Score, mean |difference| over the 51 saves of 17 Oct (`game/analysis/play1017/native/scores_v*.txt`):
   19.96 (geometry, textures, lightmaps, characters) -> 17.44 (+ glow, haze) -> 16.85 (+ particles).
   Plain scenes 3-7; worst: full-screen effects (rewind flash, white-out, explosion), 2D (pause menu),

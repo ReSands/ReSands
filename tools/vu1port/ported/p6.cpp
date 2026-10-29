@@ -265,6 +265,8 @@ void stage(VuState &vu)
 }
 }
 namespace p6_a_g1_row {
+// Known-good answer: Qwen's passing port of P6 stage "a_g1_row" (pc 0x288 to 0x338) with the LQ vf4, 4(vi0) at 0x310
+// it dropped, found 29 Oct when the colour pass ran without the mask pass before it (offline, pop_state_frame_vu1).
 
 
 namespace
@@ -381,6 +383,7 @@ void stage(VuState &vu)
     // Reads I=60.0f.
     // vf13 = ACC - vf13 * I.
     for (int c = 0; c < 4; ++c) vf[13][c] = vu.acc[c] - vf[13][c] * 60.0f;
+    lq(vu, vf[4], 4); // LQ.xyzw vf4, 4(vi0): missing in Qwen's port (the traces always carried vf4 in from the mask pass)
 
     // 0x318
     vf[5][X] = vf[0][X] + vf[5][Y];

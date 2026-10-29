@@ -239,3 +239,8 @@ mode boots the game check for an active display first, so a mistake like this ca
   native world on, so a whole run tested nothing; the log's counters showed it.
 - **Ask for an annotated screenshot early.** A red circle on a capture frame located the moss flicker at once, where
   a guess (the Prince's shadow) cost a run. Send the frame to the PC desktop as well (`scp` to `Desktop/`).
+- **A port judged on traced runs can lean on registers the traces always carried in.** Qwen's P6 stage `a_g1_row`
+  dropped `LQ vf4, 4(vi0)`; it passed 600 whole runs because the mask pass (which loads vf4) always ran just before
+  with the same matrix. Offline, with only the colour pass, the water landed in a screen corner. Before wiring a port
+  in, run it against the interpreter on the new caller's inputs (same VU memory and registers, compare the data
+  memory after each run), not only on the traces' run order.

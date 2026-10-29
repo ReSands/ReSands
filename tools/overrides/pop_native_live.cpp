@@ -84,6 +84,7 @@ namespace vu1_impl
 #include "../../../../../../tools/vu1port/vu_gif.h"
 #include "../../../../../../tools/vu1port/ported/p9.cpp"
 #include "../../../../../../tools/vu1port/ported/p5.cpp" // GFX particles
+#include "../../../../../../tools/vu1port/ported/p6.cpp" // water
 // the port's XGKICK: the packet as the interpreter's transfer would send it (the judge compares the two)
 void xgkick(VuState &vu, uint32_t qwordAddress)
 {
@@ -1802,18 +1803,19 @@ namespace pop_native_live
             std::unique_ptr<VU1Interpreter> vu;
             std::unique_ptr<VuState> port;
             std::vector<uint8_t> code;
-            uint32_t tops = 0, cl = 4, wl = 4, next = 0xFFFFFFFFu;
-            bool loaded = false, broken = false, usePort = false;
+            uint32_t tops = 0, base = 0, offset = 0, cl = 4, wl = 4, next = 0xFFFFFFFFu;
+            bool dbf = false, loaded = false, broken = false, usePort = false;
             uint64_t runs = 0, interpreted = 0;
             uint8_t *data() { return port->mem; }
         };
         VuProg g_spriteVu{"sprite", 0x004E338Cu, 0x13A0u, 0x390u, vu1_p9::run, "POP_NATIVE_P9"};
         VuProg g_particleVu{"particle", 0x004D948Cu, 0x17C0u, 0x380u, vu1_p5::run, "POP_NATIVE_P5"};
+        VuProg g_waterVu{"water", 0x004DAC8Cu, 0x2630u, 0xFFFFFFFFu, vu1_p6::run, "POP_NATIVE_P6"}; // MSCAL 0 runs only
         alignas(16) unsigned char g_spriteGsStandIn[64]; // the GS reference execute() wants; never touched (forward = false)
         struct SpriteStats
         {
             uint64_t draws = 0, native = 0, quads = 0, failed = 0;
-        } g_spriteStats, g_particleStats;
+        } g_spriteStats, g_particleStats, g_waterStats;
 
         bool vuLoad(VuProg &s, uint8_t *rdram)
         {
@@ -1943,7 +1945,6 @@ namespace pop_native_live
                 else
                     addr = after;
             }
-            uint32_t base = 0, offset = 0;
             for (size_t i = 0; i < words.size();)
             {
                 const uint32_t w = words[i++], cmd = (w >> 24) & 0x7F, num = (w >> 16) & 0xFF, imm = w & 0xFFFF;
@@ -1998,14 +1999,13 @@ namespace pop_native_live
                     s.cl = imm & 0xFF ? imm & 0xFF : 1;
                     s.wl = (imm >> 8) & 0xFF ? (imm >> 8) & 0xFF : 1;
                     break;
-                case 0x02:
-                    offset = imm & 0x3FF;
+                case 0x02: // OFFSET also resets the double buffer to BASE
+                    s.offset = imm & 0x3FF;
+                    s.dbf = false;
+                    s.tops = s.base;
                     break;
                 case 0x03:
-                    base = imm & 0x3FF;
-                    s.tops = base; // OFFSET 0 in these packets: both buffers at BASE
-                    if (offset)
-                        return false;
+                    s.base = imm & 0x3FF;
                     break;
                 case 0x05:
                     if (imm & 3)
@@ -2018,6 +2018,8 @@ namespace pop_native_live
                         s.broken = true;
                         return false;
                     }
+                    s.dbf = !s.dbf; // the run took TOPS; the next unpacks go to the other buffer
+                    s.tops = (s.base + (s.dbf ? s.offset : 0)) & 0x3FF;
                     break;
                 case 0x20:
                     ++i;
@@ -2027,8 +2029,11 @@ namespace pop_native_live
                     break; // STROW / STCOL
                 case 0x4A:
                     return false; // MPG inside a sprite packet: not expected
+                case 0x50: case 0x51: // DIRECT: GS registers (the water packets set TEX0 etc.), not VU data
+                    i += size_t(imm ? imm : 65536) * 4;
+                    break;
                 default:
-                    return false; // DIRECT etc.
+                    return false;
                 }
             }
             return true;
@@ -2373,6 +2378,64 @@ namespace pop_native_live
             ++g_worldStats.particles;
             return true;
         }
+
+        // water through P6 (POP_NATIVE_P6=1, off by default; =interp: the interpreter only). CJSmWaterElement::Display
+        // CALLs the element's ready packet (*element & 0x0FFFFFFF: BASE / OFFSET (double buffered), the 12 matrix qw
+        // from 0x6C5BC0 at VU 1, a DIRECT of GS registers, then per patch 4 UNPACKs at TOPS and MSCAL 0; tools/p6packets.py
+        // lists a save's). A refracting water (element +4) is drawn twice by CElementList::Render: the alpha mask (the
+        // call returning to 0x4B9FF8) and, after the copy into the 256x256 buffer, the colour pass. shortcut: only the
+        // colour pass, flat (no refraction texture; live the mask and the copy stay on the GS): the offline geometry check
+        // of docs/native_renderer.md "Water packets"; upgrade with the native frame copy (0.13 water, steps 2-3).
+        bool waterRecord(uint8_t *rdram, R5900Context *ctx)
+        {
+            VuProg &s = g_waterVu;
+            static const bool on = [] { const char *e = std::getenv("POP_NATIVE_P6"); return e && *e && *e != '0'; }();
+            if (!on || s.broken || getRegU32(ctx, 31) == 0x004B9FF8u)
+                return false;
+            if (!s.loaded)
+            {
+                s.loaded = true;
+                s.broken = !vuLoad(s, rdram);
+                if (s.broken)
+                    return false;
+            }
+            ++g_waterStats.draws;
+            if (g_world && !(g_worldLate && worldStateOk(rdram)))
+                return false;
+            const uint32_t element = getRegU32(ctx, 4), packet = guestAny(rdram, element) & 0x0FFFFFFFu;
+            vu1_impl::Vu1PacketSink sink;
+            sink.forward = false;
+            vu1_impl::packetSink = &sink;
+            const bool ok = vuVif(s, rdram, packet);
+            vu1_impl::packetSink = nullptr;
+            pop_assets::Batch b;
+            if (!ok || !gifToBatch(rdram, sink.packets, b, g_waterStats.quads))
+            {
+                if (g_waterStats.failed++ < 4)
+                    std::fprintf(stderr, "[pop:native] water element %08x packet %08x: not replayed; on the GS\n", element, packet);
+                return false;
+            }
+            static int logged = 0;
+            if (logged++ < 6)
+                std::fprintf(stderr, "[pop:native] water (P6 %s) element %08x packet %08x refract %u: %zu packets, %zu triangles\n",
+                             s.usePort ? "port" : "interpreter", element, packet, guestAny(rdram, element + 4) != 0, sink.packets.size(),
+                             b.indices.size() / 3);
+            if (b.indices.empty())
+                return false;
+            std::vector<pop_assets::Batch> bs;
+            bs.push_back(std::move(b));
+            DrawMaterial dm = currentMaterial(rdram);
+            dm.textureKey = 0; // flat: the refraction buffer is not native yet
+            dm.hasUvm = false;
+            dm.constColour = dm.constAlpha = -1; // P6 writes RGBAQ itself
+            const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
+            std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
+            if (!(g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {})))
+                return false;
+            ++g_waterStats.native;
+            return true;
+        }
 #endif
 
         // native shadows (below): which records each Display call added, so a shadow list entry finds its geometry
@@ -2392,7 +2455,7 @@ namespace pop_native_live
                 g_frameOther.push_back({N, sub ? textureKey(rdram, guestAny(rdram, sub) & 0xFFFF) : 0u, sub ? guestAny(rdram, sub + 4) : 0u,
                                         getRegU32(ctx, 4), g_currentList});
 #if POP_SPRITE_VU1
-                if (N == 1 && spriteRecord(rdram, ctx))
+                if ((N == 1 && spriteRecord(rdram, ctx)) || (N == 2 && waterRecord(rdram, ctx)))
                 {
                     if (g_currentList == 0x88u || g_currentList == 0xA8u)
                         ++g_lateStats.native;
