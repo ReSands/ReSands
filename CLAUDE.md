@@ -85,7 +85,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **29 Oct (Mac):** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written, not applied on the PC; the gate's
   three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P4's role in `docs/native_renderer.md`
   "P4 and P5 in the game"; P5 (GFX particles) works offline (port = interpreter, better than the CPU quads in 10
-  of 11 saves), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not on the PC yet). Bug checks:
+  of 11 saves; reviewed, fixes in 4166f61), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not
+  on the PC yet: bundle + `-Fast` after the 29 Oct evening bug checks). Bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`.
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
