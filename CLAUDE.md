@@ -62,9 +62,13 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   **All performance (rewind dip 155110, fight fps, N6) waits until fully native, then optimised in one go (user).**
   Rule kept: a bug caused by the hybrid frame is parked until 0.2; bugs in native code are fixed now. Bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`; locate with a `.glitch` capture + the user's red circle on a frame.
-- **Next: 0.13, wiring in the new layers** (agreed 29 Oct): P5 GFX particles first (live path written, off:
-  on by default since 29 Oct evening (user check passed; `POP_NATIVE_P5=0` off; draws natively only with `-NativeLate`); plan `docs/native_renderer.md` "P4 and P5 in the
-  game"), then water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
+- **Next: 0.13, wiring in the new layers** (agreed 29 Oct). P5 GFX particles done: on by default since 29 Oct evening
+  (user check passed in 3 scenes; `POP_NATIVE_P5=0` off; native only with `-NativeLate`; PC not yet rebuilt with the
+  flip). **Now water (P6)**: three passes (mask, refraction copy, colour), read from the fountain save (`docs/native_renderer.md`
+  "Water packets"). Plan: (1) offline P6 geometry in `pop_state_frame`, flat, vs GS on the 21 water saves (first
+  check the other saves have the same pass structure); (2) a mid-frame copy of the native frame (new plumbing);
+  (3) full water offline vs GS-only; (4) live behind `POP_NATIVE_P6` + user check (baths, fountain 202926). Then
+  halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
   X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
