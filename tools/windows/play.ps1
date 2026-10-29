@@ -1,5 +1,9 @@
 # Play the game on the PC: the pop-sotc play build at 60 fps (POP_60FPS=1), no time limit.
 # Usage: tools\windows\play.ps1 [-Fps30] [-Profile] [-NoNativeWorld] [-NoNativeCharacters] [-NoNativeTranslucent] [-NoNativeShadows] [-NativeLate] [-Env 'A=1;B=2']
+#        tools\windows\play.ps1 -Mode hybrid|gs|native [-Save <name>]   (bug checks, user 29 Oct)
+#        -Mode hybrid = the default play build (as bugs were first seen); gs = every native switch off (the emulated
+#        GS only: is it in the original?); native = every native part on, late lists too (-NativeLate).
+#        -Save play_20261025_162246 loads game\ps2\disc\states\<name>.state 2 s after boot (no sound after a load).
 #        The static world is drawn by the native Vulkan renderer (POP_NATIVE_WORLD=1, renderer step 1, in game
 #        since 22 Oct); -NoNativeWorld leaves it all to the emulated GS. The opaque characters are native too
 #        (POP_NATIVE_CHARACTERS=1, renderer step 2, judged in game by the user 22 Oct); -NoNativeCharacters
@@ -25,7 +29,7 @@
 # game is closed, each new .prof is symbolized to <name>.report.txt with this build's linker map.
 # Esc, Alt+F4 or closing the window quits (Esc: runtime patch 39; PS2X_ESC_QUITS=0 turns it off). Avoid F9 (quick-load).
 # Log: game\recomp-sotc\play_<date>_<time>.log, written when the game window is closed.
-param([switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [switch]$NoNativeCharacters, [switch]$NoNativeTranslucent, [switch]$NoNativeShadows, [switch]$NativeLate, [string]$Env = '', [switch]$Shortcuts)
+param([ValidateSet('', 'hybrid', 'gs', 'native')][string]$Mode = '', [string]$Save = '', [switch]$Fps30, [switch]$Profile, [switch]$NoNativeWorld, [switch]$NoNativeCharacters, [switch]$NoNativeTranslucent, [switch]$NoNativeShadows, [switch]$NativeLate, [string]$Env = '', [switch]$Shortcuts)
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 
@@ -44,8 +48,14 @@ if ($Shortcuts) {
     return
 }
 
+if ($Mode -eq 'gs') { $NoNativeWorld = $NoNativeCharacters = $NoNativeTranslucent = $NoNativeShadows = [switch]$true; $NativeLate = [switch]$false }
+if ($Mode -eq 'native') { $NativeLate = [switch]$true }
+if ($Save) {
+    if (-not (Test-Path "$Root\game\ps2\disc\states\$Save.state")) { throw "no save game\ps2\disc\states\$Save.state" }
+    $Env = "PS2X_STATE_LOAD_AT=120:states/$Save.state;$Env"
+}
 $fps = $(if ($Fps30) { '0' } else { '1' })
-$name = "play_$(Get-Date -Format 'yyyyMMdd_HHmmss')" # seconds: two boots in one minute overwrote a log (23 Oct)
+$name = "play_$(Get-Date -Format 'yyyyMMdd_HHmmss')$(if ($Mode) { "_$Mode" })" # seconds: two boots in one minute overwrote a log (23 Oct)
 & "$PSScriptRoot\boot.ps1" -Play -Out 'game\recomp-sotc' -Seconds 86400 -Name $name -Env "POP_60FPS=$fps;PS2X_FULLSCREEN=1;PS2X_DEBUGGER=0;POP_NATIVE_WORLD=$(if ($NoNativeWorld) { '0' } else { '1' });POP_NATIVE_CHARACTERS=$(if ($NoNativeCharacters) { '0' } else { '1' });POP_NATIVE_TRANSLUCENT=$(if ($NoNativeTranslucent) { '0' } else { '1' });POP_NATIVE_SHADOWS=$(if ($NoNativeShadows) { '0' } else { '1' });POP_NATIVE_LATE=$(if ($NativeLate) { '1' } else { '0' });$(if ($Profile) { 'POP_PROFILE_LAST=12;' })$Env"
 
 $map = "$Root\game\recomp-sotc\runtime-src\build-win-play\ps2xRuntime\ps2EntryRunner.map"

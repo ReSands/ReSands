@@ -98,6 +98,10 @@ not build 0.13 on top of broken code.
   look into it now. Only with native on -> find out whether it is the hybrid (native and GS interacting: depth handoff,
   late lists, fallback frames) or a bug in the native code itself; the first is parked here with a note, the second
   is fixed now.
+**How each repeatable bug is checked (user, 29 Oct):** the same save three times, `tools\windows\play.ps1 -Mode
+<m> -Save <name>`: (1) `hybrid` (as first seen), (2) `gs` (the original), (3) `native` (every native part, late lists
+too). In 1 and 3, not 2: fix now. In 2: not a bug. In 1, not 3: already fixed. In 3, not 1: our newest code caused
+it: fix now. Not in 1: park.
 1. **N13 / N14 / N16 flicker + N15 sun brightness** (baths saves `game/analysis/saves1025e/`: 162246, 162442,
    162621 / 162625, 162819, 163042). First the GS-only A/B of each (needs the TV), then per the rule above.
    N13/N14/N16 are probably one bug (seams of world geometry); N15 looks like N10 (glow visibility against a depth
