@@ -22,7 +22,10 @@ layout(location = 3) noperspective out float vFog;
 void main()
 {
     vec4 c = pc.mvp * vec4(inPos, 1.0);
-    gl_Position = vec4(c.x, c.y, pc.params.w * (c.w - c.z), c.w);
+    // params.x bit 64 (no depth write): one GS Z unit (2^-25 of the depth, mesh.vert's scale x 2^23 / zScale) nearer:
+    // the GS's integer Z gives a decal and its wall equal values, which pass GEQUAL; float depth flipped between frames
+    float bias = (int(pc.params.x + 0.5) & 64) != 0 ? 1.0 / 33554432.0 : 0.0;
+    gl_Position = vec4(c.x, c.y, pc.params.w * (c.w - c.z) + bias * c.w, c.w);
     vUv = inUv;
     vColour = inColour;
     vUv2 = inUv2;
