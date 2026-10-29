@@ -117,6 +117,7 @@ it: fix now. Not in 1: park.
    Captures: `game/analysis/flicker1029/`.
 2. **N15 sun brightness (162621): in the original too** (gs: "if anything even worse"). **User: revisit on real PS2
    hardware** to be sure the original looks like that.
+   **N17** (fountain water over the save-point glow, 202926) the same: GS-only shows it too, real hardware decides.
 3. **Rewind at 30 fps (155110): parked with the fps items.** Reproduces from the save in every mode (`[pop:fps]`
    lows hybrid 33/30, gs 32/39, native 32/30/30/42), so neither the hybrid nor fixed by going native. Profiles of
    the 12 s before each quick-save: `game/analysis/rewind1029/` (185650 hybrid, 185807 gs, 185943 native + logs);
@@ -380,6 +381,13 @@ mapping is by time (the user's minutes vs save names); check each picture first.
 - **N16 flickering texture along the line of a ledge (16:28, save 162819)** and **more flicker (16:30, save
   163042).** Fixed 29 Oct (above: two causes, translucent order and decal depth).
 - **Water test set for 0.13 (P6):** the baths saves of this session (~16:12-16:31) have a lot of water.
+
+## Reported 29 Oct evening (P5 live check, `play.ps1 -Mode native -Save ... -Env POP_NATIVE_P5=1`)
+
+- **N17 fountain water drawn in front of the save-point glow** when the fountain is behind the save point (fight
+  save 184926; the user's post-fight save `play_20261029_202926`, Mac copy `game/analysis/saves1029/`). **GS-only shows it too**, so not native
+  and not the hybrid: the original or our GS emulation. **User: check on real PS2 hardware** (with N15). P6 will not
+  change it; when water goes native, its order should match GS-only, not fix this.
 
 ## Storage of captures (agreed with the user 24 Oct)
 

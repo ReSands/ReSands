@@ -1151,7 +1151,11 @@ the runtime's own VU1 interpreter (`spriteRecord` in `pop_native_live.cpp`):
      because the save-point light column is now drawn and the too-strong CPU glow blows it up (`--noglow` 7.29 ->
      5.84: the column itself matches). 115853: the sparks around the sword now drawn; its two oriented draws are
      behind the camera (w ~ -4) and P5 culls them, as the game does. The sand haze is not these particles.
-  **Left:** a live run (`-NativeLate -Env 'POP_NATIVE_P5=1'`, user check), then on by default with the late lists;
+  **Live, 29 Oct evening (patch 43/44 build):** stnative's three saves with P5 on: no interpreter hand-over, nothing
+  not replayed; native share 184926 33% (my guess, unchecked: the native run ends at the water draw), 115837 / 115853
+  ~99.7%; fps as the 25 Oct runs without P5. User check (`play.ps1 -Mode native -Save ... -Env POP_NATIVE_P5=1`):
+  115853 sparks fine; 145139 column good (a glow line two thirds up is in GS-only too); 184926 fight fine (N17 is
+  GS-only too). **Left:** on by default with the late lists;
   sprite kind 7 (SetParticleEnv + program 4, left to the GS in the sprite path) is the same packet: P5 covers it.
 
 ### The P9 port in place of the interpreter (25 Oct)
