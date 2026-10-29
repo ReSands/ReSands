@@ -1423,6 +1423,10 @@ namespace pop_native_live
             bool recorded = false;
             if (g_particlePackets)
             {
+                // FUN_004584C0 writes nothing without a particle object: such a draw takes no range
+                const uint32_t p1 = guestAny(rdram, getRegU32(ctx, 4) + 0x14);
+                if (!p1 || !guestAny(rdram, p1))
+                    return true;
                 uint32_t end = 0;
                 const uint32_t start = g_particlePackets(getRegU32(ctx, 4), end);
                 particleRecord(rdram, start, end, recorded);
@@ -2032,8 +2036,8 @@ namespace pop_native_live
         }
 
         // XGKICK packets (PACKED ST / RGBAQ / XYZF2) -> world-space geometry: each GS screen point unprojected through the
-        // graphics object's +0x200 (world -> GS screen); sprites (two corners) as quads, triangles / strips / fans as
-        // triangles. false: a primitive these programs do not send (the call then goes to the GS)
+        // graphics object's +0x200 (world -> GS screen); sprites (two corners) as quads, triangle strips / fans as triangles.
+        // false: a primitive these programs do not send (the call then goes to the GS)
         bool gifToBatch(uint8_t *rdram, const std::vector<std::vector<uint8_t>> &packets, pop_assets::Batch &b, uint64_t &prims)
         {
             const uint32_t gso = guestAny(rdram, 0x00675148u);
@@ -2100,9 +2104,9 @@ namespace pop_native_live
                     {
                         prim = uint32_t(lo >> 47) & 0x7FF;
                         nv = 0;
-                        if ((prim & 7) < 3 || (prim & 7) > 6)
+                        if ((prim & 7) < 4 || (prim & 7) > 6)
                         {
-                            ok = false; // points / lines: not these programs'
+                            ok = false; // P5 sends strips and fans, P9 sprites; anything else goes to the GS
                             break;
                         }
                     }
@@ -2128,7 +2132,7 @@ namespace pop_native_live
                             }
                             else if (reg == 1)
                                 rgba = (v[0] & 0xFF) | (v[1] & 0xFF) << 8 | (v[2] & 0xFF) << 16 | (v[3] & 0xFF) << 24;
-                            else if ((reg == 4 || reg == 5) && (prim & 7) != 6) // XYZF2 / XYZ2 of a triangle, strip or fan
+                            else if ((reg == 4 || reg == 5) && (prim & 7) != 6) // XYZF2 / XYZ2 of a triangle strip or fan
                             {
                                 const bool adc = (v[3] >> 15) & 1;
                                 const float qq = Q != 0.0f ? Q : 1.0f;
@@ -2139,10 +2143,8 @@ namespace pop_native_live
                                 vx.uv[1] = T / qq;
                                 for (int ch = 0; ch < 4; ++ch)
                                     vx.colour[ch] = float((rgba >> (8 * ch)) & 0xFF) / 128.0f;
-                                // the GS vertex queue: list = every third, strip = the last three, fan = the first and the last two
-                                if ((prim & 7) == 3 && nv == 3)
-                                    nv = 0;
-                                else if ((prim & 7) == 4 && nv == 3)
+                                // the GS vertex queue: strip = the last three, fan = the first and the last two
+                                if ((prim & 7) == 4 && nv == 3)
                                     tri[0] = tri[1], tri[1] = tri[2], ok3[0] = ok3[1], ok3[1] = ok3[2], nv = 2;
                                 else if ((prim & 7) == 5 && nv == 3)
                                     tri[1] = tri[2], ok3[1] = ok3[2], nv = 2;
@@ -2160,11 +2162,6 @@ namespace pop_native_live
                                     b.indices.insert(b.indices.end(), {base0, base0 + 1, base0 + 2});
                                     ++prims;
                                 }
-                            }
-                            else if (reg == 0) // PRIM
-                            {
-                                prim = v[0] & 0x7FF;
-                                nv = 0;
                             }
                             else if (reg == 4 || reg == 5) // XYZF2 / XYZ2 of a sprite
                             {

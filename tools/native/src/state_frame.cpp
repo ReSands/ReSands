@@ -115,6 +115,8 @@ namespace
             else
                 addr = after;
         }
+        if (start)
+            g_particleRanges.emplace_back(start, end);
         std::fprintf(stderr, "[state] particle packets in the last chain: %zu draws\n", g_particleRanges.size());
     }
     uint32_t particlePackets(uint32_t, uint32_t &end)
