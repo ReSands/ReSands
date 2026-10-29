@@ -223,3 +223,19 @@ mode boots the game check for an active display first, so a mistake like this ca
   global in DARE is reached as `lui at` / `lw (at)` and never via `gp`, which only `-sdatathreshold 0` reproduces;
   without the flag no function with a global could match, whatever Qwen wrote. Count such patterns across all target
   functions (gp uses, float constants, tail calls) when a whole class of attempts misses.
+
+## 29 Oct 2026
+- **A hybrid frame must keep the game's draw order for every order-dependent draw.** The native picture goes in
+  where the frame's 3D starts, so every GS draw lands on top of every native one. Opaque Z-writing draws do not care,
+  but a blended or Z-less draw drawn natively before a GS draw the game made earlier ends up under it (N13/N14/N16:
+  GS walls over native corner stones). Such draws stay native only while nothing earlier went to the GS.
+- **Float depth breaks the GS's ties.** Decals sit on their walls with no depth write and pass GEQUAL on the GS's
+  integer Z; our float Z, which differs from VU1's by tens of units, made them fail on some frames (N16 moss). A small
+  bias toward the camera for draws without depth write (32 GS units) restores the GS's behaviour.
+- **Bisect with switches and the user's eye before reading code.** Four runs (world only, + shadows, + translucents)
+  found the N13 cause after two wrong theories from code reading (lightmap, shadow), each of which checked out as
+  exact. An offline save does not reproduce what only the live hybrid does (which draws go to the GS).
+- **Check that a debug switch took effect before trusting a "no change".** `POP_NATIVE_SKIP` is ignored with the
+  native world on, so a whole run tested nothing; the log's counters showed it.
+- **Ask for an annotated screenshot early.** A red circle on a capture frame located the moss flicker at once, where
+  a guess (the Prince's shadow) cost a run. Send the frame to the PC desktop as well (`scp` to `Desktop/`).

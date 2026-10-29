@@ -102,33 +102,29 @@ not build 0.13 on top of broken code.
 <m> -Save <name>`: (1) `hybrid` (as first seen), (2) `gs` (the original), (3) `native` (every native part, late lists
 too). In 1 and 3, not 2: fix now. In 2: not a bug. In 1, not 3: already fixed. In 3, not 1: our newest code caused
 it: fix now. Not in 1: park.
-1. **N13 / N14 / N16 flicker + N15 sun brightness** (baths saves `game/analysis/saves1025e/`: 162246, 162442,
-   162621 / 162625, 162819, 163042). First the GS-only A/B of each (needs the TV), then per the rule above.
-   N13/N14/N16 are probably one bug (seams of world geometry); N15 looks like N10 (glow visibility against a depth
-   buffer the native world partly wrote: if so, hybrid -> parked, or picked up with the 0.13 halo work).
-   **Checked 29 Oct evening (user, TV):** N13 (162246), N14 (162442), N16 (162819, 163042): seen in hybrid, not in
-   gs, seen in native, all four -> a bug in the native world code: **fix now** (one bug, most likely). **Fixed 29 Oct
-   evening, two causes (user checked each in hybrid):** (a) N13/N14/N16 162819 (ae260d9): with translucents native, a
-   blended draw of +0x68/+0x78/+0x4C went native even after an earlier draw had gone to the GS (instanced walls with
-   a lightmap entry, +0x2C); the GS then drew those walls over the native corner-stone overlay (162246 draw 835),
-   which showed per pixel as the camera moved. Narrowed by switches (world only / + shadows: no flicker; +
-   translucents: flicker). Blended or Z-less draws now need a pure frame. (b) 163042 (moss decal, draw 711, blend
-   kind 1, no depth write): whole patches dropped out for single frames, even with the camera still. Our Z differs
-   from VU1's by tens of units, so the decal's GEQUAL against its wall flipped; on the GS it passes. Draws without
-   depth write now move nearer by `POP_NATIVE_DECAL_ZBIAS` GS Z units (mesh.vert; 1 still flickered in motion, 32
-   gone with nothing showing through: default 32). N15 (162621):
-   seen in gs too ("if anything even worse") -> not ours for now; **user: revisit on real PS2 hardware** to be sure
-   the original looks like that.
-2. **Rewind at 30 fps** (save 155110): reproduce from the save first (115853 did not), then profile; if it is the
-   native frame falling back to the GS, it is hybrid -> parked.
-   **Checked 29 Oct evening:** reproduces from the save in every mode; `[pop:fps]` lows hybrid 33/30, gs 32/39,
-   native 32/30/30/42 (longest). Not the hybrid; not fixed by going native either. Profiles of the 12 s before each
-   quick-save (rewind inside): `game/analysis/rewind1029/` (185650 hybrid, 185807 gs, 185943 native + logs). gs:
-   VUThread busy (VU1 interpreter); hybrid/native: GameThread busy, top own cost `pop_native_live::rasterAlpha`
-   9%. The 12 s windows blur the 2-3 s dip: a time-sliced look is next if picked up. Joins the fps items (4):
-   **user, 29 Oct: all performance waits until fully native, then optimised in one go.**
-3. **N7 dagger flash: set aside** (user: seen once, may not be reproducible).
-4. The fps items (N6, fight fps 160324 / 160404 / 184926) wait for 0.2, as before.
+**Done 29 Oct evening: every repeatable bug had its look (user on the TV, `play.ps1 -Mode ... -Save ...`).**
+1. **N13 / N14 / N16 flicker: fixed** (baths saves `game/analysis/saves1025e/` 162246, 162442, 162819, 163042; all
+   four: seen in hybrid and native, not in gs). Two causes, each checked in game by the user:
+   (a) ae260d9 (162246, 162442, 162819): with translucents native, a blended draw of +0x68/+0x78/+0x4C went native
+   even after an earlier draw had gone to the GS (instanced walls with a lightmap entry, +0x2C, are not native yet);
+   the GS then drew those walls over the native corner-stone overlay (162246 draw 835), which showed per pixel as
+   the camera moved. Found by switches (world only / + shadows: none; + translucents: flicker). Blended or Z-less
+   draws now need a pure frame, like the late lists. (b) f8daecb (163042, moss decal: draw 711, blend kind 1, no
+   depth write): whole patches dropped out for single frames, camera still. Our Z differs from VU1's by tens of
+   units, so the decal's GEQUAL against its wall flipped; on the GS it passes. Draws without depth write move nearer
+   by `POP_NATIVE_DECAL_ZBIAS` GS Z units (mesh.vert; 1 still flickered in motion, 32 gone, nothing showing
+   through: default 32). Not re-checked in game after (b): 162246 / 162442 / 162819 (b only loosens their test).
+   Captures: `game/analysis/flicker1029/`.
+2. **N15 sun brightness (162621): in the original too** (gs: "if anything even worse"). **User: revisit on real PS2
+   hardware** to be sure the original looks like that.
+3. **Rewind at 30 fps (155110): parked with the fps items.** Reproduces from the save in every mode (`[pop:fps]`
+   lows hybrid 33/30, gs 32/39, native 32/30/30/42), so neither the hybrid nor fixed by going native. Profiles of
+   the 12 s before each quick-save: `game/analysis/rewind1029/` (185650 hybrid, 185807 gs, 185943 native + logs);
+   gs: VUThread busy (VU1 interpreter); hybrid/native: GameThread, top own cost `rasterAlpha` 9%. The 12 s window
+   blurs the 2-3 s dip: a time-sliced look first when picked up.
+4. **N7 dagger flash: set aside** (user: seen once, may not be reproducible).
+5. **Performance (N6, fight fps 160324 / 160404 / 184926, the rewind): user, 29 Oct: all of it waits until fully
+   native, then optimised in one go.**
 Then 0.13: put P5 into the game (as P9: the port plus an interpreter fallback at branches the traces never
 took; whole-run checks on new traces; plan in `docs/native_renderer.md` "P4 and P5 in the game"; P4 is an offline judge
 for the native characters, not a live path), water (P6), halos, light shafts, flashes, then retry `-NativeLate`.
@@ -376,12 +372,13 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   (native sound); save-state boots have no sound, so these saves only locate the place.
 - **Fight with low fps (~16:05, saves 160324 / 160404).** The log shows ~46 fps average (min 30) over the fight
   stretch after 16:03:24, ~60 samples after 16:04:04. Same family as the "fight fps" item.
-- **N13 flickering texture on a vertical wall corner (16:22, save 162246).**
-- **N14 another flickering wall texture (16:24, save 162442).**
+- **N13 flickering texture on a vertical wall corner (16:22, save 162246).** Fixed 29 Oct (above).
+- **N14 another flickering wall texture (16:24, save 162442).** Fixed 29 Oct (above).
 - **N15 sun brightness differs a lot between two camera rotations (16:26, saves 162621 / 162625, 4 s apart).**
+  29 Oct: in the GS-only run too; revisit on real PS2 hardware (user).
   Compare N10 (torch brightness with the camera turn, gone with the late lists on the GS).
 - **N16 flickering texture along the line of a ledge (16:28, save 162819)** and **more flicker (16:30, save
-  163042).** N13, N14 and N16 may be one bug (seams/edges of world geometry); look at them together.
+  163042).** Fixed 29 Oct (above: two causes, translucent order and decal depth).
 - **Water test set for 0.13 (P6):** the baths saves of this session (~16:12-16:31) have a lot of water.
 
 ## Storage of captures (agreed with the user 24 Oct)

@@ -858,6 +858,9 @@ a lit static), the load "flash" (one frame of a random texture, user 22 Oct: cap
 two leftovers of save 214633 (centre faceted mirror greyer, one hexagon facet darker).
 
 ## Translucents before the shadows: POP_NATIVE_TRANSLUCENT=1 (23 Oct evening, offline)
+**29 Oct: two rules added after the baths flicker (N13/N14/N16, `docs/native_bugs.md`):** a blended or Z-less draw
+of these lists goes native only while the frame is pure (no earlier draw went to the GS; `worldStateOk`), and every
+draw without depth write tests `POP_NATIVE_DECAL_ZBIAS` GS Z units nearer (default 32; mesh.vert, `fogColour.a`).
 - **Prefix rule.** The injected picture is an image upload that replaces pixels, so only a prefix of the game's draw
   order can be native. Display3DElements: 200, +0x2C, +0x3C, +0x68, +0x78, +0x4C, lightmaps +0x5C (native), shadows
   (GS), +0x88, +0x98, +0xA8. So the lists after the shadows, and with them nearly all GFX particles (203 saves: 2,777

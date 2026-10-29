@@ -768,3 +768,20 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   `ported/p9.cpp`) had a broken overflow clamp (fixed, judge now rejects it). P5 (particles) done 26 Oct: Qwen 82 of 87 stages,
   5 by hand, `--chain p5` PASS 930 whole runs (`ported/p5.cpp`, not in the game yet). **Every reachable VU1 program is now ported** (P0/P2 = VU0, P3 unreachable, P10 dead; 26 Oct, `docs/native_renderer.md` "VU1 program inventory").
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image (raylib `LoadImageFromScreen` at 250% DPI on the 4K TV; shrink with `sips -Z 1600` before looking, `livecmp.py` on them takes minutes).
+
+## Moved from CLAUDE.md on 29 Oct 2026 evening (replaced status bullets; verbatim)
+
+- **Next (agreed order, `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look at every repeatable bug before
+  0.13: GS-only A/B of the baths saves (N13-N16, needs the TV), then the rewind at 30 fps (155110). **Rule (user): a
+  bug caused by the hybrid native/GS frame is parked until 0.2;** bugs in the native code itself are fixed now. Then
+  0.13: P4/P5 into the game, water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they
+  recur), N7, fps items incl. N6 (does not reproduce from its save; needs a `play.ps1 -Profile` quick-save in the slow
+  stretch). Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the
+  whole runtime, Esc / Alt+F4 sometimes not quitting. Lower: camera X reversed in fixed views, door flicker with a
+  black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+- **29 Oct (Mac):** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written, not applied on the PC; the gate's
+  three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P4's role in `docs/native_renderer.md`
+  "P4 and P5 in the game"; P5 (GFX particles) works offline (port = interpreter, better than the CPU quads in 10
+  of 11 saves; reviewed, fixes in 4166f61), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not
+  on the PC yet: bundle + `-Fast` after the 29 Oct evening bug checks). Bug checks:
+  `play.ps1 -Mode hybrid|gs|native -Save <name>`.

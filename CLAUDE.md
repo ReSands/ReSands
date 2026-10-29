@@ -35,9 +35,9 @@ Decided 22 Oct: keep our own native renderer (the PS2 look, haze and post-proces
   per night; optimise in order of biggest win. Shut the PC down after overnight work. Playtesting: the user
   gathers saves; I work offline; milestone checks by the user.
 
-## Current status (27 Oct 2026 night; start here)
+## Current status (29 Oct 2026 evening; start here)
 
-Older status blocks: `docs/history.md` (last moved: "Moved from CLAUDE.md on 27 Oct 2026 night").
+Older status blocks: `docs/history.md` (last moved: "Moved from CLAUDE.md on 29 Oct 2026 evening").
 Keep this section short: finished work goes to the topic docs, old status blocks to `docs/history.md`.
 
 - **Where we are.** Native renderer at roadmap 0.12, on by default in `play.ps1` (desktop shortcut "PoP 60 fps";
@@ -56,14 +56,18 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   Crash 2 is off the list (user, 26 Oct): watched, full dump on a freeze; no speculative emulated-sound fixes.
   Borrowed fixes placed by milestone (MOVZ/MOVN + runtime patch 43 small screenshots with the next full rebuild):
   `docs/roadmap.md`.
-- **Next (agreed order, `docs/native_bugs.md` "Order agreed 26 Oct"):** quick look at every repeatable bug before
-  0.13: GS-only A/B of the baths saves (N13-N16, needs the TV), then the rewind at 30 fps (155110). **Rule (user): a
-  bug caused by the hybrid native/GS frame is parked until 0.2;** bugs in the native code itself are fixed now. Then
-  0.13: P4/P5 into the game, water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they
-  recur), N7, fps items incl. N6 (does not reproduce from its save; needs a `play.ps1 -Profile` quick-save in the slow
-  stretch). Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the
-  whole runtime, Esc / Alt+F4 sometimes not quitting. Lower: camera X reversed in fixed views, door flicker with a
-  black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+- **Bugs before 0.13: done 29 Oct evening** (`docs/native_bugs.md`). N13/N14/N16 baths flicker fixed (ae260d9:
+  blended/Z-less draws need a pure frame; f8daecb: draws without depth write test `POP_NATIVE_DECAL_ZBIAS`=32 GS Z
+  units nearer), checked by the user in game. N15 is in the GS-only run too: revisit on real PS2 hardware (user).
+  **All performance (rewind dip 155110, fight fps, N6) waits until fully native, then optimised in one go (user).**
+  Rule kept: a bug caused by the hybrid frame is parked until 0.2; bugs in native code are fixed now. Bug checks:
+  `play.ps1 -Mode hybrid|gs|native -Save <name>`; locate with a `.glitch` capture + the user's red circle on a frame.
+- **Next: 0.13, wiring in the new layers** (agreed 29 Oct): P5 GFX particles first (live path written, off:
+  `POP_NATIVE_P5=1`, now on the PC but never run in the game; plan `docs/native_renderer.md` "P4 and P5 in the
+  game"), then water (P6), halos, light shafts, flashes, retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
+  Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
+  runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
+  X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
 - **How we judge (`docs/lessons.md`):** the user's in-motion check with clock times is the reference for short or
   camera-dependent effects; our GS emulation is not ground truth (PS2 videos / hardware are).
 - **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
@@ -82,12 +86,8 @@ Keep this section short: finished work goes to the topic docs, old status blocks
 - **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** 79 of 669 byte-matched (29 Oct:
   run 2's header requests fixed in the generator, sndCList template; near misses by hand; names in the Mac Ghidra
   project). Queue resumes with the "Qwen DARE audio decomp" shortcut (the PC has the new prompt).
-- **29 Oct (Mac):** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written, not applied on the PC; the gate's
-  three 0.13 candidates looked at (`docs/native_bugs.md` step 4: none shows in play); P4's role in `docs/native_renderer.md`
-  "P4 and P5 in the game"; P5 (GFX particles) works offline (port = interpreter, better than the CPU quads in 10
-  of 11 saves; reviewed, fixes in 4166f61), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not
-  on the PC yet: bundle + `-Fast` after the 29 Oct evening bug checks). Bug checks:
-  `play.ps1 -Mode hybrid|gs|native -Save <name>`.
+- **Pending on the PC:** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) written 29 Oct, not applied (next full
+  `-SkipGhidra` rebuild).
 - **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
   (shrink with `sips -Z 1600` before looking).
 
