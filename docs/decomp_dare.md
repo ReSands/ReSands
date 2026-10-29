@@ -186,7 +186,8 @@ the compiler check: `docs/roadmap.md` "2.0".
 ## Next steps (in order)
 
 1. **Done 29 Oct** (State above): header requests, near misses, Ghidra names.
-2. Drop or mark the one-vote callee names the prototype contradicts in the prompt (`callee_names()`).
+2. **Done 29 Oct evening:** the 16 one-vote callee names the prototype contradicts are dropped from the prompt
+   (`WRONG_NAMES` in `qwen_match.py`; the function then shows as `FUN_<addr>`).
 3. Keep the queue running on later nights (41% pass on new functions); run 1's old misses need more than prompt fixes.
 4. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
 

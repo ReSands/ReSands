@@ -137,7 +137,12 @@ def callee_names():
     # callees.tsv (dare_callees.py): retail call target -> POP1 name, kept only when it outvotes all other names
     p = os.path.join(DARE, 'callees.tsv')
     rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
-    return {int(a, 16): n for a, n, v, other in rows if int(v) > int(other)}
+    return {int(a, 16): n for a, n, v, other in rows if int(v) > int(other) and int(a, 16) not in WRONG_NAMES}
+
+
+# one-vote callee names the prototype contradicts (game/ghidra/headless_dare_names_1vote.log "Differs", 29 Oct)
+WRONG_NAMES = {0x15f240, 0x160b40, 0x1613c0, 0x162940, 0x164a40, 0x16a840, 0x1733c0, 0x17c540, 0x180600, 0x180680,
+               0x180740, 0x182e40, 0x183780, 0x184180, 0x18acc0, 0x18bd40}
 
 
 def name_callees(asm, ghidra):
