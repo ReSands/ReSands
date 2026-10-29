@@ -2394,15 +2394,19 @@ namespace pop_native_live
         // frame copied into a 256x256 buffer where the mask is), Display (the colour pass, RGB only, ALPHA 0x44 from the
         // buffer at P6's ST): docs/native_renderer.md "The refraction copy". Here the colour pass's call records all
         // three as draws: the clear (a full-screen sprite), the mask (the same triangles) and the colour pass (image -2:
-        // the frame copied before it, read through the buffer in mesh.frag). shortcut: the mask call (returning to
-        // 0x4B9FF8) and the copy stay on the GS live (step 4); offline the colour pass call draws it all.
+        // the frame copied before it, read through the buffer in mesh.frag). Live the mask call (returning to 0x4B9FF8) is
+        // skipped when the colour pass can be native (a GS mask would close the frame's purity); FUN_004A76C0 and the copy
+        // still run on the GS (alpha and the 256x256 buffer only). shortcut: if the colour pass then fails to replay, the GS
+        // draws it with no mask, so that water is missing for the frame (logged; none in the saves); skip the copy at 0.2.
         bool waterRecord(uint8_t *rdram, R5900Context *ctx)
         {
             VuProg &s = g_waterVu;
             static const bool on = [] { const char *e = std::getenv("POP_NATIVE_P6"); return e && *e && *e != '0'; }();
             const uint32_t element = getRegU32(ctx, 4);
-            if (!on || s.broken || getRegU32(ctx, 31) == 0x004B9FF8u || !guestAny(rdram, element + 4))
+            if (!on || s.broken || !guestAny(rdram, element + 4))
                 return false; // a water without refraction: none in the saves (its packet's DIRECT would set the texture)
+            if (getRegU32(ctx, 31) == 0x004B9FF8u)
+                return g_world && g_worldLate && worldStateOk(rdram); // the mask: drawn by the colour pass's call
             if (!s.loaded)
             {
                 s.loaded = true;
@@ -2495,8 +2499,10 @@ namespace pop_native_live
             // natively draws before +0x98 never write alpha (currentMaterial): clear it again so that stays true
             if (g_currentList != 0xA8u)
                 add(std::move(after), 0, 0x200, 0, 0x00FFFFFFu);
-            if (!(g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {})))
-                return false;
+            if (!(g_world && g_worldLate))
+                return false; // offline: the draws stay in the frame, the GS emulation is not used
+            for (const WorldRecord &r : recs) // not worldFinish: these draws use no texture (key 0 or the frame copy)
+                worldMaterial(r).native = true;
             ++g_waterStats.native;
             return true;
         }
@@ -4244,6 +4250,10 @@ namespace pop_native_live
                                      (unsigned long long)g_particleStats.draws, (unsigned long long)g_particleStats.native,
                                      (unsigned long long)g_particleStats.quads, (unsigned long long)g_particleStats.failed,
                                      (unsigned long long)g_particleVu.runs, (unsigned long long)g_particleVu.interpreted);
+                    if (g_waterVu.loaded)
+                        std::fprintf(stderr, "[pop:world] water (P6 %s): draws %llu, native %llu, not replayed %llu; VU runs %llu\n",
+                                     g_waterVu.usePort ? "port" : "on the interpreter", (unsigned long long)g_waterStats.draws,
+                                     (unsigned long long)g_waterStats.native, (unsigned long long)g_waterStats.failed, (unsigned long long)g_waterVu.runs);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
