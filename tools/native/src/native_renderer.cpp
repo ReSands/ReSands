@@ -587,10 +587,10 @@ namespace pop_native
                     push.fogColour[0] = fc[0];
                     push.fogColour[1] = fc[1];
                     push.fogColour[2] = fc[2];
-                    // POP_NATIVE_DECAL_ZBIAS (GS Z units, default 1): what bit 64 of params.x moves draws without depth write nearer
+                    // POP_NATIVE_DECAL_ZBIAS (GS Z units, default 32: 1 still flickered, 32 not, user 29 Oct): bit 64 of params.x moves draws without depth write nearer
                     static const float decalBias = [] {
                         const char *e = std::getenv("POP_NATIVE_DECAL_ZBIAS");
-                        return e && *e ? std::strtof(e, nullptr) : 1.0f;
+                        return e && *e ? std::strtof(e, nullptr) : 32.0f;
                     }();
                     push.fogColour[3] = decalBias;
                     VkDescriptorSet set = mat ? materialSets[r.material] : whiteSet;

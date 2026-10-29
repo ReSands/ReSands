@@ -107,7 +107,16 @@ it: fix now. Not in 1: park.
    N13/N14/N16 are probably one bug (seams of world geometry); N15 looks like N10 (glow visibility against a depth
    buffer the native world partly wrote: if so, hybrid -> parked, or picked up with the 0.13 halo work).
    **Checked 29 Oct evening (user, TV):** N13 (162246), N14 (162442), N16 (162819, 163042): seen in hybrid, not in
-   gs, seen in native, all four -> a bug in the native world code: **fix now** (one bug, most likely). N15 (162621):
+   gs, seen in native, all four -> a bug in the native world code: **fix now** (one bug, most likely). **Fixed 29 Oct
+   evening, two causes (user checked each in hybrid):** (a) N13/N14/N16 162819 (ae260d9): with translucents native, a
+   blended draw of +0x68/+0x78/+0x4C went native even after an earlier draw had gone to the GS (instanced walls with
+   a lightmap entry, +0x2C); the GS then drew those walls over the native corner-stone overlay (162246 draw 835),
+   which showed per pixel as the camera moved. Narrowed by switches (world only / + shadows: no flicker; +
+   translucents: flicker). Blended or Z-less draws now need a pure frame. (b) 163042 (moss decal, draw 711, blend
+   kind 1, no depth write): whole patches dropped out for single frames, even with the camera still. Our Z differs
+   from VU1's by tens of units, so the decal's GEQUAL against its wall flipped; on the GS it passes. Draws without
+   depth write now move nearer by `POP_NATIVE_DECAL_ZBIAS` GS Z units (mesh.vert; 1 still flickered in motion, 32
+   gone with nothing showing through: default 32). N15 (162621):
    seen in gs too ("if anything even worse") -> not ours for now; **user: revisit on real PS2 hardware** to be sure
    the original looks like that.
 2. **Rewind at 30 fps** (save 155110): reproduce from the save first (115853 did not), then profile; if it is the
