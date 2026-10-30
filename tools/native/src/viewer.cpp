@@ -524,6 +524,7 @@ int main(int argc, char **argv)
     FrameLoader loader;           // PNF frames (files and live); live: keeps texture keys across frames
     Image liveGsImage;            // live: the game's own GS picture of the frame (POP_NATIVE_WINDOW_GS=d)
     std::vector<Image> liveGsImages; // all GS pictures sent with the frame (1..d boundaries later)
+    FrameExtras lastExtras; // the last frame's trailers (POP_VIEW_GPU_POST)
     auto addFrameFrom = [&](std::istream &f, const char *path) -> bool {
         FrameExtras extras;
         loader.vertexTotal = vertexTotal;
@@ -540,6 +541,7 @@ int main(int argc, char **argv)
         glowOn = extras.glowOn;
         hazeOn = extras.hazeOn;
         liveGsImages = std::move(extras.gsImages);
+        lastExtras = extras;
         liveGsImage = liveGsImages.empty() ? Image{} : liveGsImages.front();
         return ok;
     };
@@ -620,21 +622,9 @@ int main(int argc, char **argv)
         if (!livePort && (glowOn || hazeOn))
         {
             // an exported frame in the window: its post effects on the GPU too
-            PostEffects pe;
-            pe.glow = glowOn && !noGlow;
-            pe.levels = int(glow[0]);
-            pe.fix = int(glow[1]);
-            pe.mask = glow[2] != 0;
-            pe.convolution = glow[3] != 0;
-            pe.strength = int(glow[4]);
-            pe.haze = hazeOn && !noHaze;
-            pe.hazeColour = haze[0];
-            std::memcpy(&pe.hazeFade, &haze[1], 4);
-            pe.motionSmooth = after[0] & 1;
-            pe.motionDx = int(after[1]);
-            pe.motionDy = int(after[2]);
-            pe.fixBlend = after[0] & 2 ? int(after[3]) : 0;
-            pe.zoomSmooth = zoom;
+            PostEffects pe = postEffectsOf(lastExtras);
+            pe.glow = pe.glow && !noGlow;
+            pe.haze = pe.haze && !noHaze;
             r.setPostEffects(pe);
         }
         if (livePort)
@@ -702,22 +692,7 @@ int main(int argc, char **argv)
                 if (!addFrameFrom(in, "live") || !r.upload(error))
                     std::fprintf(stderr, "live frame: %s\n", error.empty() ? "unreadable" : error.c_str());
                 {
-                    PostEffects pe;
-                    pe.glow = livePost && glowOn;
-                    pe.levels = int(glow[0]);
-                    pe.fix = int(glow[1]);
-                    pe.mask = glow[2] != 0;
-                    pe.convolution = glow[3] != 0;
-                    pe.strength = int(glow[4]);
-                    pe.haze = livePost && hazeOn;
-                    pe.hazeColour = haze[0];
-                    std::memcpy(&pe.hazeFade, &haze[1], 4);
-                    pe.motionSmooth = livePost && (after[0] & 1);
-                    pe.motionDx = int(after[1]);
-                    pe.motionDy = int(after[2]);
-                    pe.fixBlend = livePost && (after[0] & 2) ? int(after[3]) : 0;
-                    pe.zoomSmooth = livePost ? zoom : 0.0f;
-                    r.setPostEffects(pe);
+                    r.setPostEffects(livePost ? postEffectsOf(lastExtras) : PostEffects{});
                     glowOn = hazeOn = false; // the next frame's trailer says again
                 }
                 if (showGs && !r.setOverlay(&liveGsImage, error))
@@ -903,6 +878,17 @@ int main(int argc, char **argv)
             depthPath = argv[i + 1];
         else if (!std::strcmp(argv[i], "--gsz"))
             gsZPath = argv[i + 1];
+    if (std::getenv("POP_VIEW_GPU_POST")) // debug: the post chain inside renderOffscreen (the in-game world's path), not the CPU one
+    {
+        PostEffects pe = postEffectsOf(lastExtras);
+        pe.glow = pe.glow && !noGlow;
+        pe.haze = pe.haze && !noHaze;
+        pe.fixBlend = 0; // no previous frame offline
+        r.setPostEffects(pe);
+        glowOn = hazeOn = false;
+        zoom = 0.0f;
+        after[0] = 0;
+    }
     if (!r.renderOffscreen(width, height, clip, draws, rgba, error, depthPath ? &depth : nullptr, gsZPath ? &gsZ : nullptr))
     {
         std::fprintf(stderr, "render: %s\n", error.c_str());

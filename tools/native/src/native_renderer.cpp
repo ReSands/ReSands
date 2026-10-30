@@ -1048,6 +1048,7 @@ namespace pop_native
             postW = postH = 0;
         }
 
+        bool postOn() const { return post.glow || post.haze || post.motionSmooth || post.fixBlend > 0 || post.zoomSmooth > 0.0f; }
         bool ensurePostBuffers(uint32_t w, uint32_t h, std::string &error)
         {
             if (postW == w && postH == h)
@@ -1806,7 +1807,8 @@ namespace pop_native
                      m->createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, plainFlags, o.depthReadback, error);
             }
             ok = ok &&
-                 m->createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                 m->createImage(width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                                 VK_IMAGE_ASPECT_COLOR_BIT, o.colour, error) &&
                  m->createImage(width, height, VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                                 VK_IMAGE_ASPECT_DEPTH_BIT, o.depth, error);
@@ -1836,10 +1838,18 @@ namespace pop_native
         Buffer &readback = o.readback, &depthReadback = o.depthReadback;
         const VkFramebuffer fb = o.fb;
         ok = ok && m->prepareFrameCopy(draws, width, height, error);
+        // the post chain set by setPostEffects (the in-game world: the effects the game left to the native frame) runs over
+        // the colour before the readback; the depth read back is the scene's
+        const bool post = m->postOn();
+        ok = ok && (!post || m->ensurePostBuffers(width, height, error));
+        if (!post)
+            m->postPrevValid = false;
         if (ok)
         {
             ok = m->oneShot([&](VkCommandBuffer cb) {
                 m->recordScene(cb, fb, colour.image, width, height, clip, draws);
+                if (post)
+                    m->recordPost(cb, colour.image, width, height);
                 VkBufferImageCopy region{};
                 region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.imageExtent = {width, height, 1};
@@ -1934,7 +1944,7 @@ namespace pop_native
         const bool overlay = m->overlayOn && m->overlay.image;
         if (!overlay)
             m->recordScene(cb, m->targetFb, m->targetColour.image, internalWidth, internalHeight, clip, draws);
-        if (!overlay && (m->post.glow || m->post.haze || m->post.motionSmooth || m->post.fixBlend > 0 || m->post.zoomSmooth > 0.0f))
+        if (!overlay && m->postOn())
         {
             if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
                 return false;

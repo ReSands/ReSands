@@ -8,7 +8,7 @@ Nothing here has been built yet unless it says so.
 ## What we already tried (16 Oct)
 `tools/pnach.py` + `rebuild.ps1 -Pnach 'Widescreen 16:9'` compiles the PCSX2 patch's code words into the generated
 code. Gameplay, HUD and menus looked right at 16:9. What failed: movies and the loading screen are drawn for 4:3, and
-the loading screen is drawn **once** and then left on screen, so switching the display aspect per frame did not work.
+the loading screen is drawn **once** and then left on screen, so switching the display aspect per frame did not work. (30 Oct: wrong, it is redrawn per call by FUN_004C9C80, two rotating layers, `docs/native_2d.md`; why the per-frame switch failed is not known.)
 Parked until after the native renderer (user decision).
 
 ## The PCSX2 patch for SLUS-20743 (nemesis2000), read against our ELF
@@ -22,7 +22,7 @@ Parked until after the native renderer (user decision).
 | rfix | 0x4A4E70, 0x4A4EAC (FUN_004A4E00) | `lwc1 f0,-0x79B4(gp)` + `cvt.s.w f0,f0` -> `lui at,0x4455` + `mtc1 at,f0` | a width loaded from a global (int) becomes 852.0 = 640 x (16/9)/(4/3) | 640 x A/(4/3) |
 | menu fix | 0x464538, 0x478CBC..0x478D08 (FUN_00478CC0) | `jal 0x478CC0` -> `jal 0x478CBC` (one word early, into an inserted `lui at,0x4456` = 856.0); `lw a3,0x10C(v1)` -> `li a3,-107`; `lwc1 f5,0xF4(v1)` -> `mtc1 at,f5` | menu width 856 and x offset -107 ~ -(856-640)/2 | width 640 x A/(4/3) (+ the pnach's rounding), offset -(width-640)/2 |
 | HUD fix | 0x1D8C80, 0x1D8C88 | `lui v1,0x3D66` + `ori a0,v1,0x6666` (0.05625) -> 0xBDDDDDDD (-0.1083) | one HUD x constant moved | derive from 2 values (4:3 and 16:9) once its meaning is known |
-| partial bb fix | 0x253110, 0x2BD92C | `jal 0x24D040` -> `nop` (both) | a call (bounding-box test?) skipped at two sites; "partial" = edge culling only partly fixed | find what 0x24D040 tests and widen it instead of skipping |
+| partial bb fix | 0x253110, 0x2BD92C | `jal 0x24D040` -> `nop` (both) | **0x24D040 = `Mdl00005261_fn_BlackBands`** (sets the letterbox, world +0xEA0; 30 Oct, `docs/native_2d.md`): "bb" = black bands, so this removes the cutscene letterbox, not a culling fix | culling still needs its own lead (below) |
 
 Needed for any-aspect: the "menu fix" uses a code cave one word before FUN_00478CC0 (the word there is 0). With
 instruction hooks (below) no cave is needed.
@@ -58,7 +58,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
   3D frame instead of being decided per frame from what was drawn. Same for movies: our native movie player (0.3)
   knows when a movie is up, so pillarbox from that state, not from draw contents.
 - **Culling is the part God Hand did not need** (no culling code in Rearmed). PoP does: the pnach's "partial bb fix"
-  shows objects popping at the edges. Leads: what `FUN_0024D040` tests; the world->clip matrix at graphics object
+  shows objects popping at the edges. Leads (`FUN_0024D040` is the letterbox setter, not culling): the world->clip matrix at graphics object
   +0x240 (`docs/native_renderer.md`); rePOP's Xbox Hor+ projection/culling hooks (same engine; `docs/reference.md`
   "reSOT"); what they do (`docs/RECOMP.md` there): divide the finished projection's x scale by the widening and leave
   the camera FOV alone (Jade places in-camera 2D from the FOV); hook the cos/sin that `CAM_Engine_ComputePlans` uses
@@ -78,6 +78,6 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
 ## Order when 1.1 starts (proposal)
 1. Port switchable instruction hooks into PS2Recomp-sotc (shared with 1.2, uncapped frame rate).
 2. The pnach's gameplay + rfix constants as hooks computed from A; check the camera at 16:9 and 21:9.
-3. Culling: find what 0x24D040 tests, widen it with A; play through to find edge pop-in.
+3. Culling: find the edge test (not 0x24D040: that is the letterbox), widen it with A; play through to find edge pop-in.
 4. 2D primitive log -> HUD groups and anchors; menus and loading screen latched to 4:3; movies pillarboxed.
 5. Cutscene framing check (CLAUDE.md roadmap 1.1).

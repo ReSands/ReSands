@@ -1785,6 +1785,33 @@ namespace pop_native_live
         // ?, mask, ?, convolution, strength on the stack) - the glow
         PS2Runtime::RecompiledFunction g_origGlow = nullptr;
         uint32_t g_glowCalls = 0, g_glow[5] = {};
+        // POP_NATIVE_POST=1 (31 Oct, with POP_NATIVE_LATE): an after-effect called while the frame is pure goes to the world
+        // frame's post chain (renderOffscreen -> recordPost) and its GS original is skipped. A draw left to the GS before it
+        // (a halo, Pinch) ends the purity, so the effects after that stay on the GS, over the native picture, in order.
+        // shortcut: ZoomSmooth runs before the halos in the game but after them in recordPost; both together not seen.
+        const bool g_worldPost = [] {
+            const char *e = std::getenv("POP_NATIVE_POST");
+            return e && *e == '1';
+        }();
+        enum : uint32_t { kPostZoom = 1, kPostGlow = 2, kPostMotion = 4, kPostFixBlend = 8, kPostHaze = 16 };
+        uint32_t g_postNative = 0;   // this frame's effects drawn natively (the world frame's trailers carry only these)
+        uint32_t g_fixBlendSelf = 0; // the effect object whose FixBlend flag (+0x120 bit 0) is cleared until the kick
+        uint64_t g_postFrames = 0, g_postNativeFrames = 0;
+        bool postNative(uint32_t bit)
+        {
+            if (!(g_world && g_worldPost && g_worldLate && g_worldOpen && g_worldPure && g_frameCapturing))
+                return false;
+            g_postNative |= bit;
+            return true;
+        }
+        // MotionSmooth and the haze come after FixBlend: a FixBlend still flagged (the glow did not go native, so it stays on
+        // the GS) must end the purity first, or the native effects would land under it
+        bool postNativeAfterFixBlend(uint8_t *rdram, uint32_t self, uint32_t bit)
+        {
+            if (g_worldPost && (*getConstMemPtr(rdram, self + 0x120u) & 1))
+                worldOnGs(rdram, "fixblend");
+            return postNative(bit);
+        }
         uint32_t g_after[4] = {}; // the AFTR trailer: flags (bit 0 MotionSmooth, bit 1 FixBlend), dx, dy, FIX
         // CAfterEffect::MotionSmooth (retail 0x4ADD80; flag +0x120 bit 5, after the glow): (this, dx, dy), the camera's
         // turn since the last frame in pixels; recorded for the native post chain, the original still draws on the GS
@@ -1796,6 +1823,8 @@ namespace pop_native_live
                 g_after[0] |= 1u;
                 g_after[1] = getRegU32(ctx, 5);
                 g_after[2] = getRegU32(ctx, 6);
+                if (postNativeAfterFixBlend(rdram, getRegU32(ctx, 4), kPostMotion))
+                    return;
             }
             g_origMotion(rdram, ctx, runtime);
         }
@@ -1806,7 +1835,11 @@ namespace pop_native_live
         void zoomSmooth(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_frameCapturing && getRegU32(ctx, 5) == 0)
+            {
                 std::memcpy(&g_zoom, &ctx->f[12], sizeof g_zoom);
+                if (postNative(kPostZoom))
+                    return;
+            }
             g_origZoom(rdram, ctx, runtime);
         }
         void colorDiffusion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1831,6 +1864,20 @@ namespace pop_native_live
                 if (g_glowCalls++ < 4)
                     std::fprintf(stderr, "[pop:native] ColorDiffusion levels %u FIX %u mask %u conv %u strength %u (a1 %08x t0 %08x t2 %08x)\n",
                                  g_glow[0], g_glow[1], g_glow[2], g_glow[3], g_glow[4], getRegU32(ctx, 5), getRegU32(ctx, 8), getRegU32(ctx, 10));
+                if (postNative(kPostGlow))
+                {
+                    // FixBlend is inline in the dispatcher right after: its flag off until the kick (worldKick puts it back).
+                    // shortcut: a FixBlend the game switches off between here and the kick comes back on; SetEffectStatus is
+                    // called from AI / events, before the display
+                    const uint32_t self = getRegU32(ctx, 4);
+                    if (g_after[0] & 2u)
+                    {
+                        g_postNative |= kPostFixBlend;
+                        *getMemPtr(rdram, self + 0x120u) &= 0xFEu;
+                        g_fixBlendSelf = self;
+                    }
+                    return;
+                }
             }
             g_origGlow(rdram, ctx, runtime);
         }
@@ -1862,6 +1909,26 @@ namespace pop_native_live
                     std::memcpy(&g_haze[1], &fade, 4);
                     if (g_hazeCalls++ < 4)
                         std::fprintf(stderr, "[pop:native] SmartBlur colour %08x fade %.3f\n", g_haze[0], double(fade));
+                }
+                if (postNativeAfterFixBlend(rdram, self, kPostHaze))
+                {
+                    // the original's state step at entry (the fade), as it does, since it does not run
+                    if (fading)
+                    {
+                        const int32_t n = int32_t(guestAny(rdram, self + 0x14Cu)), total = int32_t(guestAny(rdram, self + 0x148u));
+                        if (n == total)
+                            for (uint32_t o : {0x148u, 0x140u, 0x144u, 0x14Cu, 0x128u})
+                                std::memset(getMemPtr(rdram, self + o), 0, 4);
+                        else
+                        {
+                            float t = 1.0f - float(n) / float(total);
+                            t *= t;
+                            const int32_t next = n + 1;
+                            std::memcpy(getMemPtr(rdram, self + 0x144u), &t, 4);
+                            std::memcpy(getMemPtr(rdram, self + 0x14Cu), &next, 4);
+                        }
+                    }
+                    return;
                 }
             }
             g_origHaze(rdram, ctx, runtime);
@@ -2761,6 +2828,8 @@ namespace pop_native_live
             g_haloStats.outside += !g_frameCapturing;
             if (g_frameCapturing && haloRecord(rdram, getRegU32(ctx, 5)))
                 return;
+            if (g_frameCapturing)
+                worldOnGs(rdram, "halo"); // later native draws (Pinch, the post chain) would land under it
             g_origHalo(rdram, ctx, runtime);
         }
 
@@ -2856,6 +2925,8 @@ namespace pop_native_live
             g_pinchOutside += !g_frameCapturing;
             if (g_frameCapturing && pinchRecord(rdram))
                 return;
+            if (g_frameCapturing)
+                worldOnGs(rdram, "pinch"); // the native post chain after it would land under it
             g_origPinch(rdram, ctx, runtime);
         }
 #endif
@@ -4235,20 +4306,21 @@ namespace pop_native_live
             }
             if (dl)
                 std::fclose(dl);
-            // the world frame has no post effects of its own (the GS runs them over the whole picture)
-            const uint32_t noCalls = 0;
+            // the world frame carries only the effects drawn natively (postNative); the GS runs the rest over the picture
+            const uint32_t pn = worldOut ? g_postNative : ~0u;
+            const uint32_t glowCalls = pn & kPostGlow ? g_glowCalls : 0u, hazeCalls = pn & kPostHaze ? g_hazeCalls : 0u;
+            const uint32_t after[4] = {g_after[0] & ((pn & kPostMotion ? 1u : 0u) | (pn & kPostFixBlend ? 2u : 0u)), g_after[1], g_after[2], g_after[3]};
+            const float zoom = pn & kPostZoom ? g_zoom : 0.0f;
             putBytes(f, "GLOW", size_t(1) * size_t(4));
-            putBytes(f, worldOut ? &noCalls : &g_glowCalls, size_t(4) * size_t(1));
+            putBytes(f, &glowCalls, size_t(4) * size_t(1));
             putBytes(f, g_glow, size_t(4) * size_t(5));
             putBytes(f, "HAZE", size_t(1) * size_t(4));
-            putBytes(f, worldOut ? &noCalls : &g_hazeCalls, size_t(4) * size_t(1));
+            putBytes(f, &hazeCalls, size_t(4) * size_t(1));
             putBytes(f, g_haze, size_t(4) * size_t(2));
-            const uint32_t noAfter[4] = {};
             putBytes(f, "AFTR", size_t(1) * size_t(4));
-            putBytes(f, worldOut ? noAfter : g_after, size_t(4) * size_t(4));
-            const float noZoom = 0.0f;
+            putBytes(f, after, size_t(4) * size_t(4));
             putBytes(f, "ZOOM", size_t(1) * size_t(4));
-            putBytes(f, worldOut ? &noZoom : &g_zoom, size_t(4) * size_t(1));
+            putBytes(f, &zoom, size_t(4) * size_t(1));
             if (worldOut)
             {
                 g_worldStats.bytes += f.size();
@@ -4448,6 +4520,7 @@ namespace pop_native_live
             g_hazeCalls = 0;
             std::memset(g_after, 0, sizeof g_after);
             g_zoom = 0.0f;
+            g_postNative = 0;
             g_haloAddsInWindow = 0;
         }
 
@@ -4545,6 +4618,11 @@ namespace pop_native_live
                 std::vector<uint8_t> f;
                 writeFrame(true, &f);
                 pop_native_world::submitFrame(g_worldSeq, g_frameGeneration, std::move(f));
+                if (g_fixBlendSelf)
+                    *getMemPtr(rdram, g_fixBlendSelf + 0x120u) |= 1u;
+                g_fixBlendSelf = 0;
+                ++g_postFrames;
+                g_postNativeFrames += (g_postNative & kPostGlow) ? 1 : 0;
                 resetFrameCapture();
                 g_frameCapturing = false;
                 g_worldMarked = g_worldOpen = false;
@@ -4601,6 +4679,9 @@ namespace pop_native_live
                     if (g_pinchCalls)
                         std::fprintf(stderr, "[pop:world] pinch: %llu, native %llu, after the kick %llu\n", (unsigned long long)g_pinchCalls,
                                      (unsigned long long)g_pinchNative, (unsigned long long)g_pinchOutside);
+                    if (g_worldPost)
+                        std::fprintf(stderr, "[pop:world] post chain: frames %llu, glow native %llu\n", (unsigned long long)g_postFrames,
+                                     (unsigned long long)g_postNativeFrames);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)

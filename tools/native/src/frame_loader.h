@@ -40,6 +40,9 @@ namespace pop_native
         std::unordered_map<uint32_t, int> imageOf_; // PNF6: texture key -> renderer image
     };
 
+    // the post chain a frame's trailers ask for (all off when the game ran none of it natively)
+    PostEffects postEffectsOf(const FrameExtras &extras);
+
     // true for frames whose draws are in the game's own order (PNF4 and later): draw them in one pass
     bool frameInGameOrder(const char magic[4]);
 }

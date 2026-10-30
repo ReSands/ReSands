@@ -135,6 +135,7 @@ namespace pop_native_world
                 std::istringstream in(std::string(reinterpret_cast<const char *>(job.pnf.data()), job.pnf.size()), std::ios::binary);
                 error.clear();
                 pic.ok = loader.load(renderer, in, "world", clip, draws, extras, false);
+                renderer.setPostEffects(pop_native::postEffectsOf(extras)); // the effects the game skipped on the GS (POP_NATIVE_POST)
                 const auto t1 = std::chrono::steady_clock::now();
                 pic.ok = pic.ok && renderer.upload(error);
                 if (loader.keptMissing)

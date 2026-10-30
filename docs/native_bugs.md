@@ -389,6 +389,51 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   and not the hybrid: the original or our GS emulation. **User: check on real PS2 hardware** (with N15). P6 will not
   change it; when water goes native, its order should match GS-only, not fix this.
 
+## Reported 30 Oct evening (saves `game/analysis/saves1030b/`)
+
+- **N18 flickering edge (19:25, save 192544).** The save's picture (the live hybrid frame) has a thin dark seam along
+  the lower ledge's edge (about x 20-240, y 360-370); the offline native frame has none (`pop_state_frame`, score 1.48).
+  Not yet: the user's circle, the three-mode check.
+- **N19 flicker (19:26, save 192645).** The save's picture has an orange scalloped band across the wall at frieze
+  height, in front of the grass (x ~150-640, y ~180-200); the offline native frame has none (score 4.77; the rest is
+  the missing offline shadows). Looks like a wall-band texture drawn over the native wall (a GS draw over the injected
+  picture, or a native decal's Z live, as N16 b). Not yet: the user's circle, the three-mode check.
+
+- **Offline pass over N20-N25 (30 Oct late, `pop_state_frame_vu1` + `score_saves.sh`, sides in the session scratchpad;
+  the "game" picture of a save = the live hybrid frame the user saw).** Live log of the session:
+  `game/analysis/saves1030b/play_191958.log` (copied while the game ran).
+- **N20 dagger glow through a wall (19:31, saves 193136 "normal" / 193139 "glow through the wall").** Offline native
+  draws a cyan-green glow column beside the hanging Prince in both (193139: x ~330-420, y 60-300), the live pictures
+  differ in the window's light shaft (193136 much brighter). Which one the user means: needs the circle. Lead: the
+  dagger-glow billboard (`docs/renderer_audit.md` item 9) drawn natively without the occlusion the GS gives it, or the
+  glow mask (+0x98) letting ColorDiffusion bloom it through the wall.
+- **N21 candle glow blowing out (19:32, save 193240).** The live picture has a huge white bloom on the floor; offline
+  the save replays almost nothing (lists emptied by the save's timing), so offline can't judge. Likely the same family
+  as N24 (over-bright glow / halos). PC check.
+- **N22 water reflection on the wall swapping between two animations (19:33, save 193355).** Offline matches the save's
+  picture (0.97), so one frame shows nothing. Lead: the caustic layer drawn natively in pure frames and by the GS in the
+  others (purity ending in `+0x88` by refs in this area: the session's stats end it by "ref +0x88" in 18k frames); if
+  our UV animation phase differs from the game's, the layer would jump each time purity flips. Check: `-NoNativeLate`.
+- **N23 steady ~45-55 fps (19:35, save 193529).** The log: 47-48 just before the save, 50-55 for about a minute after.
+  In that window the game draws ~10-15 halos per frame (all native; 4-6 before, ~1 after). From the running averages:
+  worker ~6.5 ms per frame (normal 4.6), the game thread's wait for the picture ~5.7 ms (normal 4.2). So a halo-heavy
+  spot; each native halo costs a frame copy. Perf work waits until fully native (user), but the GS-only fps at the
+  same spot decides whether this is ours (a regression) or the game's.
+- **N24 lights too bright (19:36, save 193636; same hall as N23).** Offline native halos are slightly bigger and
+  brighter than the live picture's (diff around each lamp and the two braziers); live they were too bright to the
+  user. Compare against GS-only at the same spot (also N15 / N17: the original may look like that).
+- **N25 dagger glow far too bright when the Prince first takes it (19:40, save 194005, with a `.glitch` capture on the
+  PC).** Offline native: a huge white bloom over the blade; the save's live picture shows a modest glow (the capture
+  frame may not be the brightest). The capture's 600 frames are all injected and pure to the HUD, so the native
+  path ran. Same draw as `docs/renderer_audit.md` item 9 (its ~8% live gap), much worse in this close-up.
+
+- **N26 fps drops in the earthquake (19:41, saves 194134 / 194136, `.glitch` captures on the PC).** The log: 50, 44,
+  52, 49, 55 fps over ~25 s (60 before and after); the capture's frame times agree (47-57 fps). In that stretch the
+  frame has ~2500 draws (1800 in the dagger scene), all pure and native to the HUD, halos 3-16 per frame, particles
+  40-55; worker and GS-thread wait went up to ~6 ms (estimate, from the running averages). Not decided whether it is
+  ours: the same spot in `gs` mode decides. Both saves landed mid-frame (the save's picture holds only the halos, as
+  193240), so offline can't show them.
+
 ## Storage of captures (agreed with the user 24 Oct)
 
 `.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after
@@ -496,6 +541,14 @@ Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a
 sand areas), MotionSmooth / FixBlend, then ZoomSmooth 0 (the Haste power; Spiral, ZoomSmooth 1 and Vision are unused, see the triggers above).
 
 ## Native Pinch (30 Oct, offline; not yet live-checked)
+
+**Live (eve1030k, 30 Oct 18:42, `-NativeLate` build d5bf53c; read 31 Oct):** 115837 pinch 488 calls, **478 native**; 115853
+3 calls, 0 native, no why-line (the +0x74 / grid refusal never fired), all within the first stats window: the save's
+rewind ends right after the load, so its few calls fall in the first frames, before the frame is open / pure (115837's
+10 GS calls likely the same). So Pinch is native live; 115853 cannot test it. GS / native shots
+(`game/analysis/shots1030k/`, separate boots): 115837 8.1, 145139 4.0-4.8, 202926 6.1-8.2, the differences only moving
+things (fighters, flames, the fountain's column). Live, the rest of the post chain (glow, MotionSmooth, FixBlend,
+SmartBlur, ZoomSmooth) is still the GS's, drawn over the injected picture (the world worker runs no `recordPost`).
 
 `pinchRecord` / `pinchEffect` in `pop_native_live.cpp` (hook on FUN_004AEA00, `POP_NATIVE_PINCH=0` off; live only while the
 frame is pure, as the halos, so with `-NativeLate`): the game's N x N grid of triangle strips (formula in the code comment;

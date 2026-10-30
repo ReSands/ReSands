@@ -22,6 +22,26 @@ namespace pop_native
                std::memcmp(magic, "PNF7", 4) == 0 || std::memcmp(magic, "PNF8", 4) == 0;
     }
 
+    PostEffects postEffectsOf(const FrameExtras &e)
+    {
+        PostEffects pe;
+        pe.glow = e.glowOn;
+        pe.levels = int(e.glow[0]);
+        pe.fix = int(e.glow[1]);
+        pe.mask = e.glow[2] != 0;
+        pe.convolution = e.glow[3] != 0;
+        pe.strength = int(e.glow[4]);
+        pe.haze = e.hazeOn;
+        pe.hazeColour = e.haze[0];
+        std::memcpy(&pe.hazeFade, &e.haze[1], 4);
+        pe.motionSmooth = e.after[0] & 1;
+        pe.motionDx = int(e.after[1]);
+        pe.motionDy = int(e.after[2]);
+        pe.fixBlend = e.after[0] & 2 ? int(e.after[3]) : 0;
+        pe.zoomSmooth = e.zoom;
+        return pe;
+    }
+
     bool FrameLoader::load(Renderer &r, std::istream &f, const char *name, float clip[16], std::vector<Draw> &draws, FrameExtras &extras,
                            bool verbose)
     {

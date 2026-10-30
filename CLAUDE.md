@@ -52,19 +52,24 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   saving, dagger glow, rewind): all good. Last night's work: `docs/native_renderer.md` "Lists after the shadows" (30 Oct
   night), the moon halo (offline-only artifact, closed) in "Native halos", dagger glow in `docs/renderer_audit.md` item 9.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, parked list), `docs/renderer_audit.md`.
+- **0.13 tail: native post chain live, built, not booted (30 Oct late).** Live, glow / SmartBlur / MotionSmooth /
+  FixBlend / ZoomSmooth were still the GS's over the injected picture (only Pinch was native: 478/488 in eve1030k).
+  `POP_NATIVE_POST=1` (with `-NativeLate`) sends them to the world frame's post chain while pure and skips the GS
+  originals; GPU in `renderOffscreen` = CPU exactly on 4 saves (`POP_VIEW_GPU_POST=1`). Next: a boot (TV) on the glow
+  saves, then the user's look. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: 0.14 (native HUD, menus, loading screens, movie display; full-screen fades too). Start here, nothing planned
-  yet: first job is a plan for the user.** Known facts to build on:
+- **Next: 0.14 (native HUD, menus, loading screens, movie display; full-screen fades too). Plan: `docs/native_2d.md`
+  (30 Oct late, approved: engine-level hooks per 2D producer, no GS packets; survey done, 4 new hooks + 2 existing paths; next: step 1, the offline 2D layer).** Known facts to build on:
   - **+0xB8 is the 2D pass:** PS2_After2D (0x4B4A00) -> FUN_004BBFC0 sets draw manager +0x28 = 1 and renders list +0xB8,
     after the after-effects (glow, SmartBlur). The native renderer has **no layer after its post effects** (its picture
     is injected at the 3D marker, the GS draws +0xB8 on top): that layer is the groundwork (`docs/native_bugs.md`
     "Flashes survey").
   - **HUD text and bars = FUN_00469C00 (list kind 0x18), the Jade STR text renderer:** per font page FUN_004B2000 sets
     the state, then CNT + DIRECT + GIF tag (PRIM 0x5E sprite, textured, blended; ST RGBAQ XYZ2 ST XYZ2), screen
-    coordinates, Z 0. Fits the P5 pattern: run the original, read the DMA range it wrote, rewind (`docs/native_bugs.md`
+    coordinates, Z 0; letters by FUN_0046A980 / FUN_0046AA80 (the hook points, not the packets; `docs/native_bugs.md`
     "Light shafts"). `pop_state_frame` does not replay +0xB8 yet.
   - **Fades = kind 11 entries in +0xB8** (FUN_004B4580 rectangles, table 0x6DF6E0): one blended screen quad each.
   - Menus, loading screens (drawn once and left on screen: `docs/widescreen.md`), movie picture: not surveyed;
