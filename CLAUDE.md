@@ -70,11 +70,19 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   water is missing natively (likely GFX particles of +0x88, which `pop_state_frame` lists but never draws; unproven).
   **Halos started 30 Oct** (`docs/native_renderer.md` "Native halos"): offline done, sun save 162621 10.6 -> 2.6; the moon
   (145139) is too bright natively (GS hides it; needs a GS trace of a moon frame on the PC); not built or booted on the PC
-  yet. Halo and water reviews done 30 Oct (fixes 8ede351 and the `frameOnly` key-0 commit: water, halos, sprites, particles
-  no longer fill the kept-mesh cache). **Next PC session, in order:** bundle + `-Fast` build; boot check of patches 43/44 +
-  P5; make a **GS-only fountain save** (gsref job, as `tools/nightly/render_gate.txt` needs) and add it as a `vu1` gate line
-  (water review item 2: no gate save has water); GS trace of a moon frame (halo Z); `-NativeLate` play at the fountain
-  watching for "kept meshes over budget" (should be gone). Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  yet. **Reviews 30 Oct, all done:** halos (8ede351, 22697b4: native halos were refused by a leftover sub-material),
+  water (3170ab5 + cddb051: water, halos, sprites, particles and the lit env pass sent with key 0, no longer filling the
+  kept-mesh cache), patches 43/44, ae260d9 (pure frame for blended draws), decal Z bias: no fixes needed for the last three.
+- **Next PC session (ask about the TV first), in order:**
+  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix are all new there).
+  2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one shot) with P5 on: any change in behaviour.
+  3. GS-only fountain save (gsref job, `tools/nightly/render_gate.txt` needs GS-only), add it as a `vu1` gate line (no gate
+     save has water yet).
+  4. GS trace (`PS2X_GS_TRACE`) of a moon frame, GS only, from 145139: the Z under the moon core at the halo test.
+  5. `-NativeLate` run at the fountain and the sun save 162621: the `[pop:world] halos:` line should show native > 0, and no
+     "kept meshes over budget" lines should appear.
+  6. Shut the PC down.
+  Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
   something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera

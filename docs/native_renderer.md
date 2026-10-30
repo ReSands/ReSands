@@ -521,6 +521,12 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   native (on the GS it closed the frame's purity: "ended by water +0x88" in 1,929 of 2,400 frames without P6). Fountain save
   202926, 45 s hands-off: water draws 6,099, native 2,232, not replayed 0, 60 fps; the rest stay on the GS because a GS GFX
   draw earlier in +0x88 ends the purity first (2,285 frames; the prefix rule, 0.2). The user watched it: looks good. **On by default since 30 Oct** (`POP_NATIVE_P6=0` off; still only with `-NativeLate`).
+- **Review 30 Oct** (5c9733e..4e0debf). Fixed (3170ab5): water records went to the renderer with a content key, so the
+  kept-mesh cache stored ~200 KB of one-frame geometry per frame at the fountain (estimate) until the 512 MB budget
+  dropped everything and the whole world was resent (the N5 path). `DrawMaterial::frameOnly` now sends them with key 0,
+  as posed characters; the same for halos, P9 sprites, P5 and CPU particles, and (cddb051) the lit statics' environment-map
+  pass (its UVs follow the camera; pass 1's baked light stays cached). Not verified live yet. Open: no render-gate save has
+  water (162246, 162621, 155110 checked): make a GS-only fountain save on the PC and add it as a `vu1` gate line.
 - **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
   livecmp, ~1 s per save on the Mac): all 49 saves of 19 Oct render (`game/analysis/play1019/native/`,
   `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD
@@ -1234,7 +1240,7 @@ flight), it finishes the run, and they come back. `POP_NATIVE_P9=0` = interprete
 (`POP_P9_TRACE`) always uses the interpreter. Offline A/B over the 236 saves of the P9 traces: all native frames
 byte-identical with and without the port, 630 sprite elements / 75,009 quads, no handover.
 
-## Native halos (30 Oct, 0.13; offline only so far)
+## Native halos (30 Oct, 0.13; offline only so far, reviewed 30 Oct)
 
 **What the game does** (retail FUN_004AA240 = AE_ProcessOneHalo, called per halo-array entry by FUN_004ABFC0 at the end of
 Display3DElements; ProcessLensFlare = FUN_004AB500; disassembly via `tools/ghidra/PoPDisasm.java` because Ghidra's C drops
@@ -1252,7 +1258,9 @@ while the frame is pure after +0xA8): five GS sprites through `gifToBatch`: clea
 before it, mesh.frag bit 256 averages the copy's alpha over the core square, 8x8 samples), the halo (blend kind 6 + dest
 alpha), restore (image -4: the same copy read per pixel, no new copy). The copy covers only the spread's square
 (`Draw::copyRect`, from its vertices in `frame_loader`; review 30 Oct: ~30 full copies a frame in torch rooms otherwise); a
-halo whose texture index is not in the texture list stays on the GS. Nightly gate: the `vu1` lines of
+halo whose texture index is not in the texture list stays on the GS. Live it asks only for a pure frame (22697b4,
+review 30 Oct): `worldStateOk` judged the leftover +0xA8 sub-material, usually +0x98's glow mask, and refused nearly
+every halo. Halo geometry is sent with key 0 (`frameOnly`, see the water review). Nightly gate: the `vu1` lines of
 `tools/nightly/render_gate.txt` (162621, 145139 through `pop_state_frame_vu1 --noglow`). Shortcuts: halos with ghosts stay on the GS (none
 seen); the core square keeps the test's alpha instead of the glow mask. `pop_state_frame`: the save's count is always 0 and
 the array holds stale entries from longer frames (162621: the sun at 0, 22 and 27), so it replays entries up to the first

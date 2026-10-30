@@ -10,7 +10,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   seen once, taken off the list 26 Oct and watched through the play-through: on a freeze, take a full dump).
   Borrowed items for 0.1 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **MOVZ/MOVN write only the low 64 bits** (our recompiler copies 128; one line in
   `special_translator.cpp`; **written 29 Oct as sotc patch 43**, with MOVZ/MOVN cases in `tools/mmitest` that fail
-  without it and pass with it; not applied on the PC yet): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
+  without it and pass with it; applied and built on the PC 29 Oct, reviewed 30 Oct, not booted yet): ride along with the next full `-SkipGhidra` rebuild after crash 2 is settled, before
   the play-through. **IOP `maxFreeMemory()`** never goes back up after frees: fix (`-Fast`) only if import stats
   (patch 11) show PoP calls QueryMaxFreeMemSize.
   Also with that rebuild (user, 27 Oct): **runtime patch 44 (written 29 Oct; numbered 43 before), small screenshots.**
