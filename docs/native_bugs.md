@@ -464,7 +464,18 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     the mode word is 2, via FUN_004BA5C0 or directly). Two caustic layers with equal flags and other scrolls next to each
     other in the sorted list: the second got the first's scroll, and the order changes as the camera moves. Fix: a hook on
     FUN_004B5EC0 keeps the element's sub (`g_uvSub`), used when 0x70000080 == 2; `state_frame.cpp` feeds both offline.
-    Render gate unchanged (offline always had the element's own sub). Pending: the user's in-motion recheck.
+    Render gate unchanged (offline always had the element's own sub). **User recheck (30 Oct ~20:25): NOT fixed** (the
+    fix stays: it is right by the code, harmless, gate unchanged). New clue from the user: **the animation changes only
+    while the Prince moves; standing still it is steady** (so: tied to the camera / Prince moving, not to the scroll timer).
+    Glitch captures made while moving: `game/analysis/glitch1030/play_20261030_202309` / `_202313` (.glitch, .txt, .state;
+    `_202313_all/` = all 600 frames via `glitchview.py --every 1`; mean of the circled spot at half size (82-122,
+    180-215) moves smoothly 34.7 -> 30.9 -> 36.9 with the camera, nothing visible at half size yet). All frames pure.
+    **Next leads:** (1) UVs that follow the camera, like the lit statics' environment-map pass (`docs/native_renderer.md`
+    "Review 30 Oct", cddb051: sent frameOnly because its UVs move with the camera): check whether draw 418's batches are
+    kept by the renderer (content key) while the GS recomputes their UVs per frame; the hop would be a kept batch being
+    replaced. (2) Draw order: the sorted +0x88 order around the caustic changes as the camera moves; compare draw 416-418
+    order across two capture frames (POP_VIEW_LIST on frames from the two saves' states). (3) Make full-size evidence: a
+    short boot of 202313's state with `-Shots` every 10 fields while R1-walking, native vs gs.
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.
