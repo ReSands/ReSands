@@ -465,7 +465,9 @@ MotionSmooth; +0x120.0 an inline blend of buffer 1 over the frame, ALPHA (Cs - C
 Gone in retail: BrightnessContrast, DepthBlur(Near), Blur, Remanance, RadialBlur, ClearBorderExtend,
 ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8** (sand-haze saves 115837, 115853,
 155110, 1029 185650 / 185807 / 185943, ...), **MotionSmooth 9**, **FixBlend 2** (24 Oct 200337 0.52, 19 Oct 185803
-0.70); ZoomSmooth, Spiral, Vision in none (rewind / sand vision: no save taken during one). Not native: Pinch,
+0.70); ZoomSmooth, Spiral, Vision in none. **The Pinch saves are the rewind saves** (155110, 115853, 1029 185650 / 185807 /
+185943): Pinch is the rewind's warp. The sand visions are movies (39 `vis_*.int` in MOVIEPS2.BIG, `docs/movies.md`), not an
+after-effect, so ZoomSmooth / Spiral / VisionEffect have unknown triggers: find what sets their flags before asking for saves. Not native: Pinch,
 MotionSmooth, FixBlend, ZoomSmooth, Spiral, Vision. Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
 
 **Light-shaft lead ruled out (30 Oct):** GFX type 0x12 GFX_Sun_Render 0x464C40 (GFX_NeedGeom, GFX_Sun_ComputeRay) is
@@ -477,8 +479,8 @@ So the beam is an element-list draw (resolved below).
 
 **Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
 Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
-sand areas), MotionSmooth / FixBlend, then ZoomSmooth / Spiral / Vision once a save during rewind / sand vision exists
-(ask the user for one).
+sand areas), MotionSmooth / FixBlend, then ZoomSmooth / Spiral / Vision once their triggers are known (what writes +0x120 bit 7, +0x121 bit 0,
++0x122 bits 0 and 2).
 
 ## Native Pinch (30 Oct, offline; not yet live-checked)
 
