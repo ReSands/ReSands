@@ -2780,7 +2780,12 @@ namespace pop_native_live
             constexpr uint32_t ae = 0x006DF170u;
             const uint32_t n = guestAny(rdram, ae + 0x4C);
             if (guestAny(rdram, ae + 0x74) != 0xFFu || n > 64)
+            {
+                static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+                if (whyLog)
+                    std::fprintf(stderr, "[pop:world] pinch on the GS: +0x74 %08x grid %u\n", guestAny(rdram, ae + 0x74), n);
                 return false;
+            }
             const float e = guestF(rdram, ae + 0x60), s = guestF(rdram, ae + 0x64), nf = float(n);
             const float radius = guestF(rdram, ae + 0x68) * nf, cx = (guestF(rdram, ae + 0x58) + 0.5f) * nf, cy = (guestF(rdram, ae + 0x5C) + 0.5f) * nf;
             const float ox = guestF(rdram, ae + 0x50) + (1.0f - s) / 2.0f, oy = guestF(rdram, ae + 0x54) + (1.0f - s) / 2.0f;
