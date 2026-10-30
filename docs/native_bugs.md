@@ -540,3 +540,21 @@ texel centres (a pure shift), the colours of the two vertex rows at sp+0 / sp+8.
   the previous frame offline is the reference picture itself. No GS-only save has either, so no gate line. Live the GS still
   draws both over the injected picture (the world frame sends no post effects), so they matter for the viewer and 0.2.
   Not modelled: the alpha these blits write (FBMSK 0 in the game; nothing after them reads it), the half-width mode.
+
+## Native ZoomSmooth 0 (power of haste; 30 Oct, Mac, offline)
+
+From the disassembly of 0x4AD900 (recompiled listing `game/recomp/output/FUN_004ad900_0x4ad900.cpp`): (this, mode a1,
+strength f12). Called first in the dispatcher FUN_004ABFC0 (ZoomSmooth 0, ZoomSmooth 1, Pinch, **then** the glow,
+MotionSmooth, FixBlend, Spiral, SmartBlur). FUN_004AF940's floats: f12..f15 = the source UV rect as fractions of the frame
+(times +0xE0 / +0xE4, truncated to texels), f16 = a rotation angle (sin/cos of the corners; mode 1 only).
+- **Mode 0** (+0x120 bit 7, strength +0x18): s = p * 0.25 / 2; TEST 0x30000; four passes frame -> temp -> frame -> temp ->
+  frame (FUN_004AFFC0 bilinear, FBMSK 0xFF000000), each: the source full-rect at colour 0x40 (ALPHA 0x29), then UV rect
+  [s, 1 - s] stretched over the whole frame at 0x40 (ALPHA 0x68 FIX 0x80: add); s halves per pass. A radial zoom blur, brightness kept.
+- **Mode 1** (no caller): angle = p * pi/4 / 4, the same passes with the copy rotated by -angle and +angle. Not ported.
+- Natively: `pop_postfx::zoomSmoothBlits` (`postfx.h`), run by `Renderer::recordPost` before the glow (the sprite loop is
+  now a lambda shared with MotionSmooth / FixBlend) and by the viewer's CPU path. Frame trailer `ZOOM` (float strength, 0 = off)
+  after `AFTR`, from a hook at 0x4AD900 (records mode 0, the original still draws on the GS). GPU = CPU exactly
+  (`pop_postfx_gpu_judge sprite`, 2 new cases). `pop_state_frame` replays it when +0x120 bit 7 is set;
+  `POP_STATE_ZOOMSMOOTH=<p>` forces it (no save has it). Forced p = 1 on 1024 184926: a strong centred zoom blur, looks plausible;
+  **no GS reference yet**: needs a GS-only save while the power of haste runs (the live ramp's range of p is not known).
+

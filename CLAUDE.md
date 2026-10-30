@@ -50,8 +50,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   (user-checked); halos, Pinch (= the rewind's warp) and the rewind haze (= the unmasked glow, fixed by GS truncation
   in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
-  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend native offline (30 Oct, `docs/native_bugs.md`). Left: ZoomSmooth 0
-  (= the late-game power of haste; Spiral, ZoomSmooth 1, Vision unused in retail), the moon halo, retry `-NativeLate`.
+  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend + ZoomSmooth 0 (= the power of haste) native offline (30 Oct, `docs/native_bugs.md`; Spiral,
+  ZoomSmooth 1, Vision unused in retail). Left: the moon halo, retry `-NativeLate`, a GS-only haste save to judge ZoomSmooth.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -61,7 +61,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ground truth. Render-gate reference saves must be GS-only.
 - **Next PC session (ask about the TV first), in order:**
   1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch, glow truncation, MotionSmooth hook +
-     `AFTR` trailer are new there; /ponytail-review the MotionSmooth commit first).
+     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer are new there; /ponytail-review the MotionSmooth and ZoomSmooth commits first).
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
@@ -69,8 +69,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed), in order:**
-  1. Native ZoomSmooth 0 (FUN_004AD900, CAfterEffect +0x120 bit 7, param +0x18) from the disassembly, as MotionSmooth;
-     test offline by forcing the flag in `pop_state_frame` until the user has a GS-only save while the power of haste is active (late game).
+  1. Score ZoomSmooth 0 once the user has a GS-only save while the power of haste runs (late game); otherwise the moon
+     halo from the GS trace (PC step 4).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".

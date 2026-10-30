@@ -147,6 +147,7 @@ namespace pop_native
         float hazeFade = 0.0f;   // +0x144
         bool motionSmooth = false; // CAfterEffect::MotionSmooth(dx, dy), pixels of the 640-wide frame
         int motionDx = 0, motionDy = 0;
+        float zoomSmooth = 0.0f; // ZoomSmooth 0 strength (CAfterEffect +0x18; 0 off): a zoom blur before the glow
         int fixBlend = 0;          // FixBlend's FIX (0 off, 128 = all previous frame): the last presented frame over this one
     };
 

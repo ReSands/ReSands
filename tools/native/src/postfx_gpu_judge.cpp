@@ -11,7 +11,7 @@
 //   flags bit 0 = textured, bit 1 = blend 0x44 (else copy). One invocation per destination pixel,
 //   local size 8x8, dispatched over the whole destination. The host runs AE_ProcessSmartBlur's 11
 //   blits with it (self-reads get a snapshot copy as src), at scale 1 and 2; then MotionSmooth's blits (flags bit 2 =
-//   add, Cs + Cd) and FixBlend's (the frame flipped as the previous frame).
+//   add, Cs + Cd), ZoomSmooth 0's and FixBlend's (the frame flipped as the previous frame).
 // diffusion: ColorDiffusion's four kernels on float RGBA planes (vec4 arrays, 0..255). Bindings:
 //   0 = src, 1 = dst, 2 = aux. Push: { int op; int sw; int sh; int dw; int dh; int strength; float k; }
 //   op 0 RESAMPLE dst(dw x dh) = bilinear(src(sw x sh)) at ((x+0.5)*sw/dw, (y+0.5)*sh/dh)
@@ -308,7 +308,8 @@ int main(int argc, char **argv)
             struct Motion
             {
                 int dx, dy, fix;
-            } ms[] = {{37, -5, 0}, {-300, 140, 66}, {6, 2, 128}};
+                float zoom;
+            } ms[] = {{37, -5, 0, 0}, {-300, 140, 66, 0}, {6, 2, 128, 0}, {0, 0, 0, 0.37f}, {0, 0, 0, 1.0f}};
             for (const Motion &c : ms)
             {
                 pop_postfx::Surface sf, st, sp;
@@ -318,13 +319,14 @@ int main(int argc, char **argv)
                 sp.rgba.resize(frame.size());
                 for (int y = 0; y < h; ++y)
                     std::memcpy(&sp.rgba[size_t(y) * w * 4], &frame[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
-                std::vector<pop_postfx::Blit> bl = pop_postfx::motionSmoothBlits(c.dx, c.dy, w, h);
+                std::vector<pop_postfx::Blit> bl = c.zoom > 0 ? pop_postfx::zoomSmoothBlits(c.zoom, w, h) : pop_postfx::motionSmoothBlits(c.dx, c.dy, w, h);
                 if (c.fix)
                     bl.push_back(pop_postfx::fixBlendBlit(c.fix, w, h));
                 std::vector<uint8_t> gpuIn[3] = {sf.rgba, std::vector<uint8_t>(frame.size(), 0), sp.rgba};
                 pop_postfx::runBlits(bl, sf, st, &sp);
                 char what[256];
-                std::snprintf(what, sizeof what, "%s MotionSmooth %d %d (%zu blits) FixBlend %d", name, c.dx, c.dy, bl.size(), c.fix);
+                std::snprintf(what, sizeof what, "%s MotionSmooth %d %d ZoomSmooth %.2f (%zu blits) FixBlend %d", name, c.dx, c.dy,
+                              double(c.zoom), bl.size(), c.fix);
                 ++cases;
                 int b3[3];
                 for (int k = 0; k < 3; ++k)

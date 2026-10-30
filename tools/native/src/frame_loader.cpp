@@ -262,6 +262,14 @@ namespace pop_native
                                 int(extras.after[1]), int(extras.after[2]), (extras.after[0] >> 1) & 1, extras.after[3]);
                 more = bool(f.read(tag, 4));
             }
+            extras.zoom = 0.0f;
+            if (more && std::memcmp(tag, "ZOOM", 4) == 0) // ZoomSmooth 0
+            {
+                f.read(reinterpret_cast<char *>(&extras.zoom), 4);
+                if (verbose && extras.zoom > 0.0f)
+                    std::printf("after effects: ZoomSmooth 0 strength %.3f\n", double(extras.zoom));
+                more = bool(f.read(tag, 4));
+            }
             // live frames: the game's own GS pictures latched at the next frame boundaries
             // (POP_NATIVE_WINDOW_GS=<d>); the first is shown with T, all are scored on --live-shots
             extras.gsImages.clear();

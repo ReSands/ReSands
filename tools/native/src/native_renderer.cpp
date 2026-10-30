@@ -1131,6 +1131,26 @@ namespace pop_native
             vkCmdCopyImageToBuffer(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, postFrame.buffer, 1, &region);
             memoryBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            struct SpritePush
+            {
+                float xy[4], uv[4];
+                int32_t size[4];
+                uint32_t colour, flags;
+            };
+            const uint32_t scale = std::max(1u, w / 640);
+            // full-frame blits (pop_postfx::Blit): surfaces frame, temp (postSnap), previous frame
+            auto runBlits = [&](const std::vector<pop_postfx::Blit> &blits) {
+                for (const pop_postfx::Blit &b : blits)
+                {
+                    const VkBuffer surf[3] = {postFrame.buffer, postSnap.buffer, postPrev.buffer};
+                    SpritePush p{{b.x0, b.y0, b.x1, b.y1}, {b.u0, b.v0, b.u1, b.v1}, {int32_t(w), int32_t(h), int32_t(w), int32_t(h)}, b.colour,
+                                 (b.src >= 0 ? 1u : 0u) | (b.blend == pop_postfx::Blend::Lerp44 ? 2u : 0u) | (b.blend == pop_postfx::Blend::Add ? 4u : 0u)};
+                    dispatchPost(cb, postSprite, b.src >= 0 ? surf[b.src] : postDummy.buffer, surf[b.dst], postDummy.buffer, &p, sizeof p, w, h);
+                }
+            };
+            // ZoomSmooth 0 runs before the glow in the game's dispatcher
+            if (post.zoomSmooth > 0.0f)
+                runBlits(pop_postfx::zoomSmoothBlits(post.zoomSmooth, int(w), int(h), int(scale)));
             if (post.glow && post.levels >= 2 && w >= 4 && h >= 4)
             {
                 struct ConvPush
@@ -1184,26 +1204,13 @@ namespace pop_native
                 cvt.op = 1;
                 dispatchPost(cb, postConvert, postFrame.buffer, postFull.buffer, postAlpha.buffer, &cvt, sizeof cvt, w, h);
             }
-            struct SpritePush
-            {
-                float xy[4], uv[4];
-                int32_t size[4];
-                uint32_t colour, flags;
-            };
-            const uint32_t scale = std::max(1u, w / 640);
-            // MotionSmooth, then FixBlend (the previous frame over this one): full-frame blits, the temp in postSnap
+            // MotionSmooth, then FixBlend (the previous frame over this one)
             std::vector<pop_postfx::Blit> blits;
             if (post.motionSmooth)
                 blits = pop_postfx::motionSmoothBlits(post.motionDx, post.motionDy, int(w), int(h), int(scale));
             if (post.fixBlend > 0 && postPrevValid)
                 blits.push_back(pop_postfx::fixBlendBlit(post.fixBlend, int(w), int(h)));
-            for (const pop_postfx::Blit &b : blits)
-            {
-                const VkBuffer surf[3] = {postFrame.buffer, postSnap.buffer, postPrev.buffer};
-                SpritePush p{{b.x0, b.y0, b.x1, b.y1}, {b.u0, b.v0, b.u1, b.v1}, {int32_t(w), int32_t(h), int32_t(w), int32_t(h)}, b.colour,
-                             (b.src >= 0 ? 1u : 0u) | (b.blend == pop_postfx::Blend::Lerp44 ? 2u : 0u) | (b.blend == pop_postfx::Blend::Add ? 4u : 0u)};
-                dispatchPost(cb, postSprite, b.src >= 0 ? surf[b.src] : postDummy.buffer, surf[b.dst], postDummy.buffer, &p, sizeof p, w, h);
-            }
+            runBlits(blits);
             if (post.haze)
             {
                 const uint32_t ww = 448 * scale, wh = 288 * scale;
@@ -1924,7 +1931,7 @@ namespace pop_native
         const bool overlay = m->overlayOn && m->overlay.image;
         if (!overlay)
             m->recordScene(cb, m->targetFb, m->targetColour.image, internalWidth, internalHeight, clip, draws);
-        if (!overlay && (m->post.glow || m->post.haze || m->post.motionSmooth || m->post.fixBlend > 0))
+        if (!overlay && (m->post.glow || m->post.haze || m->post.motionSmooth || m->post.fixBlend > 0 || m->post.zoomSmooth > 0.0f))
         {
             if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
                 return false;

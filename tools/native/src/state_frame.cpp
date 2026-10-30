@@ -344,6 +344,21 @@ namespace
         // +0x98, +0x9C, +0x90, +0x88, +0x8C, +0xA0 in a1..t3, +0xA4 on the stack); AE_ProcessSmartBlur
         // (haze) when bit 7 is set, reading the object itself
         constexpr uint32_t ae = 0x006DF170u;
+        // ZoomSmooth 0 (0x4AD900: this, mode 0, f12 = +0x18) when +0x120 bit 7 is set, first in the pass;
+        // POP_STATE_ZOOMSMOOTH=<strength> forces it (no save has the power of haste running yet)
+        if (const char *z = std::getenv("POP_STATE_ZOOMSMOOTH"))
+        {
+            const float p = float(std::atof(z));
+            std::memcpy(getMemPtr(g_ram.data(), ae + 0x18), &p, 4);
+            *getMemPtr(g_ram.data(), ae + 0x120) |= 0x80;
+        }
+        if (*getConstMemPtr(g_ram.data(), ae + 0x120) & 0x80)
+        {
+            R5900Context z{};
+            setArgs(z, ae, 0);
+            std::memcpy(&z.f[12], getConstMemPtr(g_ram.data(), ae + 0x18), 4);
+            call(0x004AD900u, &z);
+        }
         const uint8_t flags = *getConstMemPtr(g_ram.data(), ae + 0x121);
         if (flags & 0x10) // PinchEffect (FUN_004AEA00), before the glow; its hook reads the object's fields
         {

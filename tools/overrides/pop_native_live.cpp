@@ -1744,6 +1744,16 @@ namespace pop_native_live
             }
             g_origMotion(rdram, ctx, runtime);
         }
+        // CAfterEffect::ZoomSmooth (retail 0x4AD900; before the glow): (this, mode, strength in f12); mode 0 (+0x120 bit 7,
+        // strength +0x18) is the power of haste's zoom blur, mode 1 has no caller. Recorded, the original still draws on the GS
+        PS2Runtime::RecompiledFunction g_origZoom = nullptr;
+        float g_zoom = 0.0f; // the ZOOM trailer: ZoomSmooth 0's strength (0 = did not run)
+        void zoomSmooth(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing && getRegU32(ctx, 5) == 0)
+                std::memcpy(&g_zoom, &ctx->f[12], sizeof g_zoom);
+            g_origZoom(rdram, ctx, runtime);
+        }
         void colorDiffusion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_frameCapturing || g_frameDone)
@@ -3941,7 +3951,7 @@ namespace pop_native_live
             // per draw: model[16], image index (-1: none), render state flags, AREF word, fog a, fog b,
             // FOGCOL, Z test, FBMSK, batch count, batches); then "GLOW" + ColorDiffusion's parameters
             // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame, "HAZE" (calls, colour, fade),
-            // "AFTR" (flags: bit 0 MotionSmooth, bit 1 FixBlend; dx, dy, FIX)
+            // "AFTR" (flags: bit 0 MotionSmooth, bit 1 FixBlend; dx, dy, FIX), "ZOOM" (ZoomSmooth 0's strength, float; 0 = off)
             // live: "PNF6" = PNF5 with each image as (texture key, w, h, RGBA), RGBA only the first time
             // the viewer gets that key on this connection (w = h = 0 afterwards: it keeps the texture)
             // world: "PNF7" = PNF6 with a 64-bit key before each batch; a batch the renderer keeps already is
@@ -4202,6 +4212,9 @@ namespace pop_native_live
             const uint32_t noAfter[4] = {};
             putBytes(f, "AFTR", size_t(1) * size_t(4));
             putBytes(f, worldOut ? noAfter : g_after, size_t(4) * size_t(4));
+            const float noZoom = 0.0f;
+            putBytes(f, "ZOOM", size_t(1) * size_t(4));
+            putBytes(f, worldOut ? &noZoom : &g_zoom, size_t(4) * size_t(1));
             if (worldOut)
             {
                 g_worldStats.bytes += f.size();
@@ -4387,6 +4400,7 @@ namespace pop_native_live
             g_glowCalls = 0;
             g_hazeCalls = 0;
             std::memset(g_after, 0, sizeof g_after);
+            g_zoom = 0.0f;
             g_haloAddsInWindow = 0;
         }
 
@@ -4921,6 +4935,9 @@ namespace pop_native_live
             g_origGlow = runtime.lookupFunction(0x004AE100u);
             if (g_origGlow)
                 runtime.replaceFunction(0x004AE100u, colorDiffusion);
+            g_origZoom = runtime.lookupFunction(0x004AD900u);
+            if (g_origZoom)
+                runtime.replaceFunction(0x004AD900u, zoomSmooth);
             g_origMotion = runtime.lookupFunction(0x004ADD80u);
             if (g_origMotion)
                 runtime.replaceFunction(0x004ADD80u, motionSmooth);

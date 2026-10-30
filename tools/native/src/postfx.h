@@ -300,6 +300,28 @@ namespace pop_postfx
             b.push_back(fullBlit(0, 1, 0, 0, w, h, 0x80808080u, Blend::Copy));
         return b;
     }
+    // CAfterEffect::ZoomSmooth(mode 0, p) (retail 0x4AD900, +0x120 bit 7, p = +0x18; before the glow): a zoom blur. s = p / 8,
+    // four passes frame -> temp -> frame -> temp -> frame, each: the source at half (ALPHA 0x29), plus the source's UV rect
+    // [s, 1 - s] (texels truncated) stretched over the whole frame at half (ALPHA 0x68 FIX 0x80: Cs + Cd); s halves per
+    // pass. Mode 1 (a rotation blur, +0x121 bit 0) has no caller in retail. w, h = frame size at `scale` x 640.
+    inline std::vector<Blit> zoomSmoothBlits(float p, int w, int h, int scale = 1)
+    {
+        std::vector<Blit> b;
+        const int nw = w / scale, nh = h / scale;
+        float s = p * 0.25f / 2.0f;
+        for (int i = 0; i < 4; ++i, s *= 0.5f)
+        {
+            const int src = i & 1 ? 1 : 0, dst = 1 - src;
+            b.push_back(fullBlit(dst, src, 0, 0, w, h, 0x40404040u, Blend::Copy));
+            Blit z = fullBlit(dst, src, 0, 0, w, h, 0x40404040u, Blend::Add);
+            z.u0 = float(int(nw * s) * scale) + 0.5f;
+            z.v0 = float(int(nh * s) * scale) + 0.5f;
+            z.u1 = float(int(nw * (1.0f - s)) * scale) + 0.5f;
+            z.v1 = float(int(nh * (1.0f - s)) * scale) + 0.5f;
+            b.push_back(z);
+        }
+        return b;
+    }
     // FixBlend: the previous frame over this one, ALPHA 0x64 ((Cs - Cd) * FIX >> 7 + Cd), FIX = min(+0x20 * 128, 128); as
     // Lerp44 with FIX as the vertex alpha
     inline Blit fixBlendBlit(int fix, int w, int h)

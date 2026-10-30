@@ -511,6 +511,7 @@ int main(int argc, char **argv)
     bool hazeOn = false, noHaze = false; // SmartBlur ran in the captured frame (HAZE trailer); --nohaze skips it
     uint32_t after[4] = {}; // MotionSmooth / FixBlend (AFTR trailer); FixBlend offline needs --prev <png> (the previous frame)
     const char *prevPath = nullptr;
+    float zoom = 0.0f; // ZoomSmooth 0's strength (ZOOM trailer)
     for (int i = 4; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--nohaze"))
@@ -535,6 +536,7 @@ int main(int argc, char **argv)
         std::memcpy(glow, extras.glow, sizeof glow);
         std::memcpy(haze, extras.haze, sizeof haze);
         std::memcpy(after, extras.after, sizeof after);
+        zoom = extras.zoom;
         glowOn = extras.glowOn;
         hazeOn = extras.hazeOn;
         liveGsImages = std::move(extras.gsImages);
@@ -632,6 +634,7 @@ int main(int argc, char **argv)
             pe.motionDx = int(after[1]);
             pe.motionDy = int(after[2]);
             pe.fixBlend = after[0] & 2 ? int(after[3]) : 0;
+            pe.zoomSmooth = zoom;
             r.setPostEffects(pe);
         }
         if (livePort)
@@ -713,6 +716,7 @@ int main(int argc, char **argv)
                     pe.motionDx = int(after[1]);
                     pe.motionDy = int(after[2]);
                     pe.fixBlend = livePost && (after[0] & 2) ? int(after[3]) : 0;
+                    pe.zoomSmooth = livePost ? zoom : 0.0f;
                     r.setPostEffects(pe);
                     glowOn = hazeOn = false; // the next frame's trailer says again
                 }
@@ -910,6 +914,15 @@ int main(int argc, char **argv)
         for (size_t i = 0; i < size_t(width) * height; ++i)
             grey[3 * i] = grey[3 * i + 1] = grey[3 * i + 2] = rgba[4 * i + 3];
         stbi_write_png(alphaOut, int(width), int(height), 3, grey.data(), int(width * 3));
+    }
+    if (zoom > 0.0f) // ZoomSmooth 0, before the glow
+    {
+        pop_postfx::Surface frame, temp;
+        frame.w = int(width);
+        frame.h = int(height);
+        frame.rgba = std::move(rgba);
+        pop_postfx::runBlits(pop_postfx::zoomSmoothBlits(zoom, frame.w, frame.h, std::max(1, frame.w / 640)), frame, temp);
+        rgba = std::move(frame.rgba);
     }
     if (glowOn && !noGlow)
         pop_postfx::colorDiffusion(rgba, int(width), int(height), int(glow[0]), int(glow[1]), glow[2] != 0, glow[3] != 0, int(glow[4]));
