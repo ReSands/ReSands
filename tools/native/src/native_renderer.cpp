@@ -637,14 +637,14 @@ namespace pop_native
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
                     // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels), bit 4 keep the
                     // failures instead (the failure pass keeps exactly the pixels the test rejects), bit 5 fog as vertex alpha
-                    // (bit 6 no depth write, bit 7 the water's refraction read, bit 8 a halo's visibility: below)
+                    // (bit 6 no depth write, bit 7 the water's refraction read, bit 8 a halo's visibility: below, bit 9 AddAlpha: Cs * As)
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
                     const bool less = mat && mat->alphaTestLess;
                     // bit 6: no depth write (a decal over its wall): moved nearer by the decal bias (mesh.vert, N16 moss)
                     const bool noDepthWrite = !(pipelineKey(afail ? &failMat : mat) & (1u << 6));
                     push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0) | (mat && mat->fogAlpha ? 32 : 0) |
                                            (noDepthWrite ? 64 : 0) | (mat && mat->refraction ? 128 : 0) |
-                                           (mat && mat->haloAlpha ? 256 : 0));
+                                           (mat && mat->haloAlpha ? 256 : 0) | (mode == AlphaMode::AddAlpha && !mat->destAlpha ? 512 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)
@@ -930,7 +930,10 @@ namespace pop_native
                 case AlphaMode::Blend: ba.srcColorBlendFactor = c; ba.dstColorBlendFactor = c1; break;
                 case AlphaMode::InvBlend: ba.srcColorBlendFactor = c1; ba.dstColorBlendFactor = c; break;
                 case AlphaMode::Add: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
-                case AlphaMode::AddAlpha: ba.srcColorBlendFactor = c; ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE; break;
+                case AlphaMode::AddAlpha: // As from the source: the shader writes Cs * As (bit 512), unclamped above 0x80
+                    ba.srcColorBlendFactor = dest ? c : VK_BLEND_FACTOR_ONE;
+                    ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+                    break;
                 case AlphaMode::AddDest: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ONE; ba.dstColorBlendFactor = c; break;
                 case AlphaMode::Multiply: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO; ba.dstColorBlendFactor = c; break;
                 case AlphaMode::InvMultiply: ba.srcColorBlendFactor = VK_BLEND_FACTOR_ZERO; ba.dstColorBlendFactor = c1; break;

@@ -61,7 +61,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ground truth. Render-gate reference saves must be GS-only.
 - **Next PC session (ask about the TV first), in order:**
   1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch, glow truncation, MotionSmooth hook +
-     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer, glow convolution edges are new there; reviewed 30 Oct, fixes f9120b9).
+     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer, glow convolution edges, unclamped vertex alpha in blends (`mesh.frag`) are new there; reviewed 30 Oct, fixes f9120b9).
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
@@ -69,8 +69,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed):** 30 Oct list done (review fixed; rewind edges = glow convolution
-  taps, fixed; missing shadows / mist / 190506 / 195158 = offline replay limits, `docs/native_bugs.md`). Waiting on the
-  user: As > 0x80 blending proposal (census in `docs/renderer_audit.md` item 9). Open: thin strip at the right/bottom
+  taps, fixed; missing shadows / mist / 190506 / 195158 = offline replay limits, `docs/native_bugs.md`). As > 0x80 blending
+  done (`docs/renderer_audit.md` item 9; the dagger glow stays too bright, open). Open: thin strip at the right/bottom
   edges of the rewind glow (GS trace of the level rectangles).
   Waiting on the PC / user: moon halo (PC step 4 GS trace), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE

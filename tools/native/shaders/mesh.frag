@@ -68,7 +68,7 @@ void main()
     vec4 t = (flags & 128) != 0 ? refraction(vUv) : texture(baseTex, vUv);
     // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
     // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows.
-    float a = t.a * min(vColour.a, 1.0);
+    float a = t.a * vColour.a;
     // params.x bits: 1 alpha test (GREATER cutoff; LESS with bit 4; bit 16 keeps the failures instead),
     // 2 blended, 8 legacy glTF blend, 32 fog as vertex alpha
     if ((flags & 1) != 0) {
@@ -97,5 +97,9 @@ void main()
         a *= vFog * 255.0 / 128.0;
     else
         base = mix(pc.fogColour.rgb, base, vFog);
+    // bit 512: AddAlpha (Cs * As + Cd, blend ONE, ONE): Cs * As here with the GS's As up to 0xFF (~2.0), which a blend
+    // factor would clamp to 1.0 (docs/renderer_audit.md item 9)
+    if ((flags & 512) != 0)
+        base *= min(a, 255.0 / 128.0);
     outColour = vec4(base, a);
 }

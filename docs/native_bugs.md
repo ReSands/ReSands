@@ -32,7 +32,7 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    unchanged (the "P1 changes alpha" idea was wrong: the save frames used as reference hold native pixels); its
    lightmap mode writes a distance fade as alpha that native lacks (baths saves). GS-only reference saves made the same night
    (`game/analysis/gsref1027/`): the instanced colour clamp (audit item 2) and alpha clamp are dropped, closer to the
-   GS on all 5 saves. Lightmap distance fade done too (fog zone + 0x10 as alpha). Open: blending with As > 0x80 (decide at 0.13). The plan as it was: census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
+   GS on all 5 saves. Lightmap distance fade done too (fog zone + 0x10 as alpha). Blending with As > 0x80: done 30 Oct (`docs/renderer_audit.md` item 9; open: the dagger glow too bright). The plan as it was: census from the saves of palette / vertex alpha > 0x80 reaching native draws, and of DTHE / MXL / PABE / FBA in one
    GS trace per area type (audit 9, 10): decides the fidelity work before 0.2. Measurement only; fix nothing in it
    without the user. Three questions in all:
    a. **Alpha > 0x80** (audit 9): over the 51 saves in `game/analysis/saves*/` (all at once: symlink the

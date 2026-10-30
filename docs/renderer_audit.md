@@ -110,6 +110,16 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    nearly all instanced +0x88); **1 Blend 1,336 of 18,822** (132 saves, all instanced +0x88); 4 Add 2,806 (alpha
    unused: harmless); 0 opaque 604 (alpha test only, already the GS formula); 2, 3: none. Texels > 0x80: none.
    So AddAlpha is the bulk and has an exact fix (Cs x As in the shader, blend ONE, ONE); Blend is the hard third.
+   **Done 30 Oct (user: fix AddAlpha, measure Blend).** Measured on the 11 GS-only saves (a shader marker painting Blend
+   pixels with At x Av > 1): **no Blend pixel has As > 0x80**: the vertex alpha exceeds 0x80 but the texel alpha brings
+   the product back down. The real error was `mesh.frag` clamping Av to 1.0 *before* multiplying by At (the GS
+   multiplies, then clamps). Fixed for every blend: `a = t.a * vColour.a`; AddAlpha also gets Cs x min(As, 0xFF/0x80) in
+   the shader with blend ONE, ONE (bit 512; As > 0x80 does occur there: 7 of 11 saves change without it). So no
+   dual-source / programmable blending needed for these saves. Result against the GS-only frames: changed pixels
+   0.5-1% of a frame per save, net error slightly lower (134636, 145139, 184926, 162246, 115853 closer; 115837,
+   125052, 202314, 155110 further); gate within +-0.02. The losses are the Prince's dagger glow (115837), already
+   brighter than the GS before the change: something else in that draw is off (its colour or alpha upstream), not the
+   blend. Open: that dagger glow.
 
 10. **GS features not modelled or checked** (low-medium): DTHE, mipmaps (TEX1 MXL; sampler `maxLod = 0`), PABE, FBA,
    region clamp modes. One `PS2X_GS_TRACE` per area type through `gsvram.py`: which values the game uses.
