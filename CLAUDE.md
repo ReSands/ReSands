@@ -59,17 +59,13 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next PC session (ask about the TV first), in order:**
-  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch, glow truncation, MotionSmooth hook +
-     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer, glow convolution edges, unclamped vertex alpha in blends (`mesh.frag`) are new there; reviewed 30 Oct, fixes f9120b9; Cs saturation in `mesh.frag` (30 Oct, reviewed)).
-  2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
-  3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
-  4. Copy `game/jobs/gstrace1030.ps1` (git-ignored, not in the bundle) to the PC and run it: GS-only traces of 185807
-     (rewind glow levels for the ramp, L1 held) and 145139 (moon Z). Copy back `game\jobs\gstrace1030\` and the 27 Oct
-     `game\jobs\gscensus\` traces (115837 has the dagger glow's GS values).
-  5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget";
-     and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
-  6. Shut the PC down.
+- **PC session 30 Oct evening (done):** bundle + `-Fast` build; patches 43/44 boot check fine (640x448 shots, P5: no
+  interpreter hand-over); GS-only fountain save -> gate line `202926 vu1 6.67`; traces of 185807 and 145139 plus the 27 Oct
+  census traces copied to `game/jobs/gstrace1030/`, `game/jobs/gscensus/`. TV off: boots still 60 fps. **Found:** live
+  world mode never installed the halo / Pinch hooks (only the capture modes did); fixed 5804fc9. Live now: sun 162621 halos
+  1388 calls, native 0 (frame impure from `ref +0x2c`); sand 115853 pinch 3, native 0 (impure from `mesh +0x98`); fountain
+  ends at `gfx +0x88`. So halos / Pinch go native only once those frame-enders are native (next Mac task). Job `game/jobs/eve1030*.ps1`.
+- **Waiting on the user (PC):** a GS-only save while haste runs (ZoomSmooth 0); a fight-heavy session to close crash 1.
 - **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
   resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
   1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its
