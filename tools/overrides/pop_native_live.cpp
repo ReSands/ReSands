@@ -4864,7 +4864,12 @@ namespace pop_native_live
                          {0x004584C0u, particles, &g_origParticles},
                          {0x004B80C0u, shadowList, &g_origShadowList},
                          {0x004BDC80u, shadowZ, &g_origShadowZ},
-                         {kShadowRtt, shadowRtt, &g_origShadowRtt}};
+                         {kShadowRtt, shadowRtt, &g_origShadowRtt},
+#if POP_SPRITE_VU1
+                         {0x004AA240u, haloDisplay, &g_origHalo},
+                         {0x004AEA00u, pinchEffect, &g_origPinch},
+#endif
+                        };
             for (const auto &h : hooks)
                 if (!(*h.original = runtime.lookupFunction(h.address)))
                 {
