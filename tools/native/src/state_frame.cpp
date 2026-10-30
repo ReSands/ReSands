@@ -539,7 +539,7 @@ int main(int argc, char **argv)
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
     pop_native_live::install(runtime);
 #if POP_SPRITE_VU1
-    if (const char *e = std::getenv("POP_NATIVE_P5"); e && *e && *e != '0')
+    if (const char *e = std::getenv("POP_NATIVE_P5"); !e || *e != '0') // on by default, as live
     {
         findParticlePackets();
         pop_native_live::g_particlePackets = particlePackets;

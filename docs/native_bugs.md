@@ -410,8 +410,9 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
   Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
   X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
-  Open in water: the mist around feet / pillars is missing natively (likely GFX particles of +0x88, which
-  `pop_state_frame` lists but never draws; unproven).
+  Mist in water: **resolved offline (30 Oct)**: the mist is P5 GFX particles, which `pop_state_frame` only drew with
+  `POP_NATIVE_P5=1` (live has them on by default). Now on by default offline too (`=0` off): 162819 9.28 -> 4.31 (the haze
+  cloud is there), gate `vu1` lines 8.28 / 8.20 / 2.62. Live the +0x88 particles are on the GS unless `-NativeLate`.
 
 ## Light shafts: FUN_00469C00 is the HUD; the shafts are glow-mask meshes, already native (30 Oct, Mac, offline)
 
