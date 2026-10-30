@@ -42,34 +42,35 @@ for Xbox addresses and Hor+ hooks.
 ## Current status (30 Oct 2026; start here)
 
 Keep this short: finished work goes to the topic docs, replaced bullets to `docs/history.md` (last moved:
-"Moved from CLAUDE.md on 30 Oct 2026 (night)").
+"Moved from CLAUDE.md on 30 Oct 2026 (late night, 0.13 closed)").
 
-- **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
-  characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
-  Working on **0.13** (details: `docs/native_bugs.md` "Native Pinch" and "Flashes survey"): P5, P6 on by default
-  (user-checked); halos, Pinch (= the rewind's warp) and the rewind haze (= the unmasked glow, fixed by GS truncation
-  in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
-  (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
-  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend + ZoomSmooth 0 (= the power of haste) native offline (30 Oct, `docs/native_bugs.md`; Spiral,
-  ZoomSmooth 1, Vision unused in retail). Frame-enders fixed 30 Oct night (below); left: the user's in-motion check.
-  Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
-  parked list), `docs/renderer_audit.md`.
+- **Where we are: 0.13 closed (30 Oct night, user in-motion check passed).** Native renderer on by default in `play.ps1`
+  (static world, lit statics, characters, translucents, shadows, P5/P6/P9, and since 30 Oct night the late lists
+  +0x88/+0x98/+0xA8, halos, Pinch; `-NoNativeLate` sends the late part back to the GS). The native frame is "pure"
+  (no GS draw yet, so native draws keep the game's order) up to the 2D pass in nearly every frame: sun 162621, fountain
+  202926, sand 115853 all end only at the HUD (list +0xB8). User check (sun halo + torches, fountain column glow and
+  saving, dagger glow, rewind): all good. Last night's work: `docs/native_renderer.md` "Lists after the shadows" (30 Oct
+  night), the moon halo (offline-only artifact, closed) in "Native halos", dagger glow in `docs/renderer_audit.md` item 9.
+  Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, parked list), `docs/renderer_audit.md`.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **0.13 night 30 Oct (done; details `docs/native_renderer.md` "Lists after the shadows" 30 Oct night):** native
-  instanced lightmaps (4446928: the sun's `ref +0x2c` ender was an instanced wall with a +0x5C entry), +0x98 native
-  while pure with EraseAlphaBuffer skipped (108d60f), +0xA8 with Z / alpha writes (16ed183). Live (-NativeLate, 25 s):
-  sun 162621, fountain 202926, sand 115853 all pure to the HUD (list 0x18 +0xB8, 0.14); sun halos native 1084/1088;
-  fountain native vs GS shots close (`game/jobs/eve1030k.ps1`, shots on the PC `game\recomp-sotc\shots1030k`). Moon
-  (145139): the game makes no halo call at all, the offline moon halo was a stale-entry replay (closed). Dagger glow:
-  live ~8% brighter than the GS (offline gap was mostly the offline frame). Pinch: the sand save only has the rewind's
-  last 3 frames at load (impure), so no live test; the user's rewind will show it.
-- **Next (start here): the user's in-motion check** (plan step 5): `play.ps1 -Mode native -Save ...` for halos (sun
-  162621, torches, save point), the Pinch warp (rewind anywhere), light shafts / glow at the fountain (202926), the dagger
-  glow (115837); then the user decides whether `-NativeLate` becomes the default (closes 0.13). After that: the HUD
-  (list 0x18 +0xB8) ends purity in every frame, which is 0.14.
+- **Next: 0.14 (native HUD, menus, loading screens, movie display; full-screen fades too). Start here, nothing planned
+  yet: first job is a plan for the user.** Known facts to build on:
+  - **+0xB8 is the 2D pass:** PS2_After2D (0x4B4A00) -> FUN_004BBFC0 sets draw manager +0x28 = 1 and renders list +0xB8,
+    after the after-effects (glow, SmartBlur). The native renderer has **no layer after its post effects** (its picture
+    is injected at the 3D marker, the GS draws +0xB8 on top): that layer is the groundwork (`docs/native_bugs.md`
+    "Flashes survey").
+  - **HUD text and bars = FUN_00469C00 (list kind 0x18), the Jade STR text renderer:** per font page FUN_004B2000 sets
+    the state, then CNT + DIRECT + GIF tag (PRIM 0x5E sprite, textured, blended; ST RGBAQ XYZ2 ST XYZ2), screen
+    coordinates, Z 0. Fits the P5 pattern: run the original, read the DMA range it wrote, rewind (`docs/native_bugs.md`
+    "Light shafts"). `pop_state_frame` does not replay +0xB8 yet.
+  - **Fades = kind 11 entries in +0xB8** (FUN_004B4580 rectangles, table 0x6DF6E0): one blended screen quad each.
+  - Menus, loading screens (drawn once and left on screen: `docs/widescreen.md`), movie picture: not surveyed;
+    `docs/native_renderer.md` ~79 and ~623 have only one-liners. Survey other PS2 recomp projects first (`docs/ps2_projects.md`).
+  - Test saves: any save with the HUD (185602 shows life bar, sand tanks, tutorial text); fades 191358 (white-out),
+    192114 (half black). `POP_NATIVE_WORLD_WHY=1` prints `purity ended: list18 +0xb8` today, which should move on.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".
@@ -80,7 +81,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 0.1   Playable start to finish, emulated graphics + sound (crash 1 fixed; crash 2 watched)
 0.11  Native static world
 0.12  Native characters, translucents, shadows + particles
-0.13  Native effects: water (P6), sprites (P9), halos, light shafts, flashes
+0.13  Native effects: water (P6), sprites (P9), halos, light shafts, flashes (closed 30 Oct, user check)
 0.14  Native HUD, menus, loading screens, movie display
 0.2   Fully native graphics: GS off by default, judged frame by frame against the emulated GS
 0.3   Native sound (DARE/UbiSound, no IOP/SPU2) + native PS2 movie decoder (no IPU)

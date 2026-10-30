@@ -896,3 +896,32 @@ too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing t
   5. (PC + user) In-motion check: halos (sun 162621, torches, save point) and the Pinch warp (sand save), `play.ps1
      -Mode native -Save ...`; then the user decides whether `-NativeLate` becomes the default (closes 0.13).
   End of a session with the PC on: shut it down (`shutdown /s /t 5`).
+
+## Moved from CLAUDE.md on 30 Oct 2026 (late night, 0.13 closed)
+
+- **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
+  characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
+  Working on **0.13** (details: `docs/native_bugs.md` "Native Pinch" and "Flashes survey"): P5, P6 on by default
+  (user-checked); halos, Pinch (= the rewind's warp) and the rewind haze (= the unmasked glow, fixed by GS truncation
+  in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
+  (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
+  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend + ZoomSmooth 0 (= the power of haste) native offline (30 Oct, `docs/native_bugs.md`; Spiral,
+  ZoomSmooth 1, Vision unused in retail). Frame-enders fixed 30 Oct night (below); left: the user's in-motion check.
+  Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
+  parked list), `docs/renderer_audit.md`.
+- **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
+- **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
+  until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
+  ground truth. Render-gate reference saves must be GS-only.
+- **0.13 night 30 Oct (done; details `docs/native_renderer.md` "Lists after the shadows" 30 Oct night):** native
+  instanced lightmaps (4446928: the sun's `ref +0x2c` ender was an instanced wall with a +0x5C entry), +0x98 native
+  while pure with EraseAlphaBuffer skipped (108d60f), +0xA8 with Z / alpha writes (16ed183). Live (-NativeLate, 25 s):
+  sun 162621, fountain 202926, sand 115853 all pure to the HUD (list 0x18 +0xB8, 0.14); sun halos native 1084/1088;
+  fountain native vs GS shots close (`game/jobs/eve1030k.ps1`, shots on the PC `game\recomp-sotc\shots1030k`). Moon
+  (145139): the game makes no halo call at all, the offline moon halo was a stale-entry replay (closed). Dagger glow:
+  live ~8% brighter than the GS (offline gap was mostly the offline frame). Pinch: the sand save only has the rewind's
+  last 3 frames at load (impure), so no live test; the user's rewind will show it.
+- **Next (start here): the user's in-motion check** (plan step 5): `play.ps1 -Mode native -Save ...` for halos (sun
+  162621, torches, save point), the Pinch warp (rewind anywhere), light shafts / glow at the fountain (202926), the dagger
+  glow (115837); then the user decides whether `-NativeLate` becomes the default (closes 0.13). After that: the HUD
+  (list 0x18 +0xB8) ends purity in every frame, which is 0.14.
