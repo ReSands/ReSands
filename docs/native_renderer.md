@@ -1160,6 +1160,19 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - Stats: `[pop:world] late lists: ...` every 300 frames (frames pure at +0x88, ended within, calls native/GS,
   particles native, the five commonest causes). On by default in `play.ps1` (`-NoNativeLate`); in-game check pending.
 - Next: sprites (VU1 curve program), the two textures, then +0x98 natively (skip EraseAlphaBuffer when pure).
+- **30 Oct night: purity to the HUD.** (1) Instanced lightmaps native (4446928): a ref with a +0x5C entry used to be
+  refused (`g_worldLmRefs`), so instanced walls ended purity in +0x2C (sun 162621: ref 018639d0; the why-line was capped
+  at 20 and fired only at load, so last evening's log looked silent). Now `refDisplayRecord` draws pass 3 through
+  `lightmapRecord` (shared with elements; the ref's pass-3 packet is ref +0xC) over a native base; `pop_state_frame`
+  replays kind-10 lightmap entries. (2) +0x98 native while pure (108d60f): `worldStateOk` takes it with the late lists
+  (alpha only via render state 0x44; Z writes per flag 0x200), and EraseAlphaBuffer (0x4AF140; Display3DElements calls it
+  before +0x68 and +0x98, PS2_Clear too) is skipped from Display3DElements while pure: the injected picture already
+  holds the frame's final native alpha, which the GS clear would wipe; native alpha is 0 before +0x98 anyway. Its
+  ZBUF/TEST changes need no replacement (FUN_004B1D40 after it marks the render state for a full resend). (3) +0xA8
+  with Z / alpha writes native while pure (16ed183; the old "neither" rule existed only because +0x98 was on the GS).
+  Live (eve1030j, 25 s each, -NativeLate): sun pure at +0x88 1199/1200, halos native 1084/1088; fountain 202926
+  102,566 late calls native, 343 GS; sand 115853 42,546 / 277; all three now end at the HUD (list 0x18 +0xB8, 0.14).
+  Pinch at the sand save: 3 calls, still on the GS (why-line added, d5bf53c).
 
 ## Native sprites on the VU1 interpreter (24 Oct evening)
 
@@ -1275,4 +1288,8 @@ behind walls natively and on the GS alike). **Open: the moon.** The game adds no
 square, so on the GS the moon's core fails the Z test (light Z 5,610), while native Z there is the sky's ~1,465 and it
 passes. The saves cannot show the GS Z: the post effects overwrite Z memory for x < ~448, y < ~256 (the half-resolution
 buffer at FBP 280), which is where every moon save has its moon. Next: a GS trace (`PS2X_GS_TRACE`) of a moon frame, GS
-only, to read the Z under the core at the halo's test (needs the PC). This is also the save-point pop's halo (N10 notes).
+only, to read the Z under the core at the halo's test (needs the PC). This is also the save-point pop's halo (N10 notes). **30 Oct night: the GS draws no moon halo at all.** The GS-only trace
+`game/jobs/gstrace1030/20261025_145139.txt` (4 fields) has no halo draw (ALPHA 0x58 with FIX, printed `alpha=8000000058`,
+as the 184926 census trace shows for its halos) and no ZGEQUAL alpha-only test sprite; nor does the 27 Oct census trace
+of 145139. So the moon's native halo comes from `pop_state_frame` replaying a stale array entry (count 0 in the save),
+not from the halo code: offline-only. Live, the hook runs only on the game's own calls (live check: eve1030k).

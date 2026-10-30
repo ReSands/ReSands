@@ -42,7 +42,7 @@ for Xbox addresses and Hor+ hooks.
 ## Current status (30 Oct 2026; start here)
 
 Keep this short: finished work goes to the topic docs, replaced bullets to `docs/history.md` (last moved:
-"Moved from CLAUDE.md on 30 Oct 2026").
+"Moved from CLAUDE.md on 30 Oct 2026 (night)").
 
 - **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
@@ -51,44 +51,25 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
   moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend + ZoomSmooth 0 (= the power of haste) native offline (30 Oct, `docs/native_bugs.md`; Spiral,
-  ZoomSmooth 1, Vision unused in retail). Left: the moon halo, the frame-enders that keep halos / Pinch on the GS.
+  ZoomSmooth 1, Vision unused in retail). Frame-enders fixed 30 Oct night (below); left: the user's in-motion check.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **PC session 30 Oct evening (done):** bundle + `-Fast` build; patches 43/44 boot check fine (640x448 shots, P5: no
-  interpreter hand-over); GS-only fountain save -> gate line `202926 vu1 6.67`; traces of 185807 and 145139 plus the 27 Oct
-  census traces copied to `game/jobs/gstrace1030/`, `game/jobs/gscensus/`. TV off: boots still 60 fps. **Found:** live
-  world mode never installed the halo / Pinch hooks (only the capture modes did); fixed 5804fc9. Live now: sun 162621 halos
-  1388 calls, native 0 (frame impure from `ref +0x2c`); sand 115853 pinch 3, native 0 (impure from `mesh +0x98`); fountain
-  ends at `gfx +0x88`. Later that evening: fountain's `gfx +0x88` fixed (599c632: recoloured textures count as ready;
-  2c35f94: `textureKey` took free TEX_List entries as texture 0, so the save-point column drew blocky; user: column looks
-  good now). Frame-enders left: `mesh +0x98` (glow-mask meshes writing Z: fountain, sand) and the sun's `ref +0x2c`
-  (not lightmap / texture / decode: cause unknown). Jobs `game/jobs/eve1030*.ps1`.
-- **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
-  blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
-- **0.13 plan (agreed 30 Oct evening; start here).** Goal: halos + Pinch native in play, then the user's in-motion check.
-  The PC was left on (no TV needed for these boots; jobs as `game/jobs/eve1030d.ps1`: `-Fast` build + 25 s save boots
-  with `-NativeLate`, `POP_NATIVE_WORLD_WHY=1` prints `purity ended:` / `no texture` / `instanced lightmap` lines).
-  1. (PC, quick) Sun 162621's `ref +0x2c` ender: opaque sub flags 0x7, no lightmap / texture / decode line, so the
-     refusal is elsewhere in `refDisplayRecord` / `worldFinish` (`pop_native_live.cpp` ~1320-1410): add a why-line at
-     each remaining `worldOk = false` / `return false`, boot 162621 once, fix. Then `[pop:world] halos:` native > 0.
-  2. (Mac, main task) +0x98 native: the glow-mask meshes write Z (sand 115853 sub flags 0x1440F, w44 0xFF000000) and
-     end purity at the fountain and sand. While pure: let `worldStateOk` accept +0x98 (alpha-only material: fbmsk
-     0x00FFFFFF, Z write per flags 0x200), skip the GS EraseAlphaBuffer (0x4AF140, called before +0x98 in
-     Display3DElements; clears alpha with one sprite) and clear the native alpha instead; check the injected
-     picture carries alpha so the GS glow still reads the mask. Light shafts come with it. Notes:
-     `docs/native_renderer.md` "Lists after the shadows". Review before the PC; test: 115853 `pinch:` native > 0,
-     202926 ends later than `mesh +0x98`; then screenshots vs `-Mode gs` (as `eve1030e.ps1`).
-  3. (Mac) Moon halo too bright natively (145139): read the GS Z under the moon core at the halo test from
-     `game/jobs/gstrace1030/20261025_145139.txt` (`tools/gsvram.py`; `docs/native_renderer.md` "Native halos").
-  4. (Mac) Dagger glow brighter at its centre: the draw's RGBAQ / FOG / ALPHA in `game/jobs/gscensus/20261025_115837.txt`
-     (`docs/renderer_audit.md` item 9).
-  5. (PC + user) In-motion check: halos (sun 162621, torches, save point) and the Pinch warp (sand save), `play.ps1
-     -Mode native -Save ...`; then the user decides whether `-NativeLate` becomes the default (closes 0.13).
-  End of a session with the PC on: shut it down (`shutdown /s /t 5`).
+- **0.13 night 30 Oct (done; details `docs/native_renderer.md` "Lists after the shadows" 30 Oct night):** native
+  instanced lightmaps (4446928: the sun's `ref +0x2c` ender was an instanced wall with a +0x5C entry), +0x98 native
+  while pure with EraseAlphaBuffer skipped (108d60f), +0xA8 with Z / alpha writes (16ed183). Live (-NativeLate, 25 s):
+  sun 162621, fountain 202926, sand 115853 all pure to the HUD (list 0x18 +0xB8, 0.14); sun halos native 1084/1088;
+  fountain native vs GS shots close (`game/jobs/eve1030k.ps1`, shots on the PC `game\recomp-sotc\shots1030k`). Moon
+  (145139): the game makes no halo call at all, the offline moon halo was a stale-entry replay (closed). Dagger glow:
+  live ~8% brighter than the GS (offline gap was mostly the offline frame). Pinch: the sand save only has the rewind's
+  last 3 frames at load (impure), so no live test; the user's rewind will show it.
+- **Next (start here): the user's in-motion check** (plan step 5): `play.ps1 -Mode native -Save ...` for halos (sun
+  162621, torches, save point), the Pinch warp (rewind anywhere), light shafts / glow at the fountain (202926), the dagger
+  glow (115837); then the user decides whether `-NativeLate` becomes the default (closes 0.13). After that: the HUD
+  (list 0x18 +0xB8) ends purity in every frame, which is 0.14.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".

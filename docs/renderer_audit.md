@@ -136,6 +136,11 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    (84 / 116 / 124 / 0 in four saves); native = the chain in 202314, 115853, 155110; in 115837 the chain is the frame
    before the replayed lists. Next: the 27 Oct GS trace of this save (PC `game\jobs\gscensus\20261025_115837.txt`)
    has the draw's RGBAQ / FOG / ALPHA for the remaining brightness.
+   **30 Oct night:** the trace's glow triangles (ALPHA 0x48, FGE, PSMT8 32x32, test GEQUAL) carry the same vertex colours
+   (edges 3143A9, centre 98A4DE) with **Av 0x6C** (animated; save 0x70, native 116 = 0x74): no input that explains the
+   offline gap. Live shots at the same field (eve1030k, field 19725 / 19785, Prince blocking in place; the enemies
+   diverge) put the gap at ~8%: brightest 20 pixels around the dagger native 171 148 119 vs GS 159 133 110 (offline it
+   was 159 vs 118, so most of that was the offline frame). Left to the in-motion check.
    Debug switches added to `pop_native_view`: `POP_VIEW_LIST` now prints each material and each draw's fog,
    `POP_VIEW_VERTS=<draw>` a draw's triangles and vertices.
 

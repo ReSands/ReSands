@@ -862,3 +862,37 @@ Reasons for the 22 Oct decision (trimmed from CLAUDE.md's "Goal and approach" on
 renderer is x86 code tied to the PC engine's structures (a second recomp plus a state translation); OpenJade is a
 closed, unlicensed engine reimplementation (the user tried it: ugly console button icons, WASD prompts hard-coded,
 too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing to plug into a PS2 base).
+
+## Moved from CLAUDE.md on 30 Oct 2026 (night)
+
+- **PC session 30 Oct evening (done):** bundle + `-Fast` build; patches 43/44 boot check fine (640x448 shots, P5: no
+  interpreter hand-over); GS-only fountain save -> gate line `202926 vu1 6.67`; traces of 185807 and 145139 plus the 27 Oct
+  census traces copied to `game/jobs/gstrace1030/`, `game/jobs/gscensus/`. TV off: boots still 60 fps. **Found:** live
+  world mode never installed the halo / Pinch hooks (only the capture modes did); fixed 5804fc9. Live now: sun 162621 halos
+  1388 calls, native 0 (frame impure from `ref +0x2c`); sand 115853 pinch 3, native 0 (impure from `mesh +0x98`); fountain
+  ends at `gfx +0x88`. Later that evening: fountain's `gfx +0x88` fixed (599c632: recoloured textures count as ready;
+  2c35f94: `textureKey` took free TEX_List entries as texture 0, so the save-point column drew blocky; user: column looks
+  good now). Frame-enders left: `mesh +0x98` (glow-mask meshes writing Z: fountain, sand) and the sun's `ref +0x2c`
+  (not lightmap / texture / decode: cause unknown). Jobs `game/jobs/eve1030*.ps1`.
+- **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
+  blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
+- **0.13 plan (agreed 30 Oct evening; start here).** Goal: halos + Pinch native in play, then the user's in-motion check.
+  The PC was left on (no TV needed for these boots; jobs as `game/jobs/eve1030d.ps1`: `-Fast` build + 25 s save boots
+  with `-NativeLate`, `POP_NATIVE_WORLD_WHY=1` prints `purity ended:` / `no texture` / `instanced lightmap` lines).
+  1. (PC, quick) Sun 162621's `ref +0x2c` ender: opaque sub flags 0x7, no lightmap / texture / decode line, so the
+     refusal is elsewhere in `refDisplayRecord` / `worldFinish` (`pop_native_live.cpp` ~1320-1410): add a why-line at
+     each remaining `worldOk = false` / `return false`, boot 162621 once, fix. Then `[pop:world] halos:` native > 0.
+  2. (Mac, main task) +0x98 native: the glow-mask meshes write Z (sand 115853 sub flags 0x1440F, w44 0xFF000000) and
+     end purity at the fountain and sand. While pure: let `worldStateOk` accept +0x98 (alpha-only material: fbmsk
+     0x00FFFFFF, Z write per flags 0x200), skip the GS EraseAlphaBuffer (0x4AF140, called before +0x98 in
+     Display3DElements; clears alpha with one sprite) and clear the native alpha instead; check the injected
+     picture carries alpha so the GS glow still reads the mask. Light shafts come with it. Notes:
+     `docs/native_renderer.md` "Lists after the shadows". Review before the PC; test: 115853 `pinch:` native > 0,
+     202926 ends later than `mesh +0x98`; then screenshots vs `-Mode gs` (as `eve1030e.ps1`).
+  3. (Mac) Moon halo too bright natively (145139): read the GS Z under the moon core at the halo test from
+     `game/jobs/gstrace1030/20261025_145139.txt` (`tools/gsvram.py`; `docs/native_renderer.md` "Native halos").
+  4. (Mac) Dagger glow brighter at its centre: the draw's RGBAQ / FOG / ALPHA in `game/jobs/gscensus/20261025_115837.txt`
+     (`docs/renderer_audit.md` item 9).
+  5. (PC + user) In-motion check: halos (sun 162621, torches, save point) and the Pinch warp (sand save), `play.ps1
+     -Mode native -Save ...`; then the user decides whether `-NativeLate` becomes the default (closes 0.13).
+  End of a session with the PC on: shut it down (`shutdown /s /t 5`).
