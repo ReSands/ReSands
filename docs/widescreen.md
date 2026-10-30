@@ -60,7 +60,11 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
 - **Culling is the part God Hand did not need** (no culling code in Rearmed). PoP does: the pnach's "partial bb fix"
   shows objects popping at the edges. Leads: what `FUN_0024D040` tests; the world->clip matrix at graphics object
   +0x240 (`docs/native_renderer.md`); rePOP's Xbox Hor+ projection/culling hooks (same engine; `docs/reference.md`
-  "reSOT"); GT4Recomp's list of what breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors,
+  "reSOT"); what they do (`docs/RECOMP.md` there): divide the finished projection's x scale by the widening and leave
+  the camera FOV alone (Jade places in-camera 2D from the FOV); hook the cos/sin that `CAM_Engine_ComputePlans` uses
+  for the frustum's side planes so they get `atan(widen * tan(h))`; 2D (w == 1) kept 4:3 around the centre except
+  edge-touching quads (fades, post-fx); HUD side pieces shifted 80 px out at 16:9; some sets show the clear colour
+  in the new strips (only modelled for 4:3); GT4Recomp's list of what breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors,
   pixel-placed 2D).
 - **The native renderer changes step 1:** once the world is native (0.2), it can draw the wider frame directly
   instead of anamorphic 4:3, at the output resolution (1.3). Until then, with the emulated GS on, it is the same
