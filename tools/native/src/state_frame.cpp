@@ -15,7 +15,7 @@
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
 // from tools/packindex.py's index.
-// Not replayed yet: instanced lightmaps, halo lens-flare ghosts; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
+// Not replayed yet: halo lens-flare ghosts; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
 // Save-state layout: tools/popstate.py.
 
 #include "../../overrides/pop_native_live.cpp"
@@ -238,7 +238,10 @@ namespace
             if (kind == 9)
                 call(0x004C8A80u, ctx);
             else if (kind == 10)
-                ++g_lightmapRefs; // instanced lightmaps: not drawn yet
+            {
+                ++g_lightmapRefs;
+                call(0x004C7B40u, ctx);
+            }
         }
     }
 
@@ -718,7 +721,7 @@ int main(int argc, char **argv)
     call(0x004BC000u, &ctx);
     setArgs(ctx, 0x700000C0u);
     call(0x004BC000u, &ctx);
-    std::fprintf(stderr, "[state] lightmap draws %llu, from packets %llu, instanced lightmaps skipped %llu\n",
+    std::fprintf(stderr, "[state] lightmap draws %llu, from packets %llu, instanced lightmaps %llu\n",
                  (unsigned long long)pop_native_live::g_stats.drawsLightmap, (unsigned long long)pop_native_live::g_stats.drawsFromPacket,
                  (unsigned long long)g_lightmapRefs);
     std::fprintf(stderr, "[state] lit static passes native: lit %llu, env %llu\n", (unsigned long long)pop_native_live::g_worldStats.litNative,

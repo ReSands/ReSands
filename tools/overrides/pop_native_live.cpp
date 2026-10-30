@@ -253,7 +253,6 @@ namespace pop_native_live
         bool g_worldOpen = false; // draws may go native: the frame's first Display3DElements call
         uint32_t g_worldSeq = 0;
         std::unordered_set<uint64_t> g_worldBase; // (element << 16 | matrix index) drawn natively this frame
-        std::unordered_set<uint32_t> g_worldLmRefs; // instanced elements with a lightmap entry (not native yet)
         struct WorldStats
         {
             uint64_t frames = 0, skipped = 0, kept = 0, lightmaps = 0, noTexture = 0, notRecorded = 0, bytes = 0;
@@ -1313,48 +1312,76 @@ namespace pop_native_live
             return true;
         }
 
+        // Lightmap pass (CLMElementList::Render 0x4B7B80) of an element or an instanced ref (`owner`, its pass-3 packet
+        // word): FUN_004B2000(state, texture index, 0x30284, 0) leaves the lightmap's texture index at render state
+        // 0x70000008 and the flags at 0x70000000 (blend kind 3 with 0x80: GS ALPHA 0x46 = Cd * (1 - As), no depth
+        // write). The pass-3 packet uploads V3-16 lightmap UVs (ITOF15, 1/32768) and V3-32 positions, no colours: the
+        // lightmap's alpha darkens the scene.
+        void lightmapRecord(uint8_t *rdram, uint32_t owner, uint32_t packetWord, uint32_t index)
+        {
+            const uint32_t key = textureKey(rdram, guestAny(rdram, 0x70000008u) & 0xFFFFu);
+            g_frameLightmap[(uint64_t(owner) << 16) | index] = key;
+            const uint32_t packet = packetWord & ~0xFu;
+            auto &batches = g_fromPacket[(uint64_t(owner) << 8) | 3];
+            if (batches.empty() && packet)
+                livePacketBatches(rdram, packet, 32768.0, batches, true); // positions as the base pass's
+            if (batches.empty() || !key || !g_frameSeen.insert((uint64_t(owner) << 16) | index | (uint64_t(3) << 56)).second)
+                return;
+            DrawMaterial dm;
+            dm.seq = g_frameSeq++;
+            dm.textureKey = key;
+            dm.flags = guestAny(rdram, 0x70000000u);
+            dm.fbmsk = 0xFF000000u; // flags 0x284: colour written, alpha kept
+            // CLMElementList::Render selects fog zone (entry bits 14-17) + 0x10, whose constants are the
+            // base zone's x 127/255; P1 (mode 3) writes that F as the vertex alpha: the lightmap fades with distance
+            zoneFog(rdram, dm);
+            dm.list = g_currentList;
+            const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
+            std::array<float, 16> model;
+            for (int k = 0; k < 16; ++k)
+                model[k] = guestF(rdram, m + 4u * k);
+            g_frameRefs.emplace_back(batches, std::make_pair(model, dm));
+            ++g_stats.drawsLightmap;
+        }
+
         // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
         void refDisplayRecord(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
-            ++g_refPassDraws[getRegU32(ctx, 6) & 7];
-            // POP_NATIVE_WORLD: as CJMeshElement::Display; never instances with a lightmap entry
-            // (instanced lightmaps are not drawn natively yet)
+            const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
+            ++g_refPassDraws[pass & 7];
+            // POP_NATIVE_WORLD: as CJMeshElement::Display (pass 3: the instance's lightmap, only over a natively drawn base)
             bool worldOk = false;
             std::vector<WorldRecord> worldRecs;
             std::vector<uint64_t> worldBase;
             if (g_frameCapturing)
             {
-                const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
                 uint32_t ref = getRegU32(ctx, 4);
-                worldOk = g_world && pass != 3 && worldStateOk(rdram);
-                // passes 0, 1, 4 (main) and 2 (second layer); 3 is the lightmap pass
-                for (unsigned link = 0; ref && link < 4096 && (pass == 0 || pass == 1 || pass == 2 || pass == 4); ++link)
+                worldOk = g_world && (pass == 3 ? g_worldOpen && g_currentList == 0x5Cu : worldStateOk(rdram));
+                // passes 0, 1, 4 (main), 2 (second layer) and 3 (lightmap)
+                for (unsigned link = 0; ref && link < 4096 && pass <= 4; ++link)
                 {
                     // as the game: a ref without a packet for the pass draws nothing and ends the chain
                     // (CJMeshElementRef::Display's recursion is inside its packet test)
                     if (!(guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu))
                         break;
                     // pass 2 (the second layer) has its own key: sharing pass 0's lost one of the two (22 Oct)
-                    const uint64_t key = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram) |
-                                         (pass == 2 ? uint64_t(2) << 56 : 0);
+                    // pass 3: lightmapRecord's key
+                    const uint64_t key = pass == 3 ? (uint64_t(ref) << 16) | index | (uint64_t(3) << 56)
+                                                   : (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram) |
+                                                         (pass == 2 ? uint64_t(2) << 56 : 0);
                     const uint64_t base = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63);
                     const bool seen = worldOk && g_frameSeen.count(key);
                     const size_t world2 = worldOk ? worldCount2() : 0;
                     if (worldOk)
                     {
                         const uint32_t el = guestAny(rdram, ref + 0x20u);
-                        if ((el && guestAny(rdram, el + 0x48u)) || g_worldLmRefs.count(ref))
-                        {
-                            worldOk = false;
-                            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
-                            static int logged = 0;
-                            if (whyLog && logged < 20 && ++logged)
-                                std::fprintf(stderr, "[pop:world] instanced lightmap: ref %08x element %08x (+0x48 %08x, list entry %d) list +0x%x\n", ref,
-                                             el, el ? guestAny(rdram, el + 0x48u) : 0u, int(g_worldLmRefs.count(ref)), g_currentList);
-                        }
+                        if (el && guestAny(rdram, el + 0x48u))
+                            worldOk = false; // a bone palette (skinned instance)
                     }
-                    if (g_frameSeen.insert(key).second)
+                    if (pass == 3)
+                        lightmapRecord(rdram, ref, guestAny(rdram, ref + 12), index);
+                    else if (g_frameSeen.insert(key).second)
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
                         const uint32_t el = guestAny(rdram, ref + 0x20u);
@@ -1393,9 +1420,11 @@ namespace pop_native_live
                     }
                     if (worldOk)
                     {
-                        if (worldCount2() > world2)
+                        if (pass == 3 && !g_worldBase.count(base))
+                            worldOk = false; // its base was drawn by the GS
+                        else if (worldCount2() > world2)
                             worldRecs.push_back({2, world2});
-                        else if (!(seen && g_worldBase.count(base)))
+                        else if (!(seen && (pass == 3 || g_worldBase.count(base))))
                         {
                             worldOk = false;
                             ++g_worldStats.notRecorded;
@@ -1412,8 +1441,10 @@ namespace pop_native_live
                     ref = guestAny(rdram, ref + 0x1C);
                 }
             }
-            if (worldOk && worldFinish(worldRecs, worldBase))
+            if (worldOk && worldFinish(worldRecs, pass == 3 ? std::vector<uint64_t>{} : worldBase))
             {
+                if (pass == 3)
+                    ++g_worldStats.lightmaps;
                 if (g_currentList == 0x88u || g_currentList == 0xA8u)
                     ++g_lateStats.native;
                 return;
@@ -1425,7 +1456,7 @@ namespace pop_native_live
                 static int logged = 0;
                 if (logged < 20 && ++logged)
                     std::fprintf(stderr, "[pop:world] ref on the GS: ref %08x pass %u list +0x%x capturing %d stateOk %d\n", getRegU32(ctx, 4),
-                                 getRegU32(ctx, 6) & 0xFF, g_currentList, int(g_frameCapturing), int(worldStateOk(rdram)));
+                                 pass, g_currentList, int(g_frameCapturing), int(worldStateOk(rdram)));
             }
             worldOnGs(rdram, "ref");
             g_origRefDisplay(rdram, ctx, runtime);
@@ -3259,37 +3290,7 @@ namespace pop_native_live
                     }
                 }
                 if (pass == 3 && g_frameCapturing)
-                {
-                    // Lightmap pass (CLMElementList::Render 0x4B7B80): FUN_004B2000(state, texture index,
-                    // 0x30284, 0) leaves the lightmap's texture index at render state 0x70000008 and the
-                    // flags at 0x70000000 (blend kind 3 with 0x80: GS ALPHA 0x46 = Cd * (1 - As), no
-                    // depth write). The pass-3 packet (element +0x2C) uploads V3-16 lightmap UVs (ITOF15,
-                    // 1/32768) and V3-32 positions, no colours: the lightmap's alpha darkens the scene.
-                    const uint32_t key = textureKey(rdram, guestAny(rdram, 0x70000008u) & 0xFFFFu);
-                    g_frameLightmap[(uint64_t(element) << 16) | index] = key;
-                    const uint32_t packet = guest32(rdram, element + 0x2C) & ~0xFu;
-                    auto &batches = g_fromPacket[(uint64_t(element) << 8) | 3];
-                    if (batches.empty() && packet)
-                        livePacketBatches(rdram, packet, 32768.0, batches, true); // positions as the base pass's
-                    if (!batches.empty() && key && g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(3) << 56)).second)
-                    {
-                        DrawMaterial dm;
-                        dm.seq = g_frameSeq++;
-                        dm.textureKey = key;
-                        dm.flags = guestAny(rdram, 0x70000000u);
-                        dm.fbmsk = 0xFF000000u; // flags 0x284: colour written, alpha kept
-                        // CLMElementList::Render selects fog zone (entry bits 14-17) + 0x10, whose constants are the
-                        // base zone's x 127/255; P1 (mode 3) writes that F as the vertex alpha: the lightmap fades with distance
-                        zoneFog(rdram, dm);
-                        dm.list = g_currentList;
-                        const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
-                        std::array<float, 16> model;
-                        for (int k = 0; k < 16; ++k)
-                            model[k] = guestF(rdram, m + 4u * k);
-                        g_frameRefs.emplace_back(batches, std::make_pair(model, dm));
-                        ++g_stats.drawsLightmap;
-                    }
-                }
+                    lightmapRecord(rdram, element, guest32(rdram, element + 0x2C), index);
                 else if (sk == g_skinned.end() && !guest32(rdram, element + 0x48) && litDriverPass(rdram, element, pass))
                 {
                     // a lit static pass (litDriverPass): litPose, drawn with the object's model matrix like the base pass
@@ -4479,13 +4480,6 @@ namespace pop_native_live
                 return;
             for (int k = 0; k < 16; ++k)
                 g_frameClip[k] = guestF(rdram, gs + 0x240u + 4u * k);
-            // instanced elements with a lightmap entry (CLMElementList at +0x5C: 8-byte entries, kind
-            // 10 in the low nibble of the second word): their lightmaps are drawn by the GS, so they are too
-            g_worldLmRefs.clear();
-            const uint32_t lm = g_drawManager + 0x5Cu, entries = guestAny(rdram, lm), count = guestAny(rdram, lm + 4);
-            for (uint32_t i = 0; i < count && i < 4096; ++i)
-                if ((guestAny(rdram, entries + 8 * i + 4) & 0xF) == 10)
-                    g_worldLmRefs.insert(guestAny(rdram, entries + 8 * i));
             // the marker: CNT tag (2 qw) with VIF FLUSHA (all paths idle, so nothing drawn before is
             // reordered after it) + DIRECT 2; GIF tag (NLOOP 1, EOP, PACKED, NREG 1, A+D); A+D data
             const uint32_t cursor = guestAny(rdram, gs + 0xECu);
