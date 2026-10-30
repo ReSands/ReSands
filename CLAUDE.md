@@ -61,25 +61,21 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ground truth. Render-gate reference saves must be GS-only.
 - **Next PC session (ask about the TV first), in order:**
   1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch, glow truncation, MotionSmooth hook +
-     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer are new there; /ponytail-review the MotionSmooth and ZoomSmooth commits first).
+     `AFTR` trailer, ZoomSmooth hook + `ZOOM` trailer, glow convolution edges are new there; reviewed 30 Oct, fixes f9120b9).
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
   5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget";
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
-- **Next Mac session (offline, no PC needed), in order:**
-  1. /ponytail-review the MotionSmooth (246915a) and ZoomSmooth (ab715cd) commits; fix findings (unblocks PC step 1).
-  2. Rewind saves (115853, 155110, 1029 185650/185807/185943): shadows under the characters missing natively; native
-     brighter at the frame edges (glow sampling at the borders?). `docs/native_bugs.md` "Rewind look resolved".
-  3. Not looked at: 1029 190506 (48.57) and 195158 (56.73), not rewind saves; find what differs.
-  4. Mist in water (feet / pillars) missing natively: likely +0x88 GFX particles `pop_state_frame` lists but never
-     draws (unproven); baths saves in "Water test set for 0.13".
-  5. Blending with As > 0x80 ("decide at 0.13", `docs/native_bugs.md` line ~35): census, then a proposal to the user.
+- **Next Mac session (offline, no PC needed):** 30 Oct list done (review fixed; rewind edges = glow convolution
+  taps, fixed; missing shadows / mist / 190506 / 195158 = offline replay limits, `docs/native_bugs.md`). Waiting on the
+  user: As > 0x80 blending proposal (census in `docs/renderer_audit.md` item 9). Open: thin strip at the right/bottom
+  edges of the rewind glow (GS trace of the level rectangles).
   Waiting on the PC / user: moon halo (PC step 4 GS trace), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
-  on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".
+  on the Mac): `docs/native_bugs.md` "Side jobs".
 
 ## Release roadmap (user; full text: `docs/roadmap.md`)
 
