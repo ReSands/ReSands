@@ -346,6 +346,10 @@ namespace pop_native_live
         constexpr uint32_t kPaletteKey = 0xFE5D8000u;
         // the water's colour pass (waterRecord): written as image -2, the frame copy read through the refraction buffer
         constexpr uint32_t kRefractionKey = 0xFE5C0000u;
+        // a halo's visibility (haloRecord): written as image -3, the frame copy's alpha averaged over the core square
+        constexpr uint32_t kHaloAlphaKey = 0xFE5C0001u;
+        // the glow mask put back after a halo: image -4, the same read of the frame copy without a new copy
+        constexpr uint32_t kHaloRestoreKey = 0xFE5C0002u;
         std::unordered_map<uint32_t, pop_native::Image> g_framePaletteImages; // texture index -> recoloured this frame
         std::unordered_map<uint32_t, uint32_t> g_framePaletteKeys;            // texture index -> key used this frame
         uint32_t texListEntry(uint8_t *rdram, uint32_t countAddr, uint32_t listAddr, uint32_t index)
@@ -2506,6 +2510,158 @@ namespace pop_native_live
             ++g_waterStats.native;
             return true;
         }
+
+        // Halos (FUN_004AA240 = AE_ProcessOneHalo, per entry of the halo array from FUN_004ABFC0 at the end of Display3DElements).
+        // The game projects the light (+0x240, then the viewport +0x280), takes a core square (+0x10 / w of half the display
+        // width, at least 8 px, clipped to the display) and ProcessLensFlare (FUN_004AB500) measures how much of it is in front
+        // of the scene: alpha 0 over the core, the core again at the light's own Z with ZGEQUAL writing alpha = the colour's top
+        // byte * the core's on-screen fraction (f20: a stack argument Ghidra's C drops), halved bilinearly to one pixel and
+        // spread over the halo square (RGBAQ 0x808080FF: R 0xFF, A 0x80, so As = At; RGB masked). Then the halo texture over the core +- (+0x14 / w),
+        // ALPHA 0x58 = Cs * Ad + Cd, no Z test; colour 0x808080, or the material's +8 when the node's flags & 0xE000 = 0x4000.
+        // Natively the same draws as GS sprites; the averaging is the spread draw's read of the frame copy (mesh.frag bit 256).
+        // shortcut: halos with lens-flare ghosts (more texture nodes; tables 0x63F430..) stay on the GS; none in the saves yet.
+        // The game saves the frame's alpha (the glow mask) before the halos and restores it after; natively the restore reads
+        // the copy the spread took. shortcut: so the core square keeps the test's alpha, not the glow mask's (16x16 px or so).
+        struct HaloStats
+        {
+            uint64_t calls = 0, native = 0, ghosts = 0;
+        } g_haloStats;
+        bool haloRecord(uint8_t *rdram, uint32_t halo)
+        {
+            static const bool off = [] { const char *e = std::getenv("POP_NATIVE_HALOS"); return e && *e == '0'; }();
+            ++g_haloStats.calls;
+            // after the last list (g_currentList +0xA8): the frame must still be pure for the Z test to see only native depth
+            if (off || (g_world && !(g_worldLate && worldStateOk(rdram))))
+                return false;
+            const uint32_t material = guestAny(rdram, halo + 0x1C);
+            const uint32_t node = material ? guestAny(rdram, material + 0x10) : 0;
+            const bool textured = node && guest16(rdram, node) != 0xFFFF;
+            if (textured)
+                if (const uint32_t next = guestAny(rdram, node + 0x20); next && guest16(rdram, next) != 0xFFFF)
+                {
+                    ++g_haloStats.ghosts;
+                    return false;
+                }
+            const uint32_t gso = guestAny(rdram, 0x00675148u);
+            const auto apply = [&](uint32_t m, const float v[4], float out[4]) { // sceVu0ApplyMatrix: out = sum_k row k * v[k]
+                for (int c = 0; c < 4; ++c)
+                {
+                    out[c] = 0.0f;
+                    for (int k = 0; k < 4; ++k)
+                        out[c] += guestF(rdram, m + 16 * k + 4 * c) * v[k];
+                }
+            };
+            float pos[4], clip[4], screen[4];
+            for (int k = 0; k < 4; ++k)
+                pos[k] = guestF(rdram, halo + 4 * k);
+            apply(gso + 0x240u, pos, clip);
+            const auto drawn = [&] { // nothing to draw: the GS would draw nothing either
+                if (!(g_world && g_worldLate))
+                    return false;
+                ++g_haloStats.native;
+                return true;
+            };
+            if (!(clip[2] > 0.1f))
+                return drawn();
+            const float inv = 1.0f / clip[3];
+            const float ndc[4] = {clip[0] * inv, clip[1] * inv, clip[2] * inv, 1.0f};
+            apply(gso + 0x280u, ndc, screen);
+            const int w = int(guestAny(rdram, 0x0066D03Cu)), h = int(guestAny(rdram, 0x0066D040u));
+            const float half = float(w >> 1) * 16.0f;
+            const int x = int(screen[0] * 16.0f), y = int(screen[1] * 16.0f), z = int(screen[2]);
+            const int core = std::max(int(guestF(rdram, halo + 0x10) * inv * half), 0x80), size = int(guestF(rdram, halo + 0x14) * inv * half);
+            const int sx0 = (0x800 - (w >> 1)) * 16, sx1 = (0x800 + (w >> 1)) * 16, sy0 = (0x800 - (h >> 1)) * 16, sy1 = (0x800 + (h >> 1)) * 16;
+            if (!(sx0 < x + core && x - core < sx1 && sy0 < y + core && y - core < sy1))
+                return drawn();
+            const int cx0 = std::clamp(x - core, sx0, sx1), cx1 = std::clamp(x + core, sx0, sx1);
+            const int cy0 = std::clamp(y - core, sy0, sy1), cy1 = std::clamp(y + core, sy0, sy1);
+            const float onScreen = float(cx1 - cx0) / float(2 * core) * float(cy1 - cy0) / float(2 * core);
+            const uint32_t alpha = uint32_t(float(guestAny(rdram, halo + 0x18) >> 24) * onScreen) & 0xFF;
+            const int px0 = cx0 & ~15, py0 = cy0 & ~15, px1 = cx1 & ~15, py1 = cy1 & ~15; // ProcessLensFlare: whole pixels
+            const int ox0 = cx0 - size, oy0 = cy0 - size, ox1 = cx1 + size, oy1 = cy1 + size;
+            // a GS sprite (RGBAQ, ST, XYZ2, ST, XYZ2) through gifToBatch, as the water's clear
+            const auto sprite = [&](int x0, int y0, int x1, int y1, uint32_t rgba, pop_assets::Batch &b) {
+                std::vector<uint8_t> pk(6 * 16, 0);
+                const uint64_t tag[2] = {1u | (1u << 15) | (uint64_t(1) << 46) | (uint64_t(6) << 47) | (uint64_t(5) << 60), 0x52521};
+                const uint32_t colour[4] = {rgba & 0xFF, rgba >> 8 & 0xFF, rgba >> 16 & 0xFF, rgba >> 24};
+                const float st0[4] = {0, 0, 1, 0}, st1[4] = {1, 1, 1, 0};
+                const uint32_t xy0[4] = {uint32_t(x0) & 0xFFFF, uint32_t(y0) & 0xFFFF, uint32_t(z), 0};
+                const uint32_t xy1[4] = {uint32_t(x1) & 0xFFFF, uint32_t(y1) & 0xFFFF, uint32_t(z), 0};
+                std::memcpy(pk.data(), tag, 16);
+                std::memcpy(pk.data() + 16, colour, 16);
+                std::memcpy(pk.data() + 32, st0, 16);
+                std::memcpy(pk.data() + 48, xy0, 16);
+                std::memcpy(pk.data() + 64, st1, 16);
+                std::memcpy(pk.data() + 80, xy1, 16);
+                uint64_t unused = 0;
+                return gifToBatch(rdram, {pk}, b, unused) && !b.indices.empty();
+            };
+            pop_assets::Batch clear, test, spread, glow, restore;
+            if (!sprite(px0, py0, px1, py1, 0, clear) || !sprite(px0, py0, px1, py1, alpha << 24, test) ||
+                !sprite(ox0, oy0, ox1, oy1, 0x80000000u, spread) || !sprite(ox0, oy0, ox1, oy1, 0x80000000u, restore))
+                return false;
+            // the spread reads the core square of the frame copy: its corners in frame UV, the same on every vertex
+            const float u0 = (px0 / 16.0f - float(0x800 - (w >> 1))) / float(w), v0 = (py0 / 16.0f - float(0x800 - (h >> 1))) / float(h);
+            const float u1 = (px1 / 16.0f - float(0x800 - (w >> 1))) / float(w), v1 = (py1 / 16.0f - float(0x800 - (h >> 1))) / float(h);
+            for (auto &v : spread.vertices)
+                v.uv[0] = u0, v.uv[1] = v0, v.uv2[0] = u1, v.uv2[1] = v1;
+            // the restore: a square of no size at each vertex's own frame UV (gifToBatch's corners: x0 x1 x1 x0, y0 y0 y1 y1)
+            for (size_t k = 0; k < restore.vertices.size(); ++k)
+            {
+                auto &v = restore.vertices[k];
+                const int cx = (k & 3) == 1 || (k & 3) == 2 ? ox1 : ox0, cy = (k & 3) >= 2 ? oy1 : oy0;
+                v.uv[0] = v.uv2[0] = (cx / 16.0f - float(0x800 - (w >> 1))) / float(w);
+                v.uv[1] = v.uv2[1] = (cy / 16.0f - float(0x800 - (h >> 1))) / float(h);
+            }
+            uint32_t colour = 0x80808080u, key = 0;
+            if (textured)
+            {
+                if ((guestAny(rdram, node + 4) & 0xE000) == 0x4000)
+                    colour = (guestAny(rdram, material + 8) & 0xFFFFFF) | 0x80000000u;
+                const uint32_t index = guest16(rdram, node);
+                if ((key = textureKey(rdram, index)))
+                    key = recolouredKey(rdram, index, key);
+            }
+            if (!sprite(ox0, oy0, ox1, oy1, colour, glow))
+                return false;
+            const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+            std::vector<WorldRecord> recs;
+            // (geometry, texture key, render state flags: 0x200 = no depth write, blend kind 6 + 0x1000 = Cs * Ad + Cd; Z test; FBMSK)
+            const auto add = [&](pop_assets::Batch &&g, uint32_t k, uint32_t flags, uint32_t zTest, uint32_t fbmsk) {
+                DrawMaterial m; // no fog
+                m.seq = g_frameSeq++;
+                m.textureKey = k;
+                m.flags = flags;
+                m.zTest = zTest;
+                m.fbmsk = fbmsk;
+                m.list = g_currentList;
+                std::vector<pop_assets::Batch> bs;
+                bs.push_back(std::move(g));
+                g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, m));
+                recs.push_back({2, g_frameRefs.size() - 1});
+            };
+            add(std::move(clear), 0, 0x200, 0, 0x00FFFFFFu);              // alpha only, no Z test
+            add(std::move(test), 0, 0x200, 1, 0x00FFFFFFu);               // alpha only, ZGEQUAL at the light's Z
+            add(std::move(spread), kHaloAlphaKey, 0x200, 0, 0x00FFFFFFu); // alpha only: the core's mean over the halo square
+            add(std::move(glow), key, 0x61200, 0, 0xFF000000u);           // RGB only, Cs * Ad + Cd
+            const WorldRecord glowRec = recs.back();
+            add(std::move(restore), kHaloRestoreKey, 0x200, 0, 0x00FFFFFFu); // alpha only: the glow mask back
+            if (!(g_world && g_worldLate))
+                return false; // offline: the draws stay in the frame, the GS emulation is not used
+            if (key && !worldFinish({glowRec}, {}))
+                return false;
+            for (const WorldRecord &r : recs) // the others use no texture (key 0 or the frame copy)
+                worldMaterial(r).native = true;
+            ++g_haloStats.native;
+            return true;
+        }
+        PS2Runtime::RecompiledFunction g_origHalo = nullptr;
+        void haloDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing && haloRecord(rdram, getRegU32(ctx, 5)))
+                return;
+            g_origHalo(rdram, ctx, runtime);
+        }
 #endif
 
         // native shadows (below): which records each Display call added, so a shadow list entry finds its geometry
@@ -3702,7 +3858,8 @@ namespace pop_native_live
                 allMaterials.push_back(m);
             }
             for (const DrawMaterial &m : allMaterials)
-                if (m.textureKey && m.textureKey != kRefractionKey && !imageOf.count(m.textureKey))
+                if (m.textureKey && m.textureKey != kRefractionKey && m.textureKey != kHaloAlphaKey && m.textureKey != kHaloRestoreKey &&
+                    !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
                     bool found = false;
@@ -3860,7 +4017,7 @@ namespace pop_native_live
                     batches = &rec.first;
                 }
                 const DrawMaterial &mat = *matp;
-                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
                 putBytes(f, model, size_t(4) * size_t(16));
@@ -4039,7 +4196,7 @@ namespace pop_native_live
                         std::memcpy(&v[k], &bits, 4);
                     }
                     const uint32_t colour = guestAny(g_rdramPtr, e + 0x18), material = guestAny(g_rdramPtr, e + 0x1C);
-                    const uint32_t list = material ? guestAny(g_rdramPtr, material + 0x20) : 0;
+                    const uint32_t list = material ? guestAny(g_rdramPtr, material + 0x10) : 0; // the first texture node
                     const uint32_t texIndex = list ? guest16(g_rdramPtr, list) : 0xFFFF;
                     std::fprintf(stderr, "[pop:native]   halo %u: pos (%.2f %.2f %.2f) half size %.2f x %.2f colour %08x material %08x tex index %04x key %08x\n",
                                  h, v[0], v[1], v[2], v[4], v[5], colour, material, texIndex,
@@ -4254,6 +4411,9 @@ namespace pop_native_live
                         std::fprintf(stderr, "[pop:world] water (P6 %s): draws %llu, native %llu, not replayed %llu; VU runs %llu\n",
                                      g_waterVu.usePort ? "port" : "on the interpreter", (unsigned long long)g_waterStats.draws,
                                      (unsigned long long)g_waterStats.native, (unsigned long long)g_waterStats.failed, (unsigned long long)g_waterVu.runs);
+                    if (g_haloStats.calls)
+                        std::fprintf(stderr, "[pop:world] halos: %llu, native %llu, with ghosts (GS) %llu\n", (unsigned long long)g_haloStats.calls,
+                                     (unsigned long long)g_haloStats.native, (unsigned long long)g_haloStats.ghosts);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
@@ -4634,6 +4794,11 @@ namespace pop_native_live
             g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
             if (g_origAddHalo)
                 runtime.replaceFunction(0x004AB1C0u, addHalo);
+#if POP_SPRITE_VU1
+            g_origHalo = runtime.lookupFunction(0x004AA240u);
+            if (g_origHalo)
+                runtime.replaceFunction(0x004AA240u, haloDisplay);
+#endif
             g_origParticles = runtime.lookupFunction(0x004584C0u);
             if (g_origParticles)
                 runtime.replaceFunction(0x004584C0u, particles);

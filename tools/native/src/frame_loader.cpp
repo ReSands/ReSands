@@ -112,15 +112,19 @@ namespace pop_native
                 // image -2: the water's colour pass (pop_native_live waterRecord): the frame is copied before the draw and
                 // read through the refraction buffer
                 const bool refraction = v3 && image == -2;
-                d.copyFrame = refraction;
+                // image -3: a halo's visibility (pop_native_live haloRecord): the frame is copied before the draw, its alpha averaged;
+                // -4: the same read of that copy without a new one (the glow mask put back after the halo)
+                const bool haloAlpha = v3 && (image == -3 || image == -4);
+                d.copyFrame = refraction || (v3 && image == -3);
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage ? image : refraction ? -2 : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
+                    const auto key = std::make_tuple(hasImage || refraction || haloAlpha ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
-                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction ? kFrameCopyImage : -1;
+                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction || haloAlpha ? kFrameCopyImage : -1;
                         mat.refraction = refraction;
+                        mat.haloAlpha = haloAlpha;
                         if (v3)
                         {
                             materialFromGsFlags(mode, word, mat);

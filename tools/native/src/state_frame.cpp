@@ -15,7 +15,7 @@
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
 // from tools/packindex.py's index.
-// Not replayed yet: instanced lightmaps, halos; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
+// Not replayed yet: instanced lightmaps, halo lens-flare ghosts; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
 // Save-state layout: tools/popstate.py.
 
 #include "../../overrides/pop_native_live.cpp"
@@ -320,6 +320,24 @@ namespace
             }
             setArgs(sub, dm + off);
             call(0x004B9440u, &sub); // listRender hook -> renderList
+        }
+        // the halos (FUN_004ABFC0 -> FUN_004AA240 per entry): the pass zeroes the count after drawing, so a save holds the
+        // last frame's entries with count 0 and, after them, stale ones from earlier frames with more halos (162621: the sun
+        // at 0, 22 and 27). shortcut: entries up to the first without a material, skipping any within 0.5 of an earlier one;
+        // a stale halo that moved further still gets drawn
+        std::vector<std::array<float, 3>> drawn;
+        for (uint32_t e = 0x006DF2C0u; e < 0x006DF2C0u + 32 * 0x20 && rd32(e + 0x1C); e += 0x20)
+        {
+            std::array<float, 3> p;
+            for (int k = 0; k < 3; ++k)
+                p[k] = pop_native_live::guestF(g_ram.data(), e + 4 * k);
+            if (std::any_of(drawn.begin(), drawn.end(), [&](const std::array<float, 3> &q) {
+                    return std::fabs(p[0] - q[0]) < 0.5f && std::fabs(p[1] - q[1]) < 0.5f && std::fabs(p[2] - q[2]) < 0.5f;
+                }))
+                continue;
+            drawn.push_back(p);
+            setArgs(sub, 0x006DF170u, e);
+            call(0x004AA240u, &sub);
         }
         // the after-effect pass (FUN_004ABFC0 on CAfterEffect 0x6DF170, end of Display3DElements):
         // ColorDiffusion (glow) when bit 5 of +0x121 is set, its arguments from the object (+0x94,

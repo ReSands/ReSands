@@ -68,7 +68,9 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   (`POP_NATIVE_P6=0` off; native only with `-NativeLate`), user check passed on fountain 202926. Not in the PC build yet.
   Open: the mist around feet / pillars in
   water is missing natively (likely GFX particles of +0x88, which `pop_state_frame` lists but never draws; unproven).
-  Then halos (fixes the save-point pop / N10 if it works), light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  **Halos started 30 Oct** (`docs/native_renderer.md` "Native halos"): offline done, sun save 162621 10.6 -> 2.6; the moon
+  (145139) is too bright natively (GS hides it; needs a GS trace of a moon frame on the PC); not built or booted on the PC
+  yet. Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
   something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera

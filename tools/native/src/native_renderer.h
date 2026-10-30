@@ -67,6 +67,7 @@ namespace pop_native
         bool clampUv = false;    // base texture clamped to its edge texels (GS CLAMP_1 = 5) instead of repeated
         bool fogAlpha = false;   // the fog factor F is the vertex alpha (0x80 = 1.0), no fog colour (lightmap pass, P1 mode 3)
         bool refraction = false; // the water's colour pass: baseImage (the frame copy) read through its 256x256 refraction buffer (mesh.frag)
+        bool haloAlpha = false;  // a halo's visibility: alpha = the frame copy's mean alpha over the core square (uv .. uv2) * vertex alpha (mesh.frag)
     };
 
     inline bool isBlended(AlphaMode m) { return m != AlphaMode::Opaque && m != AlphaMode::Mask; }

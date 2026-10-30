@@ -1233,3 +1233,33 @@ stage starts at, the registers go to the interpreter (`VU1Interpreter::state()`,
 flight), it finishes the run, and they come back. `POP_NATIVE_P9=0` = interpreter only; the offline P9 trace
 (`POP_P9_TRACE`) always uses the interpreter. Offline A/B over the 236 saves of the P9 traces: all native frames
 byte-identical with and without the port, 630 sprite elements / 75,009 quads, no handover.
+
+## Native halos (30 Oct, 0.13; offline only so far)
+
+**What the game does** (retail FUN_004AA240 = AE_ProcessOneHalo, called per halo-array entry by FUN_004ABFC0 at the end of
+Display3DElements; ProcessLensFlare = FUN_004AB500; disassembly via `tools/ghidra/PoPDisasm.java` because Ghidra's C drops
+the stack arguments). Entry (0x20 bytes at 0x6DF2C0): position, +0x10 core size, +0x14 halo size (world units), +0x18
+colour (top byte = alpha), +0x1C material; the material's +0x10 points at the first texture node (u16 texture index, +4
+flags, +0x20 next node = lens-flare ghosts). The light goes through +0x240 and the viewport +0x280; core square = +0x10 / w
+of half the display width (at least 8 px), clipped to the display; then on the GS: alpha 0 over the core, the core again at
+the light's own Z with ZGEQUAL writing alpha = colour alpha * the core's on-screen fraction (register f20), bilinear halving
+to one pixel, spread over the halo square with RGBAQ 0x808080FF (A = 0x80: As = At, not doubled); then the halo texture over
+core +- (+0x14 / w), ALPHA 0x58 = Cs * Ad + Cd, no Z test, colour 0x808080 or the material's +8 (node flags & 0xE000 =
+0x4000). The frame's alpha (glow mask) is saved before the halo loop and restored after.
+
+**Natively** (`haloRecord` in `pop_native_live.cpp`, hook on 0x4AA240, `POP_NATIVE_HALOS=0` off; live only with `-NativeLate`
+while the frame is pure after +0xA8): five GS sprites through `gifToBatch`: clear, Z test, spread (image -3: the frame copied
+before it, mesh.frag bit 256 averages the copy's alpha over the core square, 8x8 samples), the halo (blend kind 6 + dest
+alpha), restore (image -4: the same copy read per pixel, no new copy). Shortcuts: halos with ghosts stay on the GS (none
+seen); the core square keeps the test's alpha instead of the glow mask. `pop_state_frame`: the save's count is always 0 and
+the array holds stale entries from longer frames (162621: the sun at 0, 22 and 27), so it replays entries up to the first
+without a material and skips repeats within 0.5 units. The 25 Oct live halo log read the texture node at +0x20 (wrong; fixed).
+
+**Offline check** (11 GS-only saves `gsref1027`, `--noglow` because the offline glow over-brightens on its own, halos on vs
+off against the game picture): 162621 (sun behind a tower) 10.59 -> **2.62**, the glow now matches the game; 145139 (moon)
+5.26 -> **8.20** (worse); the other 9 unchanged (their halos are off screen or occluded: the 25 torch halos of 162621 sit
+behind walls natively and on the GS alike). **Open: the moon.** The game adds nothing over the tower inside the moon's halo
+square, so on the GS the moon's core fails the Z test (light Z 5,610), while native Z there is the sky's ~1,465 and it
+passes. The saves cannot show the GS Z: the post effects overwrite Z memory for x < ~448, y < ~256 (the half-resolution
+buffer at FBP 280), which is where every moon save has its moon. Next: a GS trace (`PS2X_GS_TRACE`) of a moon frame, GS
+only, to read the Z under the core at the halo's test (needs the PC). This is also the save-point pop's halo (N10 notes).

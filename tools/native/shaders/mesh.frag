@@ -54,6 +54,16 @@ vec4 refraction(vec2 st)
 void main()
 {
     int flags = int(pc.params.x + 0.5);
+    // bit 256: a halo's visibility (FUN_004AB500): the GS halves the core square bilinearly down to one pixel and spreads it
+    // with As = At * Av; here the mean of the frame copy's alpha over the square (vUv .. vUv2), 8x8 samples
+    if ((flags & 256) != 0) {
+        float s = 0.0;
+        for (int j = 0; j < 8; ++j)
+            for (int i = 0; i < 8; ++i)
+                s += texture(baseTex, mix(vUv, vUv2, (vec2(i, j) + 0.5) / 8.0)).a;
+        outColour = vec4(0.0, 0.0, 0.0, s / 64.0 * vColour.a);
+        return;
+    }
     // bit 128: the water's colour pass, baseTex = the frame copy read through the refraction buffer
     vec4 t = (flags & 128) != 0 ? refraction(vUv) : texture(baseTex, vUv);
     // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state

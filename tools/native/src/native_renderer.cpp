@@ -632,13 +632,14 @@ namespace pop_native
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
                     // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels), bit 4 keep the
                     // failures instead (the failure pass keeps exactly the pixels the test rejects), bit 5 fog as vertex alpha
-                    // (bit 6 no depth write and bit 7 the water's refraction read: below)
+                    // (bit 6 no depth write, bit 7 the water's refraction read, bit 8 a halo's visibility: below)
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
                     const bool less = mat && mat->alphaTestLess;
                     // bit 6: no depth write (a decal over its wall): moved nearer by the decal bias (mesh.vert, N16 moss)
                     const bool noDepthWrite = !(pipelineKey(afail ? &failMat : mat) & (1u << 6));
                     push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0) | (mat && mat->fogAlpha ? 32 : 0) |
-                                           (noDepthWrite ? 64 : 0) | (mat && mat->refraction ? 128 : 0));
+                                           (noDepthWrite ? 64 : 0) | (mat && mat->refraction ? 128 : 0) |
+                                           (mat && mat->haloAlpha ? 256 : 0));
                     push.params[1] = mat ? mat->cutoff : 0.5f;
                     push.params[2] = mat && mat->lightmapImage >= 0 ? mat->lightmapStrength : 0.0f;
                     push.params[3] = options.nearW / kGsZNear; // zScale (mesh.vert)
