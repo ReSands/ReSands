@@ -2539,7 +2539,8 @@ namespace pop_native_live
             static const bool off = [] { const char *e = std::getenv("POP_NATIVE_HALOS"); return e && *e == '0'; }();
             ++g_haloStats.calls;
             // after the last list (g_currentList +0xA8): the frame must still be pure for the Z test to see only native depth
-            if (off || (g_world && !(g_worldLate && worldStateOk(rdram))))
+            // purity only: worldStateOk judges the +0xA8 sub-material, which here is a leftover (usually +0x98's glow mask)
+            if (off || (g_world && !(g_worldLate && g_worldOpen && g_worldPure)))
                 return false;
             const uint32_t material = guestAny(rdram, halo + 0x1C);
             const uint32_t node = material ? guestAny(rdram, material + 0x10) : 0;
