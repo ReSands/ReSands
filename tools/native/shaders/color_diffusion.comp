@@ -55,7 +55,11 @@ void main()
         precise vec3 sum = vec3(0.0);
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx)
-                sum += floor(at(pix.x + dx, pix.y + dy) * wgt);
+            {
+                ivec2 q = pix + ivec2(dx, dy); // each tap is the plane drawn one pixel off: none from outside it
+                if (q.x >= 0 && q.y >= 0 && q.x < p.sw && q.y < p.sh)
+                    sum += floor(at(q.x, q.y) * wgt);
+            }
         dst[i] = vec4(min(vec3(255.0), sum), 0.0);
     }
 }

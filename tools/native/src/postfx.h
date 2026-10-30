@@ -63,8 +63,10 @@ namespace pop_postfx
             {
                 if (!dx && !dy)
                     continue;
-                for (int y = 0; y < o.h; ++y)
-                    for (int x = 0; x < o.w; ++x)
+                // the tap is the level drawn shifted by (-dx, -dy) (FUN_004AF340 offsets the XY, not the UVs): the edge
+                // pixels it does not cover get nothing from it
+                for (int y = std::max(0, -dy); y < std::min(o.h, o.h - dy); ++y)
+                    for (int x = std::max(0, -dx); x < std::min(o.w, o.w - dx); ++x)
                         for (int c = 0; c < 3; ++c)
                         {
                             float &d = o.rgb[3 * (size_t(y) * o.w + x) + c];
