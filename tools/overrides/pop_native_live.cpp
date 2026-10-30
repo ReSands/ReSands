@@ -2565,12 +2565,11 @@ namespace pop_native_live
         // the copy the spread took. shortcut: so the core square keeps the test's alpha, not the glow mask's (16x16 px or so).
         struct HaloStats
         {
-            uint64_t calls = 0, native = 0, ghosts = 0;
+            uint64_t calls = 0, native = 0, ghosts = 0, outside = 0; // outside: after the frame's capture ended (kick)
         } g_haloStats;
         bool haloRecord(uint8_t *rdram, uint32_t halo)
         {
             static const bool off = [] { const char *e = std::getenv("POP_NATIVE_HALOS"); return e && *e == '0'; }();
-            ++g_haloStats.calls;
             // after the last list (g_currentList +0xA8): the frame must still be pure for the Z test to see only native depth
             // purity only: worldStateOk judges the +0xA8 sub-material, which here is a leftover (usually +0x98's glow mask)
             if (off || (g_world && !(g_worldLate && g_worldOpen && g_worldPure)))
@@ -2703,6 +2702,8 @@ namespace pop_native_live
         PS2Runtime::RecompiledFunction g_origHalo = nullptr;
         void haloDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            ++g_haloStats.calls;
+            g_haloStats.outside += !g_frameCapturing;
             if (g_frameCapturing && haloRecord(rdram, getRegU32(ctx, 5)))
                 return;
             g_origHalo(rdram, ctx, runtime);
@@ -2715,11 +2716,10 @@ namespace pop_native_live
         // pow(sin(d * pi/2 / radius), +0x60). RGBAQ 0x808080 + (+0x74 >> 1); ALPHA 0x29 with FIX 0 = Cs (opaque) when +0x74 is
         // 0xFF, else ALPHA 1; Z always; RGB only (FBMSK 0xFF000000: the glow mask stays). Natively the same strips through
         // gifToBatch, reading a fresh frame copy (image -5). shortcut: +0x74 != 0xFF (blended) stays on the GS; none in the saves.
-        uint64_t g_pinchCalls = 0, g_pinchNative = 0;
+        uint64_t g_pinchCalls = 0, g_pinchNative = 0, g_pinchOutside = 0;
         bool pinchRecord(uint8_t *rdram)
         {
             static const bool off = [] { const char *e = std::getenv("POP_NATIVE_PINCH"); return e && *e == '0'; }();
-            ++g_pinchCalls;
             if (off || (g_world && !(g_worldLate && g_worldOpen && g_worldPure)))
                 return false;
             constexpr uint32_t ae = 0x006DF170u;
@@ -2792,6 +2792,8 @@ namespace pop_native_live
         PS2Runtime::RecompiledFunction g_origPinch = nullptr;
         void pinchEffect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            ++g_pinchCalls;
+            g_pinchOutside += !g_frameCapturing;
             if (g_frameCapturing && pinchRecord(rdram))
                 return;
             g_origPinch(rdram, ctx, runtime);
@@ -4556,11 +4558,11 @@ namespace pop_native_live
                                      g_waterVu.usePort ? "port" : "on the interpreter", (unsigned long long)g_waterStats.draws,
                                      (unsigned long long)g_waterStats.native, (unsigned long long)g_waterStats.failed, (unsigned long long)g_waterVu.runs);
                     if (g_haloStats.calls)
-                        std::fprintf(stderr, "[pop:world] halos: %llu, native %llu, with ghosts (GS) %llu\n", (unsigned long long)g_haloStats.calls,
-                                     (unsigned long long)g_haloStats.native, (unsigned long long)g_haloStats.ghosts);
+                        std::fprintf(stderr, "[pop:world] halos: %llu, native %llu, with ghosts (GS) %llu, after the kick %llu\n", (unsigned long long)g_haloStats.calls,
+                                     (unsigned long long)g_haloStats.native, (unsigned long long)g_haloStats.ghosts, (unsigned long long)g_haloStats.outside);
                     if (g_pinchCalls)
-                        std::fprintf(stderr, "[pop:world] pinch: %llu, native %llu\n", (unsigned long long)g_pinchCalls,
-                                     (unsigned long long)g_pinchNative);
+                        std::fprintf(stderr, "[pop:world] pinch: %llu, native %llu, after the kick %llu\n", (unsigned long long)g_pinchCalls,
+                                     (unsigned long long)g_pinchNative, (unsigned long long)g_pinchOutside);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)

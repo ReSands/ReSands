@@ -3,7 +3,7 @@
 # frame may have against the save's own GS picture. Baseline + 0.1: the first five 27 Oct night (gsref1027/lmfade), the rest 28 Oct (gsref1028.ps1).
 # A save that gets better: lower its line in the same commit as the fix.
 # A third column `vu1`: the same save through pop_state_frame_vu1 with --noglow (VU1 paths: sprites, P5, P6, halos;
-# baseline 30 Oct; 162621 (plain) raised 10.89 -> 11.22 on 30 Oct by the Cs saturation in mesh.frag: its sky overshoot stood in for the missing sun glow, its vu1 line got better; 115837 with the native Pinch: 8.49, 9.26 without it; P5 particles on offline since 30 Oct evening: 8.28 / 8.20 / 2.62). 145139 is the moon whose halo is too bright natively (docs/native_renderer.md "Native halos").
+# baseline 30 Oct; 162621 (plain) raised 10.89 -> 11.22 on 30 Oct by the Cs saturation in mesh.frag: its sky overshoot stood in for the missing sun glow, its vu1 line got better; 115837 with the native Pinch: 8.49, 9.26 without it; P5 particles on offline since 30 Oct evening: 8.28 / 8.20 / 2.62). 202926 (fountain, GS-only save from 30 Oct evening) 6.67. 145139 is the moon whose halo is too bright natively (docs/native_renderer.md "Native halos").
 20261024_201540.gs 1.59
 20261024_202314.gs 6.35
 20261025_134636.gs 10.71
@@ -18,3 +18,4 @@
 20261025_162621.gs 2.72 vu1
 20261025_145139.gs 8.30 vu1
 20261025_115837.gs 8.38 vu1
+20261029_202926.gs 6.77 vu1
