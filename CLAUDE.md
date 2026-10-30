@@ -69,8 +69,14 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed), in order:**
-  1. Score ZoomSmooth 0 once the user has a GS-only save while the power of haste runs (late game); otherwise the moon
-     halo from the GS trace (PC step 4).
+  1. /ponytail-review the MotionSmooth (246915a) and ZoomSmooth (ab715cd) commits; fix findings (unblocks PC step 1).
+  2. Rewind saves (115853, 155110, 1029 185650/185807/185943): shadows under the characters missing natively; native
+     brighter at the frame edges (glow sampling at the borders?). `docs/native_bugs.md` "Rewind look resolved".
+  3. Not looked at: 1029 190506 (48.57) and 195158 (56.73), not rewind saves; find what differs.
+  4. Mist in water (feet / pillars) missing natively: likely +0x88 GFX particles `pop_state_frame` lists but never
+     draws (unproven); baths saves in "Water test set for 0.13".
+  5. Blending with As > 0x80 ("decide at 0.13", `docs/native_bugs.md` line ~35): census, then a proposal to the user.
+  Waiting on the PC / user: moon halo (PC step 4 GS trace), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".
