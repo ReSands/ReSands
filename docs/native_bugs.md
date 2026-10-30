@@ -434,6 +434,25 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   ours: the same spot in `gs` mode decides. Both saves landed mid-frame (the save's picture holds only the halos, as
   193240), so offline can't show them.
 
+- **PC results (job `game/jobs/bugs1030.ps1`, 30 Oct 19:48; GS-only vs native boots at each save's field + 60 / + 120,
+  R1 held; shots PC `game\recomp-sotc\shots1030b\`, logs `bug_<save>_<mode>.log`):**
+  - **Ours (GS-only clean):** N18 (a bright sliver along the lower ledge edge, x 250-430 y 380-395), N19 (the orange
+    scalloped band at frieze height is native only), N20 (193136: the window's light shafts far too bright native, a cyan
+    column beside the Prince and a white floor patch; the GS draws a faint shaft; 193139 matches: so the "glow through the
+    wall" is most likely that shaft), N24 (lamp / brazier halos much bigger and brighter native), N25 (dagger glow and the
+    ceiling light brighter native).
+  - **Fps, ours:** N23 193529 GS 55 60 60 60 60, native 43 46 52 56 55 (~9 halos per frame; worker 6.66 ms: read 2.15,
+    upload 3.31, draw 1.18; GS thread waited 6.31 ms); N26 194134 GS 54 60 60 60 60, native 45 51 52 52 53 (~14 halos
+    per frame, worker 5.94 ms), 194136 the same. Lead: each native halo adds image records (kHaloAlphaKey -3 /
+    kHaloRestoreKey -4, "the frame copy"): check what each one sends.
+  - **Static shots match (in-motion only):** N21 193240, N22 193355. N26's shots diverge (the shake is random).
+  - **Post chain (`POP_NATIVE_POST=1`): glow native 0** on every save: in world mode the after-effect hooks were never
+    installed (only on the offline path). Fixed in a6feee4; rerun `game/jobs/post1030.ps1` (20:00): glow native 596 /
+    600 (202926), 590 (115837), 596 (194005), 598 (193636), 112 (145139: purity ends in +0x88 there). Against GS-only:
+    202926 7.36 -> 6.55, **194005 9.61 -> 6.66, 193636 7.63 -> 2.82**: N24 and N25 were the GS's glow over the native
+    picture (a hybrid effect); with the native post chain the halos and the dagger glow match the GS. Draw +0.3-0.5 ms.
+    Next: the user's look with `-Env 'POP_NATIVE_POST=1'`, then default on in `play.ps1`.
+
 ## Storage of captures (agreed with the user 24 Oct)
 
 `.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after
