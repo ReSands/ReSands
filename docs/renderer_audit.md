@@ -105,6 +105,11 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    Exact options: read Cd in the shader (programmable blending: `VK_EXT_rasterization_order_attachment_access`,
    check MoltenVK support, or input attachments with a feedback-loop barrier per overlapping draw), or a float
    target with the GS's per-draw clamp emulated. To decide at 0.13, after the P1 check shows how many draws need it.
+   **Census 30 Oct** (`POP_ALPHA_CENSUS=1 pop_state_frame --world`, all 231 distinct saves; mesh draws only, P5 / P9 / P6
+   write their own alpha): draws with a vertex alpha > 0x80, by blend kind: **6 AddAlpha 3,793 of 8,146** (193 saves,
+   nearly all instanced +0x88); **1 Blend 1,336 of 18,822** (132 saves, all instanced +0x88); 4 Add 2,806 (alpha
+   unused: harmless); 0 opaque 604 (alpha test only, already the GS formula); 2, 3: none. Texels > 0x80: none.
+   So AddAlpha is the bulk and has an exact fix (Cs x As in the shader, blend ONE, ONE); Blend is the hard third.
 
 10. **GS features not modelled or checked** (low-medium): DTHE, mipmaps (TEX1 MXL; sampler `maxLod = 0`), PABE, FBA,
    region clamp modes. One `PS2X_GS_TRACE` per area type through `gsvram.py`: which values the game uses.
