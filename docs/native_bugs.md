@@ -515,8 +515,13 @@ pixels get no tap from outside (edge 6/9 of the weight, corner 4/9); ours clampe
 was too bright towards the borders. Fixed in `postfx.h` and `color_diffusion.comp` (GPU = CPU, 12/12): 115853 7.94 -> 7.10,
 155110 10.72 -> 7.09, 185650 9.64 -> 4.83, 185807 13.28 -> 8.44, 185943 11.12 -> 5.08; gate (masked glow) unchanged.
 Not modelled: the pixels the shifted taps write just outside the level's rectangle (into the neighbouring rectangle of
-the shared buffer). Left on the rewind saves: shadows under the characters missing natively, a thin strip at the right
-and bottom edges. Not checked live (the glow runs natively only with
+the shared buffer). **Shadows missing offline = a replay limit, not a renderer bug:** `pop_state_frame` replays DisplayAllShadows only for
+projectors whose caster / receiver lists are filled, and a save taken after the frame's shadow pass has every count 0
+(FUN_004B8080 zeroes the count after drawing; the rewind saves and the gate's 184926 alike; 1022 192521 was caught
+before it, so it has shadows). The entries stay in memory, but stale entries of earlier frames follow them, so the
+count can't be recovered (dump of the list memory, 30 Oct). Live shadows are native and user-checked (24 Oct).
+So no offline score includes shadows. Left: a thin strip at the right and bottom edges (likely GS bilinear reading past a
+level's rectangle into the shared buffer; needs the rectangles' layout from a GS trace). Not checked live (the glow runs natively only with
 `-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves), not looked at. The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).
