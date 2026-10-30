@@ -56,7 +56,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   FixBlend / ZoomSmooth were still the GS's over the injected picture (only Pinch was native: 478/488 in eve1030k).
   `POP_NATIVE_POST=1` (with `-NativeLate`) sends them to the world frame's post chain while pure and skips the GS
   originals; GPU in `renderOffscreen` = CPU exactly on 4 saves (`POP_VIEW_GPU_POST=1`). Live since a6feee4 (glow native
-  ~99% where pure to the HUD; fixes N24 / N25). Next: the user's look, then default on. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
+  ~99% where pure to the HUD); user look 30 Oct evening fixed N24 / N25; **default on in `play.ps1`** (`-NoNativePost`).
+  Before 0.14 (agreed with the user): N20 light shafts, N18 / N19, then 0.14 step 1; N21 / N22 wait on the user's
+  in-motion check, N23 / N26 (halo fps) park unless the per-halo images are a plain mistake. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not

@@ -452,6 +452,12 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     202926 7.36 -> 6.55, **194005 9.61 -> 6.66, 193636 7.63 -> 2.82**: N24 and N25 were the GS's glow over the native
     picture (a hybrid effect); with the native post chain the halos and the dagger glow match the GS. Draw +0.3-0.5 ms.
     Next: the user's look with `-Env 'POP_NATIVE_POST=1'`, then default on in `play.ps1`.
+  - **User look, 193636 with `POP_NATIVE_POST=1` (30 Oct ~20:10): N24 fixed** ("much smaller and less bright").
+  - **User look, 194005: N25 fixed** ("much less bright"). `POP_NATIVE_POST=1` is now the default in `play.ps1`
+    (`-NoNativePost` opts out).
+- **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
+  Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
+  PS2 when available.
 
 ## Storage of captures (agreed with the user 24 Oct)
 
