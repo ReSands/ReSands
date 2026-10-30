@@ -48,7 +48,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
   Working on **0.13**: P5 particles and P6 water on by default (done, user-checked); halos offline-done, not yet on
   the PC; light shafts need no new path (glow-mask meshes +
-  ColorDiffusion, already native: `docs/native_bugs.md` "Light shafts"; judge live with `-NativeLate`), flashes (surveyed 30 Oct: `docs/native_bugs.md` "Flashes survey"), retry `-NativeLate`.
+  ColorDiffusion, already native: `docs/native_bugs.md` "Light shafts"; judge live with `-NativeLate`), flashes = after-effects not yet native, Pinch first (survey: `docs/native_bugs.md`
+  "Flashes survey"; fades moved to 0.14, user 30 Oct), retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).

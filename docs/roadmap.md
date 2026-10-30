@@ -25,7 +25,9 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   for raw `memcmp` of padded structs (with clang every primitive became its own batch there).
 - **0.11 native static world -> 0.12 native characters, translucents, shadows + particles** (shadows moved here
   23 Oct: everything after them in the draw order waits for them) **-> 0.13 native effects** (water P6, sprites P9,
-  halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.**
+  halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.** (User, 30 Oct: the
+  full-screen fades move to 0.14: they are drawn in the 2D pass (+0xB8) and need the same post-effects 2D layer as the
+  HUD; 0.13's flashes are the after-effects, Pinch first.)
 - **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the emulated GS output
   of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats
   differ, so residual differences must be measured and explained).
