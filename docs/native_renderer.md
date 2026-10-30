@@ -202,7 +202,8 @@ The frame export now counts the other `CElementList::Render` paths and logs thei
   `~/Desktop/pop_renders/28_live_idxmesh_palms_game_vs_native.png`: palms, torch fires, fog.
 - `FUN_00458FC0` -> `FUN_004584C0` (types 0-0xF, VU program 4, GFX): 14 draws: rain streaks,
   smoke puffs, the torch flame sprite sheet, sparks, star field.
-- `FUN_00469C00` (type 0x18): 2 draws with a light-shaft texture.
+- `FUN_00469C00` (type 0x18): 2 draws with a light-shaft texture. **Corrected 30 Oct: this is the STR text
+  renderer (HUD: life bar, sand tanks, tutorial text), list +0xB8, not light shafts** (`docs/native_bugs.md` "Light shafts").
 - `CJadeSpriteElement::Display` (0x4C6200, types 0x1C/0x20) and `CJSmWaterElement::Display`
   (0x4C77C0, type 0x14): none in this frame.
 The moon disc itself was not found among these; candidates: the additive disc glow above, or the

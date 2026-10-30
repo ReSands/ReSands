@@ -405,10 +405,26 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
 
 ## Side jobs and small open items (moved from CLAUDE.md on 30 Oct 2026, verbatim)
 
-  Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  Then light shafts (not FUN_00469C00: see "Light shafts" below; the mirror beam is
   something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
   X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
   Open in water: the mist around feet / pillars is missing natively (likely GFX particles of +0x88, which
   `pop_state_frame` lists but never draws; unproven).
+
+## Light shafts: FUN_00469C00 is the HUD, the shafts' path is still unknown (30 Oct, Mac, offline)
+
+- **FUN_00469C00 (list type 0x18) is the Jade STR text renderer**, not light shafts (decompiled 30 Oct:
+  `STR_pst_GetFontDesc`, `STR_ComputeFrame`, `STR_Effect_TreatAll`; per font page FUN_004B2000 sets the render state,
+  then a CNT + DIRECT + GIF tag `0x502F4...` (PRIM 0x5E: sprite, textured, alpha-blended; REGS ST RGBAQ XYZ2 ST XYZ2);
+  letters by FUN_0046A980 / FUN_0046AA80 at screen coordinates, Z 0, into per-page buffers at 0x6CC430). Its one entry
+  sits in list +0xB8 in 255 of the saves (`pop_state_frame` does not replay +0xB8). 185602: the life bar, sand tanks and
+  tutorial text are exactly what the native frame lacks. So it is **0.14 (HUD)**; the 16 Oct "light-shaft texture"
+  note was wrong. Natively it fits the P5 pattern (run the original, `ctx->pc == ra`, read the DMA range, rewind).
+- **The light shafts' path:** 092046 ("rays of light", 17 Oct) has empty lists in the save (0 draws offline: no use).
+  191059 (mirror cutscene): the beam is missing natively although every list entry is replayed (kinds 3, 4, 9, 10 in
+  +0x2C..+0x98), and no replayed draw lands there. So either a draw outside the element lists, or an element drawn
+  natively with nothing visible. Next: a POP_DMACAP chain (or `PS2X_GS_TRACE`) of the beam frame on the PC, then
+  match the beam's GS draws to their DMA source / caller. (`tools/chainpost.py` reads POP_DMACAP files only; a save's chain
+  converted to that format came out as noise.)
