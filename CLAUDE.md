@@ -51,7 +51,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
   moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend native offline (30 Oct, `docs/native_bugs.md`). Left: ZoomSmooth 0
-  (= the Haste power; Spiral, ZoomSmooth 1, Vision unused in retail), the moon halo, retry `-NativeLate`.
+  (= the late-game power of haste; Spiral, ZoomSmooth 1, Vision unused in retail), the moon halo, retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -70,7 +70,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed), in order:**
   1. Native ZoomSmooth 0 (FUN_004AD900, CAfterEffect +0x120 bit 7, param +0x18) from the disassembly, as MotionSmooth;
-     test offline by forcing the flag in `pop_state_frame` until the user has a GS-only save during Haste.
+     test offline by forcing the flag in `pop_state_frame` until the user has a GS-only save while the power of haste is active (late game).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".

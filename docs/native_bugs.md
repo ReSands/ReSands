@@ -470,7 +470,7 @@ bit: 1 -> +0x120.0 FixBlend, 4 -> .5 MotionSmooth, 5 -> .7 ZoomSmooth 0, 6 -> +0
 0x16 -> .7 SmartBlur, 0x18 -> +0x122.2 Spiral; no id sets +0x122.0), called by FUN_004AB440 (id, on) from the engine and
 Gsp_AE_MASTER 0x4AB480 (id, on, param, value; via FUN_001C2DC0) from compiled AI code and from the event system
 (FUN_001AC140, event function 0x3CF0, id from track data; reached from EVE_AddTime). Call sites with a constant id:
-**ZoomSmooth 0 = Haste**: on in FUN_00485700 (the GFX type 0x1A object, 2 saves), strength ramped by
+**ZoomSmooth 0 = Haste** (the late-game "power of haste" sand power, user 30 Oct; save during it): on in FUN_00485700 (the GFX type 0x1A object, 2 saves), strength ramped by
 GFX_SOT_DoHasteEffect 0x485B40 (param 0 = 0.1 x time); **FixBlend = slow motion** (GFX_SOT_DoSlowMotionEffect 0x485EC0,
 FIX up to 0.7); MotionSmooth (id 4) only switched off in code; Pinch from the rewind, sand waves / rings, LocalFreeze,
 Teleport_Pinch. **Spiral (0x18) is only ever switched off** (0x485674, 0x48661C; FUN_00486000 sets its params, never
