@@ -293,3 +293,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   unmasked frames (the rewind): each GS blit truncates (`texel * colour >> 7`, bilinear, FIX), ~0.5 per tap, and a
   9-tap kernel over 5 levels compounds it. Masked frames hid it (bright, small areas). Fitting the parameter first
   (FIX ~0.72x of the saved value, the same ratio on three saves) pointed at a systematic factor, not a scene bug.
+- **A capped why-log can look like silence.** The instanced-lightmap why-line stopped after 20 lines, all printed in
+  the frames right after a load, so a 25 s boot's steady state showed an ender "without a reason" (30 Oct). Before
+  calling a refusal silent, grep the whole log for every why-line of that path, not only its last lines; log once per
+  distinct cause rather than the first N.
