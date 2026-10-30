@@ -115,6 +115,32 @@ keeps only what carries over to other projects.
   `CJMeshElementRef::Display` also switch the VU1 driver (MPG upload) before skinned draws; skipping them for a
   measurement left the wrong program loaded and every save fell to ~7 fps. Decompile before skipping.
 
+Borrowed 30 Oct 2026 from Matt Pocock's agent skills (github.com/mattpocock/skills, MIT: `diagnosing-bugs`,
+`writing-for-agents`, `handoff`), kept where they fit a recomp:
+
+- **The always-loaded file is paid for on every turn.** `CLAUDE.md` (and the memory index) go into every
+  request whether or not a line is used; a topic doc costs nothing until it is opened. So the status file holds
+  pointers, each saying what the doc covers and when to open it ("`docs/native_bugs.md`: open bugs, steps per
+  milestone"), plus what every session needs. A rule only some tasks need goes into that task's doc.
+- **Don't cache what the agent can look up.** Script flags (`-Help`, the `param` block), file lists, git
+  history and function addresses already living in a header are cheaper to read when needed than to carry in
+  the status file. Keep there what nothing else records: the reasons, gotchas and unwritten conventions.
+- **Prune for sediment and no-ops.** Every session adds a line; few remove one. When finishing a milestone,
+  delete status lines that are done, stale, or that the model would follow anyway; delete whole sentences
+  rather than trimming them. One place per fact: a second copy goes stale and costs tokens twice.
+- **Handoffs point, they don't copy.** At a session boundary, write the next step and its done-criterion, and
+  name the docs, commits and saves by path instead of restating them.
+- **Build a red/green loop before theorising about a bug.** One command, run once already, that drives the real
+  bug path and checks the exact symptom (a save + `.glitch` frame + score, a byte compare), deterministic and
+  as fast as possible. Reading code to build a theory before that command exists is usually wasted context.
+  Then cut the repro down until every remaining part matters.
+- **Rank 3-5 falsifiable hypotheses before probing**: "if X is the cause, changing Y makes it vanish". One
+  probe per prediction, one variable at a time. Tag temporary logs with a unique prefix (`[DBG-a4f2]`) so
+  they can be grepped and removed; never "log everything and grep".
+- **Turn a fixed bug's repro into a regression check** where a real seam exists (for us: a gate line in the
+  nightly render gate, a byte-match test); if there is no good seam, write that down instead. State the
+  confirmed cause in the commit message.
+
 ## start-job.ps1 arguments over plain SSH (19 Oct 2026)
 
 `ssh pc "... start-job.ps1 -Script x.ps1 -Arguments '-World'"` goes through cmd.exe, which keeps the single

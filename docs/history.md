@@ -1,6 +1,6 @@
 # Project history (moved from CLAUDE.md on 17 Oct 2026)
 
-Dated session logs, old status blocks and superseded plans, verbatim. Current status, rules and the working reference stay in `CLAUDE.md`; background material is in `docs/reference.md`. Section order is as it was in CLAUDE.md.
+Dated session logs, old status blocks and superseded plans, verbatim. Current status and rules stay in `CLAUDE.md`; background material and the full working reference (since 30 Oct) are in `docs/reference.md`. Section order is as it was in CLAUDE.md.
 
 ## First recompile results (11 Oct 2026, PS2Recomp `2c5fbb9`)
 
@@ -785,3 +785,80 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   of 11 saves; reviewed, fixes in 4166f61), live path written but off (`POP_NATIVE_P5=1`, not run in the game, not
   on the PC yet: bundle + `-Fast` after the 29 Oct evening bug checks). Bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`.
+
+## Moved from CLAUDE.md on 30 Oct 2026 (status block before the context trim; verbatim)
+
+- **Where we are.** Native renderer at roadmap 0.12, on by default in `play.ps1` (desktop shortcut "PoP 60 fps";
+  `-NoNativeWorld/-NoNativeCharacters/-NoNativeTranslucent/-NoNativeShadows` turn parts off): static world, lit
+  statics, characters, translucents, shadows, sprites via the P9 port. The late lists (+0x88/+0xA8, particles) stay
+  on the GS (`-NativeLate` turns them on; drawn natively they made glows pop). Details `docs/native_renderer.md`,
+  bugs `docs/native_bugs.md`.
+- **Renderer audit (`docs/renderer_audit.md`): all five steps done 27 Oct.** Open on purpose: item 11 (hybrid
+  boundary, 0.2); items 12/13 measure-only (worker ~3.7 ms per frame, the GS thread waits nearly all of it, no fps
+  cost at 60; texture count/MB now end the `[pop:world]` stats line: read growth from a long `play.ps1` log). The
+  nightly `render` gate (blend test + 11 GS-only saves, `tools/nightly/render_gate.txt`) guards native output;
+  **reference saves must be GS-only** (saves made with native on hold native pixels). 0.13 candidates the gate showed
+  (moon halo 145139, light patch 155110, sand haze 115853): `docs/native_bugs.md` step 4. Blending with As > 0x80:
+  the user's call at 0.13.
+- **Still needed for 0.1:** crash 1 (fix 3b80b66; close after a fight-heavy session without `missing-target`).
+  Crash 2 is off the list (user, 26 Oct): watched, full dump on a freeze; no speculative emulated-sound fixes.
+  Borrowed fixes placed by milestone (MOVZ/MOVN patch 43 and small screenshots patch 44 built 29 Oct):
+  `docs/roadmap.md`.
+- **Bugs before 0.13: done 29 Oct evening** (`docs/native_bugs.md`). N13/N14/N16 baths flicker fixed (ae260d9:
+  blended/Z-less draws need a pure frame; f8daecb: draws without depth write test `POP_NATIVE_DECAL_ZBIAS`=32 GS Z
+  units nearer), checked by the user in game. N15 is in the GS-only run too: revisit on real PS2 hardware (user).
+  **All performance (rewind dip 155110, fight fps, N6) waits until fully native, then optimised in one go (user).**
+  Rule kept: a bug caused by the hybrid frame is parked until 0.2; bugs in native code are fixed now. Bug checks:
+  `play.ps1 -Mode hybrid|gs|native -Save <name>`; locate with a `.glitch` capture + the user's red circle on a frame.
+- **Next: 0.13, wiring in the new layers** (agreed 29 Oct). P5 GFX particles: on by default (`POP_NATIVE_P5=0` off).
+  **Water (P6) done 29 Oct night** (`docs/native_renderer.md` "Water step 1-4"): offline full water (mask, the 256x256
+  refraction buffer rebuilt in mesh.frag from a mid-frame copy, colour pass, P6's own fog), live, on by default since 30 Oct
+  (`POP_NATIVE_P6=0` off; native only with `-NativeLate`), user check passed on fountain 202926. Not in the PC build yet.
+  Open: the mist around feet / pillars in
+  water is missing natively (likely GFX particles of +0x88, which `pop_state_frame` lists but never draws; unproven).
+  **Halos started 30 Oct** (`docs/native_renderer.md` "Native halos"): offline done, sun save 162621 10.6 -> 2.6; the moon
+  (145139) is too bright natively (GS hides it; needs a GS trace of a moon frame on the PC); not built or booted on the PC
+  yet. **Reviews 30 Oct, all done:** halos (8ede351, 22697b4: native halos were refused by a leftover sub-material),
+  water (3170ab5 + cddb051: water, halos, sprites, particles and the lit env pass sent with key 0, no longer filling the
+  kept-mesh cache), patches 43/44, ae260d9 (pure frame for blended draws), decal Z bias: no fixes needed for the last three.
+- **Next PC session (ask about the TV first), in order:**
+  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix are all new there).
+  2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one shot) with P5 on: any change in behaviour.
+  3. GS-only fountain save (gsref job, `tools/nightly/render_gate.txt` needs GS-only), add it as a `vu1` gate line (no gate
+     save has water yet).
+  4. GS trace (`PS2X_GS_TRACE`) of a moon frame, GS only, from 145139: the Z under the moon core at the halo test.
+  5. `-NativeLate` run at the fountain and the sun save 162621: the `[pop:world] halos:` line should show native > 0, and no
+     "kept meshes over budget" lines should appear.
+  6. Shut the PC down.
+  Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
+  Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
+  runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
+  X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+- **How we judge (`docs/lessons.md`):** the user's in-motion check with clock times is the reference for short or
+  camera-dependent effects; our GS emulation is not ground truth (PS2 videos / hardware are).
+- **Test loop.** Edit -> bundle to the PC -> `game\jobs\stnative.ps1` via `start-job.ps1` (-Fast build, 45 s boots of
+  184926 / 115837 / 115853 with R1 held; logs `game\recomp-sotc\stnative_<save>.log`), watched with
+  `tools/windows/watch-job.sh` under Monitor. Profiling a save: `tools\windows\profile-states.ps1 -States <save>`
+  (native on). User checks from a save: `play.ps1 -Env 'PS2X_STATE_LOAD_AT=120:states/<save>.state'`. Offline:
+  `tools/native/score_saves.sh`, `pop_state_frame --world`, viewer `--gsz`. Before any boot: ask about the TV (boots
+  ran at ~60 fps with it off on 27-28 Oct; check the fps lines) and make sure the user's game is closed
+  (`taskkill /f /pid`, then `tasklist`).
+- **Saves.** On the PC in `game\ps2\disc\states\`; Mac copies: `game/analysis/saves1025/` (115837, 115853),
+  `saves1025b/` (125052 chasm, 125331 / 125417 save point in a fight), `saves1025c/` (134636 / 134815 slowed enemies),
+  `saves1025d/` (145139 / 145142 save point pop), `saves1025e/` (baths), `saves1024b/play_20261024_184926.state`
+  (slow fight), GS-only references `gsref1027/`.
+- **VU1 ports:** every reachable VU1 program is ported (`tools/vu1port/ported/`; P4 and P5 pass whole-run chains but
+  are not in the game yet; `docs/native_renderer.md` "VU1 program inventory").
+- **DARE decomp (2.0 for 0.3, started 27-28 Oct night): `docs/decomp_dare.md`.** 79 of 669 byte-matched (29 Oct:
+  run 2's header requests fixed in the generator, sndCList template; near misses by hand; names in the Mac Ghidra
+  project). Queue resumes with the "Qwen DARE audio decomp" shortcut (the PC has the new prompt).
+- **PC build:** sotc patches 43 (MOVZ/MOVN) and 44 (640x448 shots) applied and built 29 Oct evening (full `-SkipGhidra`,
+  11.6 min: only the 392 changed generated files recompiled). Not booted yet: watch the first P5 boot for MOVZ/MOVN changes.
+- **Known limits:** save-state boots have no sound; runtime screenshots are the game in a corner of a 9600x5400 image
+  (shrink with `sips -Z 1600` before looking).
+
+Reasons for the 22 Oct decision (trimmed from CLAUDE.md's "Goal and approach" on 30 Oct 2026, verbatim): the PC
+renderer is x86 code tied to the PC engine's structures (a second recomp plus a state translation); OpenJade is a
+closed, unlicensed engine reimplementation (the user tried it: ugly console button icons, WASD prompts hard-coded,
+too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing to plug into a PS2 base).

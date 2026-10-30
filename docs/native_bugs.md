@@ -402,3 +402,13 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
 125331, 134528, 135513, 135609, the N1 capture saves (`n1_*`, `n1cap_*`), and the Mac's exact copies (`game/states_pc/`,
 `prof1019b/`, the `in/` and `ref/` copies). Freed 7.6 GB on the PC (left: 10.6 GB), 8.2 GB on the Mac.
 
+
+## Side jobs and small open items (moved from CLAUDE.md on 30 Oct 2026, verbatim)
+
+  Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
+  Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
+  runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
+  X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+  Open in water: the mist around feet / pillars is missing natively (likely GFX particles of +0x88, which
+  `pop_state_frame` lists but never draws; unproven).
