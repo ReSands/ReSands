@@ -451,7 +451,11 @@ colour, mode; 16 slots, count at +0x180) and queues a **kind 11** entry (type 0x
 CElementList::Render draws by calling FUN_004B4580 again. `pop_state_frame` neither replays +0xB8 nor kind 11.
 Census over 231 saves: two have one. 191358 (save-point white-out) full screen `7fffffff` mode 1; 192114 full screen
 `40000000` mode 1 (black at half). Natively this is one alpha-blended screen quad after the world, before the HUD;
-it belongs with the HUD layer (+0xB8 is also where the STR text sits, see "Light shafts").
+it belongs with the HUD layer (+0xB8 is also where the STR text sits, see "Light shafts"). **+0xB8 is the 2D pass:**
+PS2_After2D (0x4B4A00) -> FUN_004BBFC0 sets draw manager +0x28 = 1 and renders +0xB8, after the after-effects (glow,
+SmartBlur). The native renderer has no layer after its post effects (its overlay replaces the picture), so native fades
+need that 2D layer first (0.14 groundwork). Live, the GS draws +0xB8 over the injected native picture, so fades look
+right in play today; a native fade only matters once the GS is off (0.2).
 
 **2. CAfterEffect (0x6DF170; dispatcher FUN_004ABFC0, end of Display3DElements).** Retail keeps 9 of the prototype's
 effects (flag byte.bit -> prototype name -> retail): +0x120.7 ZoomSmooth(+0x18, 0) and +0x121.0 ZoomSmooth(+0x1C, 1)
