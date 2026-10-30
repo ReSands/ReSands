@@ -4985,6 +4985,11 @@ namespace pop_native_live
                          {0x004BDC80u, shadowZ, &g_origShadowZ},
                          {0x004AF140u, eraseAlpha, &g_origEraseAlpha},
                          {kShadowRtt, shadowRtt, &g_origShadowRtt},
+                         // the after-effects: only record and call the original unless POP_NATIVE_POST=1
+                         {0x004AE100u, colorDiffusion, &g_origGlow},
+                         {0x004AD900u, zoomSmooth, &g_origZoom},
+                         {0x004ADD80u, motionSmooth, &g_origMotion},
+                         {0x004A93C0u, smartBlur, &g_origHaze},
 #if POP_SPRITE_VU1
                          {0x004AA240u, haloDisplay, &g_origHalo},
                          {0x004AEA00u, pinchEffect, &g_origPinch},
