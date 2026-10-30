@@ -68,10 +68,12 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget";
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
-- **Next Mac session (offline, no PC needed):** 30 Oct list done (review fixed; rewind edges = glow convolution
-  taps, fixed; missing shadows / mist / 190506 / 195158 = offline replay limits, `docs/native_bugs.md`). As > 0x80 blending
-  done (`docs/renderer_audit.md` item 9; the dagger glow stays too bright, open). Open: thin strip at the right/bottom
-  edges of the rewind glow (GS trace of the level rectangles).
+- **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
+  resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
+  1. Dagger glow too bright natively (GS-only 115837, AddAlpha draw in +0x88, already too bright before the 30 Oct
+     blend fix): find what differs upstream (vertex colour / alpha of that draw vs the GS).
+  2. Thin bright strip at the right / bottom edges of the rewind glow (185807): likely GS bilinear reading past a
+     level's rectangle; needs the rectangles' layout (add a ColorDiffusion GS trace to the next PC session).
   Waiting on the PC / user: moon halo (PC step 4 GS trace), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
