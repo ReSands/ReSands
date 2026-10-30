@@ -479,8 +479,8 @@ initialiser at 0x4B0CF0 clears bits 0-14, sets 15 = SmartBlur; the only +0x122 s
 dead in retail. Spiral and ZoomSmooth 1 could still come from event-track data (function 0x3CF0); not scanned, and
 none in 231 saves, so both are parked as unused. MotionSmooth's switch-on is also data-driven (event tracks or AI). **The Pinch saves are the rewind saves** (155110, 115853, 1029 185650 / 185807 /
 185943): Pinch is the rewind's warp. The sand visions are movies (39 `vis_*.int` in MOVIEPS2.BIG, `docs/movies.md`), not an
-after-effect, so ZoomSmooth / Spiral / VisionEffect have unknown triggers: find what sets their flags before asking for saves. Not native:
-ZoomSmooth, Spiral, Vision (Pinch, MotionSmooth, FixBlend: sections below). Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
+after-effect (triggers of ZoomSmooth / Spiral / VisionEffect: above). Not native:
+ZoomSmooth 0 (Pinch, MotionSmooth, FixBlend: sections below). Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
 
 **Light-shaft lead ruled out (30 Oct):** GFX type 0x12 GFX_Sun_Render 0x464C40 (GFX_NeedGeom, GFX_Sun_ComputeRay) is
 not the beam. GFX_Render keeps its list head pointer at 0x674D04 (node: type byte +0, flags u16 +2, id +4, data +8,
