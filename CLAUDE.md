@@ -51,7 +51,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
   moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend + ZoomSmooth 0 (= the power of haste) native offline (30 Oct, `docs/native_bugs.md`; Spiral,
-  ZoomSmooth 1, Vision unused in retail). Left: the moon halo, retry `-NativeLate`, a GS-only haste save to judge ZoomSmooth.
+  ZoomSmooth 1, Vision unused in retail). Left: the moon halo, the frame-enders that keep halos / Pinch on the GS.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -65,7 +65,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   world mode never installed the halo / Pinch hooks (only the capture modes did); fixed 5804fc9. Live now: sun 162621 halos
   1388 calls, native 0 (frame impure from `ref +0x2c`); sand 115853 pinch 3, native 0 (impure from `mesh +0x98`); fountain
   ends at `gfx +0x88`. So halos / Pinch go native only once those frame-enders are native (next Mac task). Job `game/jobs/eve1030*.ps1`.
-- **Waiting on the user (PC):** a GS-only save while haste runs (ZoomSmooth 0); a fight-heavy session to close crash 1.
+- **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
+  blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
+- **Waiting on the user (PC):** a fight-heavy session to close crash 1 (running 30 Oct evening).
 - **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
   resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
   1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its

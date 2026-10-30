@@ -482,6 +482,7 @@ none in 231 saves, so both are parked as unused. MotionSmooth's switch-on is als
 185943): Pinch is the rewind's warp. The sand visions are movies (39 `vis_*.int` in MOVIEPS2.BIG, `docs/movies.md`), not an
 after-effect (triggers of ZoomSmooth / Spiral / VisionEffect: above). Not native:
 ZoomSmooth 0 (Pinch, MotionSmooth, FixBlend: sections below). Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
+**Judged 30 Oct evening** (user's GS-only saves `game/analysis/saves1030/`, flag +0x120.7 read from each: 174127, 174131, 174137 on, 174148 off; `pop_state_frame_vu1 --noglow`): 6.16 / 7.45 / 1.33 (letterbox) vs 6.09 off; the side-by-side shows the same radial blur, the difference is the HUD (0.14). 174131 is a render-gate line.
 
 **Light-shaft lead ruled out (30 Oct):** GFX type 0x12 GFX_Sun_Render 0x464C40 (GFX_NeedGeom, GFX_Sun_ComputeRay) is
 not the beam. GFX_Render keeps its list head pointer at 0x674D04 (node: type byte +0, flags u16 +2, id +4, data +8,
