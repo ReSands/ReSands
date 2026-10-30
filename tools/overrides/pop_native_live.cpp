@@ -1418,6 +1418,15 @@ namespace pop_native_live
                     ++g_lateStats.native;
                 return;
             }
+            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+            if (whyLog && g_worldPure && g_worldOpen)
+            {
+                // which refusal the per-record lines miss (sun 162621 ended purity at ref +0x2c without one)
+                static int logged = 0;
+                if (logged < 20 && ++logged)
+                    std::fprintf(stderr, "[pop:world] ref on the GS: ref %08x pass %u list +0x%x capturing %d stateOk %d\n", getRegU32(ctx, 4),
+                                 getRegU32(ctx, 6) & 0xFF, g_currentList, int(g_frameCapturing), int(worldStateOk(rdram)));
+            }
             worldOnGs(rdram, "ref");
             g_origRefDisplay(rdram, ctx, runtime);
         }
