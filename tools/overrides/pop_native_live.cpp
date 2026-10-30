@@ -535,7 +535,9 @@ namespace pop_native_live
             static uint32_t cachedList = 0, cachedCount = 0;
             ++g_texListStats.lookups;
             const uint32_t count = guestAny(rdram, 0x006CBC50u), list = guestAny(rdram, 0x006CBC58u);
-            const auto entryOk = [&](uint32_t pos) { return pos < count && guest16(rdram, list + 16 * pos + 10) == index; };
+            // in use only (+0xF bit 5, as TEX_List_GetTexture): free entries read as index 0 and would shadow texture 0
+            const auto inUse = [&](uint32_t pos) { return (guest8(rdram, list + 16 * pos + 0xF) & 0x20) != 0; };
+            const auto entryOk = [&](uint32_t pos) { return pos < count && guest16(rdram, list + 16 * pos + 10) == index && inUse(pos); };
             auto it = position.find(index);
             if (list != cachedList || count != cachedCount || it == position.end() || !entryOk(it->second))
             {
@@ -545,7 +547,8 @@ namespace pop_native_live
                 ++g_texListStats.rebuilt;
                 if (list && count < 8192)
                     for (uint32_t i = 0; i < count; ++i)
-                        position[guest16(rdram, list + 16 * i + 10)] = i;
+                        if (inUse(i))
+                            position[guest16(rdram, list + 16 * i + 10)] = i;
                 it = position.find(index);
             }
             const uint32_t registered = popTextureKey(index);
