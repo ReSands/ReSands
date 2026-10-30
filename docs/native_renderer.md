@@ -533,7 +533,8 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD
   missing). Worst: white-out/flash frames (191358: the game's frame is all white), the light pillars and the
   sand-cloud flash (native too weak), cutscene letterbox bars (2D), the mirror's light beam (191059: no
-  type 0x18 draw in that frame, so another path). Nothing broke since 17 Oct.
+  type 0x18 draw in that frame, so another path; 30 Oct: the beam is glow-mask meshes + ColorDiffusion, drawn
+  natively, see `docs/native_bugs.md` "Light shafts"). Nothing broke since 17 Oct.
 - **VU1 program inventory** (`tools/vu1inventory.py ELF [--native DIR] STATES`: each run of a save's last
   chain attributed to an ELF program by tracking MPG uploads; `game/analysis/play1019/vu1inventory.txt`,
   `play1017/vu1inventory.txt`). Numbered by ELF order (P0..P10):
@@ -618,7 +619,7 @@ Renderer, in order:
    particles test against it) - step 2 makes that moot.
 2. **Characters and particles native** (decoders exist; NEXT, see CLAUDE.md status): the GS stops drawing 3D.
 3. **Gaps**: water (P6 on VU1: Qwen port judged by the trace replayer), sprites (P9), shadows, halos, light
-   shafts / the mirror beam (191059: not type 0x18), full-screen flashes and white-outs, UV animation details.
+   shafts / the mirror beam (191059: not type 0x18; 30 Oct: glow-mask meshes, already native), full-screen flashes and white-outs, UV animation details.
 4. **2D**: HUD, menus, text, loading screens, letterbox bars, the movie picture.
 5. **GS off by default** (reference renderer toggle).
 Sound: (1) sound in save-state boots (enables offline sound work from saves); (2) map the DARE/UbiSound calls;
@@ -904,7 +905,7 @@ output words change; `--match <hex word>` picks the runs whose uploads hold a me
   Open: (1) the faceted mirrors looked darker than the game's when zoomed, but region means match (69/77/75 vs
   68/73/69): the facet-to-facet pattern differs a little; (2) the gold frame of the angled mirror (204108, top right)
   is missing before and after: not a lit static (no pass-4 draw in any 22 Oct save), another path (translucents?);
-  (3) the mirror-room light beam is a light shaft (not native yet: 0.13); its glow differs before/after; (4) save 192521's
+  (3) the mirror-room light beam is a light shaft (30 Oct: glow-mask meshes + ColorDiffusion, native); its glow differs before/after; (4) save 192521's
   game frame shows the orange-red sword of the 19:25 build (native injection with normals as colours), so it is no
   reference for the sword: judge the sword in game (memory-card slot 04).
 - **Mirror flicker fixed offline (22 Oct, ~22:00):** in game the mirrors flickered in first person while turning (user; save

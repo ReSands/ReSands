@@ -64,7 +64,7 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    too, unlike live play) and has no HUD, so 8-13 is normal for fights. Seen in the new side-by-sides (not fixed;
    candidates for 0.13): 145139 the moon blown out to a white blob natively (GS: disc with a soft halo; sprite halo
    in +0x88 or its glow mask), 155110 a bright light patch on the floor natively that the GS frame lacks
-   (light shaft?), 115853 the GS's sand particles / haze thicker than native.
+   (light shaft? no: glow, see "Light shafts"), 115853 the GS's sand particles / haze thicker than native.
    **First look 29 Oct (offline; none of the three can show in play today: +0x88, +0x98 and the glow stay on the
    GS live):** moon blob (145139) and floor patch (155110) are both the native **ColorDiffusion** (CPU reference,
    `postfx.h`) over-brightening a faint +0x98 mask. With `--noglow` the +0x98 draws change no colour (alpha-only is
@@ -413,7 +413,7 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
   Open in water: the mist around feet / pillars is missing natively (likely GFX particles of +0x88, which
   `pop_state_frame` lists but never draws; unproven).
 
-## Light shafts: FUN_00469C00 is the HUD, the shafts' path is still unknown (30 Oct, Mac, offline)
+## Light shafts: FUN_00469C00 is the HUD; the shafts are glow-mask meshes, already native (30 Oct, Mac, offline)
 
 - **FUN_00469C00 (list type 0x18) is the Jade STR text renderer**, not light shafts (decompiled 30 Oct:
   `STR_pst_GetFontDesc`, `STR_ComputeFrame`, `STR_Effect_TreatAll`; per font page FUN_004B2000 sets the render state,

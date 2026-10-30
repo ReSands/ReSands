@@ -274,3 +274,18 @@ mode boots the game check for an active display first, so a mistake like this ca
   strings, so `$r[0]` is 'a'[0]. Build the list first and narrow it with `$runs = @(,$runs[0])`; echo the run names before
   booting (29 Oct: a job booted without its save). Stop a job's game with `taskkill /f /pid` for each process and check
   `tasklist` before the next boot: `Stop-ScheduledTask` leaves the game (and a looping script's next run) going.
+
+## 30 Oct 2026
+- **Judge an effect with every pass that makes it on.** The mirror beam looked missing for days because the scores
+  ran with `--noglow`; its meshes write only the glow mask and ColorDiffusion makes the shaft. A "missing" effect may be
+  drawn by a pass that is switched off in the check.
+- **Find what draws a screen region offline:** render each draw alone (`POP_VIEW_ONLY=i-i`, ~0.2 s each), diff against
+  an empty render, and project each draw's vertices to a screen box (clip x model, as `frame_loader`'s halo copy does).
+  On-screen draws that change nothing are the suspects (FBMSK, alpha-only, blend).
+- **A function's texture is not its purpose.** The 16 Oct note "list type 0x18: light-shaft texture" sent a day of work to
+  the HUD's text renderer. Decompile and name a path (prototype names via `game/proto/analysis/retail_names_from_proto.tsv`)
+  before planning around it.
+- **Census a feature over every save before building it.** A few lines of Python over `popstate` (after-effect flags,
+  list kinds, the GFX list at 0x674D04) showed what is ever on: Pinch 8 saves, fades 2, Sun 0. Cheap, and it set the order.
+- Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` (as `tools/rebuild.sh`).
+  `tools/nightly/checks.py` has no `--help`: any argument runs the whole nightly.
