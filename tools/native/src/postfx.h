@@ -1,7 +1,7 @@
 // Post-processing passes of the game's CAfterEffect, as CPU reference implementations on the
 // rendered frame (RGBA8, alpha = the glow mask the frame's draws wrote). Written from the
 // decompiles (game/analysis/post/decomp/0046f680.c ColorDiffusion, decomp_proto/0046fbc0.c
-// ApplyConvolution) and the GS semantics of each blit: Cs = texel * vertex colour / 128, blends
+// ApplyConvolution) and the GS semantics of each blit: Cs = texel * vertex colour / 128 (truncated, as every blit), blends
 // clamped to 0..255 after every pass (COLCLAMP). A GPU version should be judged against these.
 #pragma once
 #include <algorithm>
@@ -44,7 +44,7 @@ namespace pop_postfx
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x)
                 for (int c = 0; c < 3; ++c)
-                    o.rgb[3 * (size_t(y) * w + x) + c] = src.bilinear((x + 0.5f) * sx, (y + 0.5f) * sy, c);
+                    o.rgb[3 * (size_t(y) * w + x) + c] = std::floor(src.bilinear((x + 0.5f) * sx, (y + 0.5f) * sy, c));
         return o;
     }
 
@@ -56,7 +56,7 @@ namespace pop_postfx
         const float wgt = float(std::clamp(15 + strength, 0, 255)) / 128.0f;
         Plane o = src;
         for (size_t i = 0; i < o.rgb.size(); ++i)
-            o.rgb[i] = std::min(255.0f, src.rgb[i] * wgt);
+            o.rgb[i] = std::min(255.0f, std::floor(src.rgb[i] * wgt));
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx)
             {
@@ -67,7 +67,7 @@ namespace pop_postfx
                         for (int c = 0; c < 3; ++c)
                         {
                             float &d = o.rgb[3 * (size_t(y) * o.w + x) + c];
-                            d = std::min(255.0f, d + src.at(x + dx, y + dy, c) * wgt);
+                            d = std::min(255.0f, d + std::floor(src.at(x + dx, y + dy, c) * wgt));
                         }
             }
         return o;
@@ -121,7 +121,7 @@ namespace pop_postfx
             const Plane up = resample(pyramid[size_t(l)], width, height);
             for (size_t i = 0; i < size_t(width) * height; ++i)
                 for (int c = 0; c < 3; ++c)
-                    full.rgb[3 * i + c] = std::min(255.0f, full.rgb[3 * i + c] + up.rgb[3 * i + c] * k);
+                    full.rgb[3 * i + c] = std::min(255.0f, full.rgb[3 * i + c] + std::floor(up.rgb[3 * i + c] * k));
         }
         for (size_t i = 0; i < size_t(width) * height; ++i)
             for (int c = 0; c < 3; ++c)

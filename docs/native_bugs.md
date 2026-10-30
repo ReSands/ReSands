@@ -490,6 +490,16 @@ frame is pure, as the halos, so with `-NativeLate`): the game's N x N grid of tr
 `frame_loader`); Z any value inside the view (no depth test). `pop_state_frame` calls it between the halos and the glow
 when +0x121 bit 4 is set. Offline, with the glow, against the game picture (Pinch off -> on): 115837 4.07 -> 2.91,
 115853 28.01 -> 25.20, 155110 29.67 -> 28.76, 1029 185650 32.32 -> 30.63, 185807 32.98 -> 32.27, 185943 35.79 -> 33.98
-(the high ones are an even brightness offset over the whole frame, the sand haze, not the warp). The warp is smooth,
+(the high ones are an even brightness offset over the whole frame, the sand haze, not the warp).
+**Rewind look resolved (30 Oct, Mac, offline):** during the rewind the game switches the glow to **mask 0, FIX 36-45
+(ramping), strength 0** (normal frames: mask 1, FIX 128, strength 4): the whole frame glows, which is the hazy rewind
+picture. Ours was ~1.4x too strong because `postfx.h` / `color_diffusion.comp` worked in floats; the GS truncates every
+blit (each convolution tap `texel * 15 >> 7`, each bilinear halving, each `Cs * FIX >> 7`), ~6% per level at these
+dark values, compounded over 5 levels. With the truncation, using the game's own FIX: 115853 25.20 -> 7.94, 155110
+28.76 -> 10.72, 1029 185650 30.63 -> 9.64, 185807 32.27 -> 13.28, 185943 33.98 -> 11.12. Every glow gate line got better
+(145139 the moon 10.76 -> 6.12: the glow-only moon blob was the same missing truncation). GPU shader = CPU reference
+(`pop_postfx_gpu_judge diffusion`, 6/6 exact). Left on the rewind saves: shadows under the characters missing natively,
+native brighter at the frame edges (glow sampling at the borders?). Not checked live (the glow runs natively only with
+`-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves), not looked at. The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).

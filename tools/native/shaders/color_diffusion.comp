@@ -40,11 +40,11 @@ void main()
     if (p.op == 0 || p.op == 3)
     {
         precise float sx = float(p.sw) / float(p.dw), sy = float(p.sh) / float(p.dh);
-        vec3 s = bilinear((float(pix.x) + 0.5) * sx, (float(pix.y) + 0.5) * sy);
+        vec3 s = floor(bilinear((float(pix.x) + 0.5) * sx, (float(pix.y) + 0.5) * sy)); // the GS truncates every blit
         if (p.op == 0)
             dst[i] = vec4(s, 0.0);
         else
-            dst[i].rgb = min(vec3(255.0), dst[i].rgb + s * p.k);
+            dst[i].rgb = min(vec3(255.0), dst[i].rgb + floor(s * p.k));
     }
     else if (p.op == 1)
         dst[i].rgb = min(vec3(255.0), dst[i].rgb * aux[i].r / 255.0);
@@ -55,7 +55,7 @@ void main()
         precise vec3 sum = vec3(0.0);
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx)
-                sum += at(pix.x + dx, pix.y + dy) * wgt;
+                sum += floor(at(pix.x + dx, pix.y + dy) * wgt);
         dst[i] = vec4(min(vec3(255.0), sum), 0.0);
     }
 }

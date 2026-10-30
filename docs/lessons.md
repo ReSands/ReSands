@@ -289,3 +289,7 @@ mode boots the game check for an active display first, so a mistake like this ca
   list kinds, the GFX list at 0x674D04) showed what is ever on: Pinch 8 saves, fades 2, Sun 0. Cheap, and it set the order.
 - Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` (as `tools/rebuild.sh`).
   `tools/nightly/checks.py` has no `--help`: any argument runs the whole nightly.
+- **Model the GS's integer maths in a reference pass.** ColorDiffusion in floats was ~1.4x too bright on dark,
+  unmasked frames (the rewind): each GS blit truncates (`texel * colour >> 7`, bilinear, FIX), ~0.5 per tap, and a
+  9-tap kernel over 5 levels compounds it. Masked frames hid it (bright, small areas). Fitting the parameter first
+  (FIX ~0.72x of the saved value, the same ratio on three saves) pointed at a systematic factor, not a scene bug.

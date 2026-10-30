@@ -47,7 +47,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
   Working on **0.13** (details: `docs/native_bugs.md` "Native Pinch" and "Flashes survey"): P5, P6 on by default
-  (user-checked); halos and Pinch (= the rewind's warp) done offline, not yet on the PC; light shafts need no new path
+  (user-checked); halos, Pinch (= the rewind's warp) and the rewind haze (= the unmasked glow, fixed by GS truncation
+  in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
   moved to 0.14 (user 30 Oct). Left: MotionSmooth, FixBlend, ZoomSmooth / Spiral / Vision, the moon halo, retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
@@ -58,7 +59,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
 - **Next PC session (ask about the TV first), in order:**
-  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch are new there).
+  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch, glow truncation are new there).
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
@@ -66,12 +67,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed), in order:**
-  1. The rest of the rewind look: the rewind saves (115853, 155110, 1029 185650 / 185807 / 185943) are 25-34 off the
-     game even with Pinch, an even brighter / hazier frame. Find what makes it (candidates: the sand cloud's GFX draws in
-     +0x88, the glow's strength) with the per-draw method in `docs/lessons.md` (30 Oct) and the after-effect census.
-  2. MotionSmooth (+0x120 bit 5, 9 saves) and FixBlend (+0x120 bit 0, 2 saves: 1024 200337, 1019 185803) natively, the
+  1. MotionSmooth (+0x120 bit 5, 9 saves) and FixBlend (+0x120 bit 0, 2 saves: 1024 200337, 1019 185803) natively, the
      Pinch pattern (fresh frame copy drawn back; `pinchRecord`); a gate line each if a GS-only save has them.
-  3. Find what sets ZoomSmooth (+0x120 bit 7 / +0x121 bit 0), Spiral (+0x122 bit 2) and VisionEffect (+0x122 bit 0):
+  2. Find what sets ZoomSmooth (+0x120 bit 7 / +0x121 bit 0), Spiral (+0x122 bit 2) and VisionEffect (+0x122 bit 0):
      xrefs to the writes of CAfterEffect 0x6DF170 +0x120..+0x122, so the user knows when to save (or they are unused).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
