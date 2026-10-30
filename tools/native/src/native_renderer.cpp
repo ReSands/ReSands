@@ -1937,6 +1937,8 @@ namespace pop_native
                 return false;
             m->recordPost(cb, m->targetColour.image, internalWidth, internalHeight);
         }
+        else
+            m->postPrevValid = false; // a skipped post chain leaves postPrev stale
         VkImage dst = m->swapImages[index];
         Impl::barrier(cb, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);

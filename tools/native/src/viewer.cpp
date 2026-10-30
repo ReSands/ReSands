@@ -934,7 +934,7 @@ int main(int argc, char **argv)
         frame.rgba = std::move(rgba);
         std::vector<pop_postfx::Blit> blits;
         if (after[0] & 1)
-            blits = pop_postfx::motionSmoothBlits(int(after[1]), int(after[2]), frame.w, frame.h, frame.w / 640);
+            blits = pop_postfx::motionSmoothBlits(int(after[1]), int(after[2]), frame.w, frame.h, std::max(1, frame.w / 640));
         if (after[0] & 2)
         {
             int pw = 0, ph = 0, pc = 0;
