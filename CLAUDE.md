@@ -46,7 +46,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 
 - **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
-  Working on **0.13** (table: `docs/native_bugs.md` "Native Pinch" and "Flashes survey"): P5, P6 on by default
+  Working on **0.13** (details: `docs/native_bugs.md` "Native Pinch" and "Flashes survey"): P5, P6 on by default
   (user-checked); halos and Pinch (= the rewind's warp) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
   moved to 0.14 (user 30 Oct). Left: MotionSmooth, FixBlend, ZoomSmooth / Spiral / Vision, the moon halo, retry `-NativeLate`.
