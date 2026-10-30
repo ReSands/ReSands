@@ -422,10 +422,10 @@ namespace pop_native_live
         // +0x88 (with nearly all GFX particles) and +0xA8, but only while the frame is "pure": the picture goes in
         // where the frame's 3D starts, so every draw left to the GS lands on top of every native one, and a native
         // late draw keeps the game's order only if no draw before it went to the GS (worldOnGs ends it). Display3DElements:
-        // ... +0x5C, shadows, +0x88, EraseAlphaBuffer, +0x98 (render state 0x44 = alpha only), +0xA8, halos. +0x98
-        // and EraseAlphaBuffer stay on the GS and write only alpha (the glow mask), so they leave the order of the
-        // colours alone; a +0xA8 draw goes native only if it writes neither Z (+0x98 tests against it) nor alpha
-        // (EraseAlphaBuffer would clear it). Census of 203 saves (entries): +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676,
+        // ... +0x5C, shadows, +0x88, EraseAlphaBuffer, +0x98 (render state 0x44 = alpha only), +0xA8, halos. While
+        // pure, +0x98 (the glow mask, some draws writing Z) is native too and EraseAlphaBuffer skipped (eraseAlpha); a
+        // +0x98 draw left to the GS writes only alpha, so it leaves the order of the colours alone; a +0xA8 draw goes
+        // native only if it writes neither Z nor alpha. Census of 203 saves (entries): +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676,
         // GFX 3,049, sprites 1,128, ref 923, water 76), +0x98 2,526 (mesh/ref), +0xA8 1,189 (all CJIdxMesh); only 37% of
         // the +0x88 entries come before its first sprite or water draw (both on the GS until 0.13).
         const bool g_worldLate = [] {
@@ -493,7 +493,7 @@ namespace pop_native_live
                 return false;
             const bool opaqueList = g_currentList == 200u || g_currentList == 0x2Cu || g_currentList == 0x3Cu;
             const bool prefixList = opaqueList || g_currentList == 0x68u || g_currentList == 0x78u || g_currentList == 0x4Cu;
-            const bool late = translucent && g_worldLate && g_worldPure && (g_currentList == 0x88u || g_currentList == 0xA8u);
+            const bool late = translucent && g_worldLate && g_worldPure && lateList(g_currentList);
             if (!(translucent ? prefixList || late : opaqueList))
                 return false;
             const uint32_t sub = guestAny(rdram, 0x70000034u);
@@ -4414,6 +4414,19 @@ namespace pop_native_live
             worldOnGs(rdram, "FUN_004BDC80");
             g_origShadowZ(rdram, ctx, runtime);
         }
+        // CAfterEffect::EraseAlphaBuffer (0x4AF140), called by Display3DElements before lists +0x68 and +0x98 (and by
+        // PS2_Clear): clears the frame's alpha with one GS sprite (FBMSK 0xFFFFFF). The injected picture already holds the
+        // frame's final native alpha (the +0x98 glow mask), so on the GS it would wipe it. While the frame is pure its alpha
+        // is the native one, which no draw before +0x98 writes (currentMaterial; the water clears its own), so the call is
+        // skipped; FUN_004B1D40 after it marks the render state for a full resend anyway.
+        PS2Runtime::RecompiledFunction g_origEraseAlpha = nullptr;
+        void eraseAlpha(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = getRegU32(ctx, 31);
+            if (g_worldLate && g_worldOpen && g_worldPure && ra >= kDisplay3D && ra < kDisplay3D + 0x1000u)
+                return; // like a stub: the dispatcher returns to the caller
+            g_origEraseAlpha(rdram, ctx, runtime);
+        }
 
         // live window: empties everything one frame's capture collected, for the next frame
         void resetFrameCapture()
@@ -4891,6 +4904,7 @@ namespace pop_native_live
                          {0x004584C0u, particles, &g_origParticles},
                          {0x004B80C0u, shadowList, &g_origShadowList},
                          {0x004BDC80u, shadowZ, &g_origShadowZ},
+                         {0x004AF140u, eraseAlpha, &g_origEraseAlpha},
                          {kShadowRtt, shadowRtt, &g_origShadowRtt},
 #if POP_SPRITE_VU1
                          {0x004AA240u, haloDisplay, &g_origHalo},
