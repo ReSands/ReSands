@@ -70,9 +70,13 @@ Keep this section short: finished work goes to the topic docs, old status blocks
   water is missing natively (likely GFX particles of +0x88, which `pop_state_frame` lists but never draws; unproven).
   **Halos started 30 Oct** (`docs/native_renderer.md` "Native halos"): offline done, sun save 162621 10.6 -> 2.6; the moon
   (145139) is too bright natively (GS hides it; needs a GS trace of a moon frame on the PC); not built or booted on the PC
-  yet. Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
+  yet. Halo and water reviews done 30 Oct (fixes 8ede351 and the `frameOnly` key-0 commit: water, halos, sprites, particles
+  no longer fill the kept-mesh cache). **Next PC session, in order:** bundle + `-Fast` build; boot check of patches 43/44 +
+  P5; make a **GS-only fountain save** (gsref job, as `tools/nightly/render_gate.txt` needs) and add it as a `vu1` gate line
+  (water review item 2: no gate save has water); GS trace of a moon frame (halo Z); `-NativeLate` play at the fountain
+  watching for "kept meshes over budget" (should be gone). Then light shafts (FUN_00469C00, list type 0x18; the mirror beam is
   something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
-  Watch: N8 / N11 in long sessions. Side jobs: `.glitch` compression, a `-Fast` rebuild that recompiled the whole
+  Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
   runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
   X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
 - **How we judge (`docs/lessons.md`):** the user's in-motion check with clock times is the reference for short or

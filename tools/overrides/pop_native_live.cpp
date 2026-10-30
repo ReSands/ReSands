@@ -217,6 +217,9 @@ namespace pop_native_live
             bool hasUvm = false;
             float uvm[6] = {1, 0, 0, 1, 0, 0};
             bool native = false; // POP_NATIVE_WORLD: drawn natively (its Display call skipped)
+            // geometry made anew each frame (water, halos, sprites, particles): sent with key 0, never kept by the renderer
+            // (as a content key it filled the 512 MB kept-mesh budget and forced whole-world resends; review 30 Oct)
+            bool frameOnly = false;
         };
         uint32_t g_frameSeq = 0;
         const bool g_noUvMatrix = std::getenv("POP_NATIVE_NOUVM") != nullptr; // A/B: no UV animation
@@ -1645,6 +1648,7 @@ namespace pop_native_live
                             bs.push_back(std::move(b));
                             DrawMaterial dm = currentMaterial(rdram);
                             dm.hasUvm = false; // particle program (VU 4): sprite-sheet UVs of its own
+                            dm.frameOnly = true;
                             g_frameRefs.emplace_back(std::move(bs), std::make_pair(model, dm));
                             // POP_NATIVE_WORLD with POP_NATIVE_LATE: drawn natively, the call skipped; FUN_004584C0 leaves
                             // the particle driver index at 0x70000080 (0 billboards, 1 oriented: read by the next SetParticleEnv)
@@ -2319,6 +2323,7 @@ namespace pop_native_live
             DrawMaterial dm = currentMaterial(rdram);
             dm.hasUvm = false;
             dm.constColour = dm.constAlpha = -1; // P9 writes RGBAQ itself
+            dm.frameOnly = true;
             if (logged <= 6)
                 std::fprintf(stderr, "[pop:native] sprite material: texture %08x flags %08x ref %08x\n", dm.textureKey, dm.flags, dm.ref);
             const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
@@ -2377,6 +2382,7 @@ namespace pop_native_live
                 DrawMaterial dm = currentMaterial(rdram);
                 dm.hasUvm = false;
                 dm.constColour = dm.constAlpha = -1; // P5 writes RGBAQ itself
+                dm.frameOnly = true;
                 const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
                 g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
                 std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
@@ -2478,6 +2484,7 @@ namespace pop_native_live
             DrawMaterial dm = currentMaterial(rdram);
             dm.hasUvm = false;
             dm.constColour = dm.constAlpha = -1; // P6 writes RGBAQ itself
+            dm.frameOnly = true;
             dm.ref = 0;
             const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
             std::vector<WorldRecord> recs;
@@ -2631,6 +2638,7 @@ namespace pop_native_live
             // (geometry, texture key, render state flags: 0x200 = no depth write, blend kind 6 + 0x1000 = Cs * Ad + Cd; Z test; FBMSK)
             const auto add = [&](pop_assets::Batch &&g, uint32_t k, uint32_t flags, uint32_t zTest, uint32_t fbmsk) {
                 DrawMaterial m; // no fog
+                m.frameOnly = true;
                 m.seq = g_frameSeq++;
                 m.textureKey = k;
                 m.flags = flags;
@@ -4043,7 +4051,7 @@ namespace pop_native_live
                         // posed (skinned) batches change every frame: key 0, drawn for this frame only
                         // shadow receivers too (their UVs and alpha follow the projector)
                         const uint64_t key = o[1] == 0   ? mix64(mix64(0x5354u, (uint64_t(g_elements[g_frameDraws[o[2]].first].serial) << 16) | bi), variant)
-                                             : o[1] == 1 || o[1] == 3 ? 0u
+                                             : o[1] == 1 || o[1] == 3 || mat.frameOnly ? 0u
                                                          : mix64(contentKey(b), variant);
                         putBytes(f, &key, 8);
                         tris += b.indices.size() / 3;
