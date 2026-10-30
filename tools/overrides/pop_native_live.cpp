@@ -223,6 +223,16 @@ namespace pop_native_live
         };
         uint32_t g_frameSeq = 0;
         const bool g_noUvMatrix = std::getenv("POP_NATIVE_NOUVM") != nullptr; // A/B: no UV animation
+        // the element's own sub-material for its UV matrix: CElementList::Render / FUN_004BA5C0 call FUN_004B5EC0(0x70000080,
+        // sub) for each element whose sub has a +8 word (mode word 0x70000080 = 2), but resend the render state (0x70000034)
+        // only when its flags / AREF words change, so two layers with the same flags and other scrolls share 0x70000034 (N22)
+        uint32_t g_uvSub = 0;
+        PS2Runtime::RecompiledFunction g_origUvMatrix = nullptr;
+        void uvMatrixSet(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_uvSub = getRegU32(ctx, 5);
+            g_origUvMatrix(rdram, ctx, runtime);
+        }
         // dedupe key bit for the alpha-only pass (list +0x98, render state 0x44 = 0xFF000000): the game
         // draws mask elements again there, depth-tested against the finished scene
         uint64_t alphaPassBit(uint8_t *rdram);
@@ -606,11 +616,12 @@ namespace pop_native_live
                 dm.constColour = 0x808080;
             if (dm.flags & 0x400)
                 dm.constAlpha = int32_t(guestAny(rdram, sub) >> 25);
-            if (const uint32_t w8 = guestAny(rdram, sub + 8); w8 && !g_noUvMatrix)
+            const uint32_t uvSub = guestAny(rdram, 0x70000080u) == 2u ? g_uvSub : 0u;
+            if (const uint32_t w8 = uvSub ? guestAny(rdram, uvSub + 8) : 0u; w8 && !g_noUvMatrix)
             {
                 // FUN_0044A440 / 0044A840 / 0044A540, reading the running scroll and angle the game
                 // has already advanced for this frame
-                const uint32_t wC = guestAny(rdram, sub + 0xC);
+                const uint32_t wC = guestAny(rdram, uvSub + 0xC), uvFlags = guestAny(rdram, uvSub + 4);
                 auto asf = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
                 float m[6];
                 m[0] = asf(w8 & 0xFFFE0000u);
@@ -618,14 +629,14 @@ namespace pop_native_live
                 m[1] = m[2] = 0;
                 m[4] = m[0] * asf(w8 << 16);
                 m[5] = m[3] * asf(wC << 16);
-                if (dm.flags & 0x40000000u)
-                    m[4] = guestF(rdram, sub + 0x14);
-                if (dm.flags & 0x80000000u)
-                    m[5] = guestF(rdram, sub + 0x18);
+                if (uvFlags & 0x40000000u)
+                    m[4] = guestF(rdram, uvSub + 0x14);
+                if (uvFlags & 0x80000000u)
+                    m[5] = guestF(rdram, uvSub + 0x18);
                 float sn, cs;
-                if (guest8(rdram, sub + 0x11) & 0x80)
+                if (guest8(rdram, uvSub + 0x11) & 0x80)
                 {
-                    const float a = guestF(rdram, sub + 0x1C);
+                    const float a = guestF(rdram, uvSub + 0x1C);
                     sn = std::sin(a);
                     cs = std::cos(a);
                 }
@@ -645,7 +656,7 @@ namespace pop_native_live
                 dm.hasUvm = true;
                 static int logged = 0;
                 if (logged++ < 8)
-                    std::fprintf(stderr, "[pop:native] UV matrix sub %08x flags %08x: %.3f %.3f %.3f %.3f + (%.3f, %.3f)\n", sub, dm.flags, dm.uvm[0],
+                    std::fprintf(stderr, "[pop:native] UV matrix sub %08x flags %08x: %.3f %.3f %.3f %.3f + (%.3f, %.3f)\n", uvSub, uvFlags, dm.uvm[0],
                                  dm.uvm[1], dm.uvm[2], dm.uvm[3], dm.uvm[4], dm.uvm[5]);
             }
             zoneFog(rdram, dm);
@@ -4986,6 +4997,7 @@ namespace pop_native_live
                          {0x004AF140u, eraseAlpha, &g_origEraseAlpha},
                          {kShadowRtt, shadowRtt, &g_origShadowRtt},
                          // the after-effects: only record and call the original unless POP_NATIVE_POST=1
+                         {0x004B5EC0u, uvMatrixSet, &g_origUvMatrix},
                          {0x004AE100u, colorDiffusion, &g_origGlow},
                          {0x004AD900u, zoomSmooth, &g_origZoom},
                          {0x004ADD80u, motionSmooth, &g_origMotion},
@@ -5064,6 +5076,9 @@ namespace pop_native_live
             g_origListRender = runtime.lookupFunction(0x004B9440u);
             if (g_origListRender)
                 runtime.replaceFunction(0x004B9440u, listRender);
+            g_origUvMatrix = runtime.lookupFunction(0x004B5EC0u);
+            if (g_origUvMatrix)
+                runtime.replaceFunction(0x004B5EC0u, uvMatrixSet);
             g_origGlow = runtime.lookupFunction(0x004AE100u);
             if (g_origGlow)
                 runtime.replaceFunction(0x004AE100u, colorDiffusion);

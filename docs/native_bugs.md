@@ -455,6 +455,16 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   - **User look, 193636 with `POP_NATIVE_POST=1` (30 Oct ~20:10): N24 fixed** ("much smaller and less bright").
   - **User look, 194005: N25 fixed** ("much less bright"). `POP_NATIVE_POST=1` is now the default in `play.ps1`
     (`-NoNativePost` opts out).
+  - **N22, user's in-motion check: ours** (native with the post chain: still hops between two animations; `gs` mode
+    193355: no hopping). The user circled x 165-245, y 360-430 of the 193355 frame: the foot of the left wall at the water, under the left ledge.
+    **Cause (offline, 30 Oct):** draw 418 of the save's frame, the canal-wall caustic (image 83, flags 0xC0040207: U and V
+    scroll from sub +0x14 / +0x18, advanced by FUN_0044A840 inside DoComputeAndSetUVMatrix, once per frame per sub).
+    `currentMaterial` took the UV matrix from the render state's sub (0x70000034), which CElementList::Render resends
+    only when the flags / AREF words change; the UV matrix is per element (FUN_004B5EC0(0x70000080, element sub) when
+    the mode word is 2, via FUN_004BA5C0 or directly). Two caustic layers with equal flags and other scrolls next to each
+    other in the sorted list: the second got the first's scroll, and the order changes as the camera moves. Fix: a hook on
+    FUN_004B5EC0 keeps the element's sub (`g_uvSub`), used when 0x70000080 == 2; `state_frame.cpp` feeds both offline.
+    Render gate unchanged (offline always had the element's own sub). Pending: the user's in-motion recheck.
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.

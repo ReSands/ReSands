@@ -164,6 +164,9 @@ namespace
             {
                 wr32(0x70000034u, sub);
                 wr32(0x70000030u, material);
+                // the UV mode FUN_004BA5C0 sets (2 = this sub's UV matrix, FUN_004B5EC0) and the sub that call records
+                wr32(0x70000080u, sub && rd32(sub + 8) ? 2u : 1u);
+                pop_native_live::g_uvSub = sub;
                 wr32(0x70000084u, zone);
                 // DoChangeFogColor: the zone colour (table 0x70000470); SetBlending sends it as FOGCOL
                 // except for blend kinds 4, 5, 6 and 0xF (0)
@@ -233,6 +236,7 @@ namespace
             const uint32_t kind = w1 & 0xF, matrix = (w1 & 0x3FFF) >> 4, texture = ((w1 >> 16) & 0xFFF) >> 2;
             wr32(0x70000000u, 0x30284u);
             wr32(0x70000008u, texture);
+            wr32(0x70000080u, 1u); // CLMElementList::Render sets its own UV mode (FUN_004B7500): no UV matrix
             wr32(0x70000084u, ((w1 >> 14) & 0xF) + 0x10);
             setArgs(*ctx, element, matrix, 3);
             if (kind == 9)
