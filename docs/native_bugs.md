@@ -529,9 +529,14 @@ level sits at x 0 of the shared buffer, level 0 (320x224) at y 0; level n's halv
 convolved into V(n) = the h(n) rows just above it. RectBlitter: CLAMP_1 REGION_CLAMP = the source rect exactly (our
 GS clamps both bilinear taps, so nothing is read past it), SCISSOR_1 = dest x..x+w, y..y+h (inclusive: one pixel
 more; the +1 convolution taps write C(n)'s top row while later taps read it, ~2% of a bottom row into the level's top
-rows: not modelled), XY -0.5 px on both corners, UVs without inset (= our centre-to-centre `resample`). **Left:** a
-vertical ramp in the rewind frames, native -3 at the top to +12 at the bottom (185807, per-row mean of native - GS);
-not looked at yet. Not checked live (the glow runs natively only with
+rows: not modelled), XY -0.5 px on both corners, UVs without inset (= our centre-to-centre `resample`). **Vertical
+ramp (185807, native -3 at the top to +12 at the bottom) = the missing shadows (30 Oct, Mac):** only 185807 has it
+(185650 / 185943, same room: no trend, within +-5 per 32-row band). The unglowed native floor is the same in all three
+(104-105) and the native wall matches the GS (ratio 1.005), but the GS floor is darker in 185807 only (lower-left
+199 vs native 217, under the characters 115 vs 129): a GS / native ratio image shows the characters' hard shadows plus
+a large soft patch with diagonal streaks on the lower-left floor (a projected shadow), all on the floor, which fills
+the bottom of the frame. `POP_NATIVE_SHADOWS=1` changes nothing (8.43: no filled projector in the save, see above).
+Not a renderer bug; judge it live or on a save caught before the shadow pass. Not checked live (the glow runs natively only with
 `-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves): **empty draw lists in the save** (0 draws offline, saved after the game cleared them), cannot be judged offline; nothing broken (30 Oct). The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).

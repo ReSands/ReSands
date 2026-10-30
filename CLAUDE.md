@@ -75,8 +75,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its
      centre. Waits on PC step 4's traces: the 115837 census trace (draw's RGBAQ / FOG / ALPHA; the alpha is
      animated and matches: `docs/renderer_audit.md` item 9 "Dagger glow").
-  2. Rewind frames: native -3 at the top to +12 at the bottom (185807; the "edge strip" was not a defect:
-     `docs/native_bugs.md` "Rewind look resolved"). Not looked at yet; offline.
+  2. Rewind ramp (185807) closed 30 Oct: the GS frame's floor shadows, which the save can't replay
+     (`docs/native_bugs.md` "Rewind look resolved"). Nothing left offline for the rewind.
   Waiting on the PC / user: moon halo (PC step 4), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
