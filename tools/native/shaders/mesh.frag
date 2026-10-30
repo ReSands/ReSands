@@ -84,7 +84,8 @@ void main()
     }
     if ((flags & 8) != 0 && t.a < 0.02)
         discard;
-    vec3 base = t.rgb * vColour.rgb;
+    // GS texture function: Ct x Cv >> 7 saturates at 0xFF before fog and blending (Cv above 0x80 on a white texel)
+    vec3 base = min(t.rgb * vColour.rgb, vec3(1.0));
     // params.z: lightmap strength (0 = none); characters' shading pass uses the same blend with
     // As = texel alpha * Af / 128 (VU1 program 0x4DD300 mode 3), so strength = Af / 128
     if (pc.params.z > 0.0) {

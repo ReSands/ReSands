@@ -120,6 +120,21 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    125052, 202314, 155110 further); gate within +-0.02. The losses are the Prince's dagger glow (115837), already
    brighter than the GS before the change: something else in that draw is off (its colour or alpha upstream), not the
    blend. Open: that dagger glow.
+   **Dagger glow (30 Oct, Mac, offline):** the glow is element 00b3ea30 pass 0 (static driver, "from packet"), a 0.4 x 0.4
+   billboard of two 6-vertex strips in +0x88, flags 00066607 (AddAlpha, local alpha), texture 2e011835 (white RGB, a
+   radial alpha), vertex colours **above 0x80** (edges 31 43 A9, centre 98 A4 DE). GS rule: Cs = Ct x Cv >> 7 saturates
+   at 0xFF before fog and blending; `mesh.frag` did not clamp, so the white texel gave Cs up to 1.73 (blue-purple, too
+   bright). Fixed: `base = min(t.rgb * vColour.rgb, 1.0)`. The glow is now neutral like the GS's; scores over the 11
+   GS-only saves equal or better except 162621 10.79 -> 11.12 (its sky was overshooting where the GS draws the sun glow
+   we lack; its vu1 line, with halos, 2.62 -> 2.60; gate line raised). **Still open:** the native glow is still
+   brighter than the GS picture at its centre (159 150 137 vs 118 111 99); this save can't settle it (no shadows
+   offline, the GS picture has its own post-processing). Facts from the save's last DMA chain (record 3919): the GIF
+   tag has FGE on (fog F = clamp(264.47 - 4.18 w, 102, 255), same as the native draw's), and the header's STROW / STMASK
+   (row (F3, E9, D3, **0x70**), mask 0x40404040: alpha from the row) gives the GS **Av = 0x70**, while
+   `currentMaterial` uses sub-material word 0 >> 25 = **116** (3.5% more). Next: the 27 Oct GS trace of this save
+   (PC `game\jobs\gscensus\20261025_115837.txt`) has the draw's RGBAQ / FOG / ALPHA; find where 0x70 comes from.
+   Debug switches added to `pop_native_view`: `POP_VIEW_LIST` now prints each material and each draw's fog,
+   `POP_VIEW_VERTS=<draw>` a draw's triangles and vertices.
 
 10. **GS features not modelled or checked** (low-medium): DTHE, mipmaps (TEX1 MXL; sampler `maxLod = 0`), PABE, FBA,
    region clamp modes. One `PS2X_GS_TRACE` per area type through `gsvram.py`: which values the game uses.

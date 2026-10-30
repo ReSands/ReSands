@@ -60,7 +60,8 @@ int main()
         std::fprintf(stderr, "init: %s\n", error.c_str());
         return 2;
     }
-    const int sources[][4] = {{200, 100, 40, 0x60}, {255, 30, 128, 0x20}}; // Cs, As
+    // Cs, As; Cs above 255 = a vertex colour above 0x80 on a white texel, which the GS saturates at 0xFF (mesh.frag)
+    const int sources[][4] = {{200, 100, 40, 0x60}, {255, 30, 128, 0x20}, {400, 300, 100, 0x60}};
     const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     int failed = 0;
     for (const Case &k : kCases)
@@ -93,7 +94,7 @@ int main()
             int want[3];
             for (int i = 0; i < 3; ++i)
             {
-                want[i] = gsBlend(k.alpha, k.fix, s[i], s[3], kCd[i], kAd);
+                want[i] = gsBlend(k.alpha, k.fix, std::min(s[i], 255), s[3], kCd[i], kAd);
                 ok &= std::abs(p[i] - want[i]) <= 2; // float blending vs the GS's integer steps
             }
             std::printf("%-22s Cs %3d %3d %3d As %02X: got %3d %3d %3d, GS %3d %3d %3d %s\n", k.name, s[0], s[1], s[2], s[3],

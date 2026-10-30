@@ -150,6 +150,9 @@ namespace pop_native
                             mat.legacyBlend = mat.alphaMode == AlphaMode::Blend;
                         }
                         materials[key] = r.addMaterial(mat);
+                        if (std::getenv("POP_VIEW_LIST"))
+                            std::printf("material %d: image %d, flags %08x, word %08x, z %u, fbmsk %08x\n", materials[key], image,
+                                        mode, word, zTest, fbmsk);
                     }
                     material = materials[key];
                 }
@@ -209,6 +212,17 @@ namespace pop_native
                         continue;
                     }
                 mesh.material = material;
+                // debug: POP_VIEW_VERTS=<draw> prints that draw's vertices (position, UV, colour x 0x80)
+                static const char *verts = std::getenv("POP_VIEW_VERTS");
+                if (verts && std::atoi(verts) == int(i))
+                {
+                    for (size_t k = 0; k + 2 < mesh.indices.size(); k += 3)
+                        std::printf("draw %u batch %u: triangle %u %u %u\n", i, b, mesh.indices[k], mesh.indices[k + 1], mesh.indices[k + 2]);
+                    for (const Vertex &v : mesh.vertices)
+                        std::printf("draw %u batch %u: pos %.2f %.2f %.2f uv %.3f %.3f rgba %.1f %.1f %.1f %.1f\n", i, b, double(v.pos[0]),
+                                    double(v.pos[1]), double(v.pos[2]), double(v.uv[0]), double(v.uv[1]), double(v.colour[0] * 128),
+                                    double(v.colour[1] * 128), double(v.colour[2] * 128), double(v.colour[3] * 128));
+                }
                 vertexTotal += nv;
                 triTotal += ni / 3;
                 if (v7 && key) // key 0: this frame only (posed characters), an ordinary mesh
@@ -228,8 +242,10 @@ namespace pop_native
             }
             static const bool listDraws = std::getenv("POP_VIEW_LIST") != nullptr;
             if (listDraws)
-                std::printf("draw %u: %u batches, material %d, model t (%.1f %.1f %.1f)\n", i, nb, material, double(d.model[12]),
-                            double(d.model[13]), double(d.model[14]));
+                std::printf("draw %u: %u batches, material %d, model t (%.1f %.1f %.1f), fog %.2f %+.4f w [%.0f %.0f] colour %.0f %.0f %.0f\n", i,
+                            nb, material, double(d.model[12]), double(d.model[13]), double(d.model[14]), double(d.fogA), double(d.fogB),
+                            double(d.fogMin), double(d.fogMax), double(d.fogColour[0] * 255), double(d.fogColour[1] * 255),
+                            double(d.fogColour[2] * 255));
         }
         if (v5)
         {
