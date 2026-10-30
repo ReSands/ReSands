@@ -465,7 +465,19 @@ MotionSmooth; +0x120.0 an inline blend of buffer 1 over the frame, ALPHA (Cs - C
 Gone in retail: BrightnessContrast, DepthBlur(Near), Blur, Remanance, RadialBlur, ClearBorderExtend,
 ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8** (sand-haze saves 115837, 115853,
 155110, 1029 185650 / 185807 / 185943, ...), **MotionSmooth 9**, **FixBlend 2** (24 Oct 200337 0.52, 19 Oct 185803
-0.70); ZoomSmooth, Spiral, Vision in none. **The Pinch saves are the rewind saves** (155110, 115853, 1029 185650 / 185807 /
+0.70); ZoomSmooth, Spiral, Vision in none. **Triggers (30 Oct, from the ELF):** all flags go through SetEffectStatus 0x4AD300 (effect id ->
+bit: 1 -> +0x120.0 FixBlend, 4 -> .5 MotionSmooth, 5 -> .7 ZoomSmooth 0, 6 -> +0x121.0 ZoomSmooth 1, 0x11 -> .4 Pinch,
+0x16 -> .7 SmartBlur, 0x18 -> +0x122.2 Spiral; no id sets +0x122.0), called by FUN_004AB440 (id, on) from the engine and
+Gsp_AE_MASTER 0x4AB480 (id, on, param, value; via FUN_001C2DC0) from compiled AI code and from the event system
+(FUN_001AC140, event function 0x3CF0, id from track data; reached from EVE_AddTime). Call sites with a constant id:
+**ZoomSmooth 0 = Haste**: on in FUN_00485700 (the GFX type 0x1A object, 2 saves), strength ramped by
+GFX_SOT_DoHasteEffect 0x485B40 (param 0 = 0.1 x time); **FixBlend = slow motion** (GFX_SOT_DoSlowMotionEffect 0x485EC0,
+FIX up to 0.7); MotionSmooth (id 4) only switched off in code; Pinch from the rewind, sand waves / rings, LocalFreeze,
+Teleport_Pinch. **Spiral (0x18) is only ever switched off** (0x485674, 0x48661C; FUN_00486000 sets its params, never
+its status), **ZoomSmooth 1 (id 6) has no call site**, **VisionEffect (+0x122.0) has no writer at all** (the
+initialiser at 0x4B0CF0 clears bits 0-14, sets 15 = SmartBlur; the only +0x122 store is SetEffectStatus case 0x18):
+dead in retail. Spiral and ZoomSmooth 1 could still come from event-track data (function 0x3CF0); not scanned, and
+none in 231 saves, so both are parked as unused. MotionSmooth's switch-on is also data-driven (event tracks or AI). **The Pinch saves are the rewind saves** (155110, 115853, 1029 185650 / 185807 /
 185943): Pinch is the rewind's warp. The sand visions are movies (39 `vis_*.int` in MOVIEPS2.BIG, `docs/movies.md`), not an
 after-effect, so ZoomSmooth / Spiral / VisionEffect have unknown triggers: find what sets their flags before asking for saves. Not native:
 ZoomSmooth, Spiral, Vision (Pinch, MotionSmooth, FixBlend: sections below). Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
@@ -479,8 +491,7 @@ So the beam is an element-list draw (resolved below).
 
 **Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
 Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
-sand areas), MotionSmooth / FixBlend, then ZoomSmooth / Spiral / Vision once their triggers are known (what writes +0x120 bit 7, +0x121 bit 0,
-+0x122 bits 0 and 2).
+sand areas), MotionSmooth / FixBlend, then ZoomSmooth 0 (the Haste power; Spiral, ZoomSmooth 1 and Vision are unused, see the triggers above).
 
 ## Native Pinch (30 Oct, offline; not yet live-checked)
 

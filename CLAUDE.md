@@ -50,8 +50,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   (user-checked); halos, Pinch (= the rewind's warp) and the rewind haze (= the unmasked glow, fixed by GS truncation
   in ColorDiffusion) done offline, not yet on the PC; light shafts need no new path
   (glow-mask meshes + ColorDiffusion, native with `-NativeLate`); full-screen fades and the HUD (list +0xB8, the 2D pass)
-  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend native offline (30 Oct, `docs/native_bugs.md`). Left: ZoomSmooth /
-  Spiral / Vision, the moon halo, retry `-NativeLate`.
+  moved to 0.14 (user 30 Oct). MotionSmooth + FixBlend native offline (30 Oct, `docs/native_bugs.md`). Left: ZoomSmooth 0
+  (= the Haste power; Spiral, ZoomSmooth 1, Vision unused in retail), the moon halo, retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -69,8 +69,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Next Mac session (offline, no PC needed), in order:**
-  1. Find what sets ZoomSmooth (+0x120 bit 7 / +0x121 bit 0), Spiral (+0x122 bit 2) and VisionEffect (+0x122 bit 0):
-     xrefs to the writes of CAfterEffect 0x6DF170 +0x120..+0x122, so the user knows when to save (or they are unused).
+  1. Native ZoomSmooth 0 (FUN_004AD900, CAfterEffect +0x120 bit 7, param +0x18) from the disassembly, as MotionSmooth;
+     test offline by forcing the flag in `pop_state_frame` until the user has a GS-only save during Haste.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".
