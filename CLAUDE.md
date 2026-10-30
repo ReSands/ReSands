@@ -54,8 +54,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ZoomSmooth 1, Vision unused in retail). Left: the moon halo, the frame-enders that keep halos / Pinch on the GS.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
-- **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
-  Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
+- **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
@@ -67,7 +66,6 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ends at `gfx +0x88`. So halos / Pinch go native only once those frame-enders are native (next Mac task). Job `game/jobs/eve1030*.ps1`.
 - **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
   blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
-- **Waiting on the user (PC):** a fight-heavy session to close crash 1 (running 30 Oct evening).
 - **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
   resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
   1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its

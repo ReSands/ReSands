@@ -6,7 +6,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 
 ## 0.x: playable, then native part by part
 
-- **0.1 = playable start to finish** with emulated graphics and sound (crash 1 fixed; crash 2, cause unknown and
+- **0.1 = playable start to finish** with emulated graphics and sound (crash 1 fixed, closed 30 Oct after a clean fight session; crash 2, cause unknown and
   seen once, taken off the list 26 Oct and watched through the play-through: on a freeze, take a full dump).
   Borrowed items for 0.1 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **MOVZ/MOVN write only the low 64 bits** (our recompiler copies 128; one line in
   `special_translator.cpp`; **written 29 Oct as sotc patch 43**, with MOVZ/MOVN cases in `tools/mmitest` that fail

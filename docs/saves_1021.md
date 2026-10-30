@@ -85,6 +85,8 @@ return address even when it lies in the next function (`docs/upstream_ps2recomp.
 **26 Oct:** the user's 25 Oct session `play_20261025_154156.log` (15:41-16:50, clean exit): no `missing-target`
 line. Fighting was short: two low-fps stretches (~15:44-15:47 and ~16:03-16:06), a few minutes in all, against
 crash 1's two hits at ~16 and ~23 min of play. Evidence for the fix, not proof.
+**30 Oct evening: closed.** The user's fight-heavy session `play_20261030_174337.log` (~20 min, 70,500 frames, normal
+`play.ps1`, clean exit): no `missing-target`, no error lines, fps avg 59.7. The class fix upstream stays open.
 
 ## Crash 2 (21 Oct 21:10, during combat)
 Log `play_20261021_1939.log`: fps 49-58 (a fight), then a quick-save at field 320965 with no "kept as" line and
