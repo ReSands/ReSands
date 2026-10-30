@@ -63,7 +63,10 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   census traces copied to `game/jobs/gstrace1030/`, `game/jobs/gscensus/`. TV off: boots still 60 fps. **Found:** live
   world mode never installed the halo / Pinch hooks (only the capture modes did); fixed 5804fc9. Live now: sun 162621 halos
   1388 calls, native 0 (frame impure from `ref +0x2c`); sand 115853 pinch 3, native 0 (impure from `mesh +0x98`); fountain
-  ends at `gfx +0x88`. So halos / Pinch go native only once those frame-enders are native (next Mac task). Job `game/jobs/eve1030*.ps1`.
+  ends at `gfx +0x88`. Later that evening: fountain's `gfx +0x88` fixed (599c632: recoloured textures count as ready;
+  2c35f94: `textureKey` took free TEX_List entries as texture 0, so the save-point column drew blocky; user: column looks
+  good now). Frame-enders left: `mesh +0x98` (glow-mask meshes writing Z: fountain, sand) and the sun's `ref +0x2c`
+  (not lightmap / texture / decode: cause unknown). Jobs `game/jobs/eve1030*.ps1`.
 - **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
   blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
 - **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
