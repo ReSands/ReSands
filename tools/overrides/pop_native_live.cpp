@@ -424,8 +424,8 @@ namespace pop_native_live
         // late draw keeps the game's order only if no draw before it went to the GS (worldOnGs ends it). Display3DElements:
         // ... +0x5C, shadows, +0x88, EraseAlphaBuffer, +0x98 (render state 0x44 = alpha only), +0xA8, halos. While
         // pure, +0x98 (the glow mask, some draws writing Z) is native too and EraseAlphaBuffer skipped (eraseAlpha); a
-        // +0x98 draw left to the GS writes only alpha, so it leaves the order of the colours alone; a +0xA8 draw goes
-        // native only if it writes neither Z nor alpha. Census of 203 saves (entries): +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676,
+        // +0x98 draw left to the GS writes only alpha, so it leaves the order of the colours alone (shortcut: a native
+        // +0xA8 alpha write then lands under it, not over; none seen). Census of 203 saves (entries): +0x88 17,750 (CJIdxMesh 8,898, mesh 3,676,
         // GFX 3,049, sprites 1,128, ref 923, water 76), +0x98 2,526 (mesh/ref), +0xA8 1,189 (all CJIdxMesh); only 37% of
         // the +0x88 entries come before its first sprite or water draw (both on the GS until 0.13).
         const bool g_worldLate = [] {
@@ -499,13 +499,6 @@ namespace pop_native_live
             const uint32_t sub = guestAny(rdram, 0x70000034u);
             if (!sub)
                 return false;
-            if (late && g_currentList == 0xA8u)
-            {
-                // neither Z (flag 0x200 = no depth write) nor alpha (FBMSK as currentMaterial computes it)
-                const uint32_t flags = guestAny(rdram, sub + 4);
-                const bool alpha = (flags & 0x60) == 0x40 || (flags & 0x28);
-                return (flags & 0x200) && !alpha;
-            }
             const uint32_t flags = guestAny(rdram, sub + 4);
             const bool opaque = ((flags >> 16) & 0xF) == 0 && !(flags & 0x200) && !(flags & 0x40) && guest8(rdram, 0x70000038u) &&
                                 guestAny(rdram, 0x70000044u) == 0xFFFFFFFFu;
