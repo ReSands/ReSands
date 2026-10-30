@@ -522,7 +522,7 @@ before it, so it has shadows). The entries stay in memory, but stale entries of 
 count can't be recovered (dump of the list memory, 30 Oct). Live shadows are native and user-checked (24 Oct).
 So no offline score includes shadows. Left: a thin strip at the right and bottom edges (likely GS bilinear reading past a
 level's rectangle into the shared buffer; needs the rectangles' layout from a GS trace). Not checked live (the glow runs natively only with
-`-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves), not looked at. The warp is smooth,
+`-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves): **empty draw lists in the save** (0 draws offline, saved after the game cleared them), cannot be judged offline; nothing broken (30 Oct). The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).
 
