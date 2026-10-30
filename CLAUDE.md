@@ -69,14 +69,26 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   (not lightmap / texture / decode: cause unknown). Jobs `game/jobs/eve1030*.ps1`.
 - **ZoomSmooth 0 (haste) judged 30 Oct:** GS-only saves `game/analysis/saves1030/` (174127/131/137 on, 174148 off): native
   blur matches the GS (vu1 --noglow 6.16 / 7.45 vs 6.09 off; the HUD is most of it); 174131 in the render gate.
-- **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
-  resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
-  1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its
-     centre. Waits on PC step 4's traces: the 115837 census trace (draw's RGBAQ / FOG / ALPHA; the alpha is
-     animated and matches: `docs/renderer_audit.md` item 9 "Dagger glow").
-  2. Rewind ramp (185807) closed 30 Oct: the GS frame's floor shadows, which the save can't replay
-     (`docs/native_bugs.md` "Rewind look resolved"). Nothing left offline for the rewind.
-  Waiting on the PC / user: moon halo (PC step 4), ZoomSmooth 0 score (a GS-only save while haste runs).
+- **0.13 plan (agreed 30 Oct evening; start here).** Goal: halos + Pinch native in play, then the user's in-motion check.
+  The PC was left on (no TV needed for these boots; jobs as `game/jobs/eve1030d.ps1`: `-Fast` build + 25 s save boots
+  with `-NativeLate`, `POP_NATIVE_WORLD_WHY=1` prints `purity ended:` / `no texture` / `instanced lightmap` lines).
+  1. (PC, quick) Sun 162621's `ref +0x2c` ender: opaque sub flags 0x7, no lightmap / texture / decode line, so the
+     refusal is elsewhere in `refDisplayRecord` / `worldFinish` (`pop_native_live.cpp` ~1320-1410): add a why-line at
+     each remaining `worldOk = false` / `return false`, boot 162621 once, fix. Then `[pop:world] halos:` native > 0.
+  2. (Mac, main task) +0x98 native: the glow-mask meshes write Z (sand 115853 sub flags 0x1440F, w44 0xFF000000) and
+     end purity at the fountain and sand. While pure: let `worldStateOk` accept +0x98 (alpha-only material: fbmsk
+     0x00FFFFFF, Z write per flags 0x200), skip the GS EraseAlphaBuffer (0x4AF140, called before +0x98 in
+     Display3DElements; clears alpha with one sprite) and clear the native alpha instead; check the injected
+     picture carries alpha so the GS glow still reads the mask. Light shafts come with it. Notes:
+     `docs/native_renderer.md` "Lists after the shadows". Review before the PC; test: 115853 `pinch:` native > 0,
+     202926 ends later than `mesh +0x98`; then screenshots vs `-Mode gs` (as `eve1030e.ps1`).
+  3. (Mac) Moon halo too bright natively (145139): read the GS Z under the moon core at the halo test from
+     `game/jobs/gstrace1030/20261025_145139.txt` (`tools/gsvram.py`; `docs/native_renderer.md` "Native halos").
+  4. (Mac) Dagger glow brighter at its centre: the draw's RGBAQ / FOG / ALPHA in `game/jobs/gscensus/20261025_115837.txt`
+     (`docs/renderer_audit.md` item 9).
+  5. (PC + user) In-motion check: halos (sun 162621, torches, save point) and the Pinch warp (sand save), `play.ps1
+     -Mode native -Save ...`; then the user decides whether `-NativeLate` becomes the default (closes 0.13).
+  End of a session with the PC on: shut it down (`shutdown /s /t 5`).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".
