@@ -1342,7 +1342,14 @@ namespace pop_native_live
                     {
                         const uint32_t el = guestAny(rdram, ref + 0x20u);
                         if ((el && guestAny(rdram, el + 0x48u)) || g_worldLmRefs.count(ref))
+                        {
                             worldOk = false;
+                            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+                            static int logged = 0;
+                            if (whyLog && logged < 20 && ++logged)
+                                std::fprintf(stderr, "[pop:world] instanced lightmap: ref %08x element %08x (+0x48 %08x, list entry %d) list +0x%x\n", ref,
+                                             el, el ? guestAny(rdram, el + 0x48u) : 0u, int(g_worldLmRefs.count(ref)), g_currentList);
+                        }
                     }
                     if (g_frameSeen.insert(key).second)
                     {
@@ -3513,6 +3520,8 @@ namespace pop_native_live
         {
             if (g_liveImages.count(key))
                 return true;
+            if (key - kPaletteKey < 0x8000u && g_framePaletteImages.count(key - kPaletteKey))
+                return true; // recoloured this frame (recolouredKey): sent with its pixels by the frame writer
             if (g_worldMissing.count(key))
                 return false; // tried this frame
             pop_native::Image img;
