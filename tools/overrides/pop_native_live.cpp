@@ -1730,6 +1730,20 @@ namespace pop_native_live
         // ?, mask, ?, convolution, strength on the stack) - the glow
         PS2Runtime::RecompiledFunction g_origGlow = nullptr;
         uint32_t g_glowCalls = 0, g_glow[5] = {};
+        uint32_t g_after[4] = {}; // the AFTR trailer: flags (bit 0 MotionSmooth, bit 1 FixBlend), dx, dy, FIX
+        // CAfterEffect::MotionSmooth (retail 0x4ADD80; flag +0x120 bit 5, after the glow): (this, dx, dy), the camera's
+        // turn since the last frame in pixels; recorded for the native post chain, the original still draws on the GS
+        PS2Runtime::RecompiledFunction g_origMotion = nullptr;
+        void motionSmooth(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing)
+            {
+                g_after[0] |= 1u;
+                g_after[1] = getRegU32(ctx, 5);
+                g_after[2] = getRegU32(ctx, 6);
+            }
+            g_origMotion(rdram, ctx, runtime);
+        }
         void colorDiffusion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             if (g_frameCapturing || g_frameDone)
@@ -1741,6 +1755,13 @@ namespace pop_native_live
                     g_glow[2] = getRegU32(ctx, 9);
                     g_glow[3] = getRegU32(ctx, 11);
                     g_glow[4] = guestAny(rdram, getRegU32(ctx, 29));
+                }
+                // FixBlend (inline in the dispatcher after the glow, +0x120 bit 0): FIX = min(+0x20 * 128, 128)
+                if (g_frameCapturing && (*getConstMemPtr(rdram, getRegU32(ctx, 4) + 0x120u) & 1))
+                {
+                    const float f = guestF(rdram, getRegU32(ctx, 4) + 0x20u) * 128.0f;
+                    g_after[0] |= 2u;
+                    g_after[3] = f >= 128.0f ? 128u : f > 0.0f ? uint32_t(f) : 0u;
                 }
                 if (g_glowCalls++ < 4)
                     std::fprintf(stderr, "[pop:native] ColorDiffusion levels %u FIX %u mask %u conv %u strength %u (a1 %08x t0 %08x t2 %08x)\n",
@@ -3919,7 +3940,8 @@ namespace pop_native_live
             // "PNF5": clip[16]; images (count; per image: w, h, RGBA); draws in the game's order (count;
             // per draw: model[16], image index (-1: none), render state flags, AREF word, fog a, fog b,
             // FOGCOL, Z test, FBMSK, batch count, batches); then "GLOW" + ColorDiffusion's parameters
-            // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame
+            // (calls, levels, FIX, mask, convolution, strength) when it ran in the frame, "HAZE" (calls, colour, fade),
+            // "AFTR" (flags: bit 0 MotionSmooth, bit 1 FixBlend; dx, dy, FIX)
             // live: "PNF6" = PNF5 with each image as (texture key, w, h, RGBA), RGBA only the first time
             // the viewer gets that key on this connection (w = h = 0 afterwards: it keeps the texture)
             // world: "PNF7" = PNF6 with a 64-bit key before each batch; a batch the renderer keeps already is
@@ -4177,6 +4199,9 @@ namespace pop_native_live
             putBytes(f, "HAZE", size_t(1) * size_t(4));
             putBytes(f, worldOut ? &noCalls : &g_hazeCalls, size_t(4) * size_t(1));
             putBytes(f, g_haze, size_t(4) * size_t(2));
+            const uint32_t noAfter[4] = {};
+            putBytes(f, "AFTR", size_t(1) * size_t(4));
+            putBytes(f, worldOut ? noAfter : g_after, size_t(4) * size_t(4));
             if (worldOut)
             {
                 g_worldStats.bytes += f.size();
@@ -4361,6 +4386,7 @@ namespace pop_native_live
             g_frameSeq = 0;
             g_glowCalls = 0;
             g_hazeCalls = 0;
+            std::memset(g_after, 0, sizeof g_after);
             g_haloAddsInWindow = 0;
         }
 
@@ -4895,6 +4921,9 @@ namespace pop_native_live
             g_origGlow = runtime.lookupFunction(0x004AE100u);
             if (g_origGlow)
                 runtime.replaceFunction(0x004AE100u, colorDiffusion);
+            g_origMotion = runtime.lookupFunction(0x004ADD80u);
+            if (g_origMotion)
+                runtime.replaceFunction(0x004ADD80u, motionSmooth);
             g_origHaze = runtime.lookupFunction(0x004A93C0u);
             if (g_origHaze)
                 runtime.replaceFunction(0x004A93C0u, smartBlur);

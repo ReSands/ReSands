@@ -509,12 +509,16 @@ int main(int argc, char **argv)
     bool glowOn = false, noGlow = false; // ColorDiffusion ran in the captured frame (PNF5); --noglow skips it
     uint32_t haze[2] = {};
     bool hazeOn = false, noHaze = false; // SmartBlur ran in the captured frame (HAZE trailer); --nohaze skips it
+    uint32_t after[4] = {}; // MotionSmooth / FixBlend (AFTR trailer); FixBlend offline needs --prev <png> (the previous frame)
+    const char *prevPath = nullptr;
     for (int i = 4; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--nohaze"))
             noHaze = true;
         if (!std::strcmp(argv[i], "--noglow"))
             noGlow = true;
+        if (!std::strcmp(argv[i], "--prev") && i + 1 < argc)
+            prevPath = argv[i + 1];
     }
     FrameLoader loader;           // PNF frames (files and live); live: keeps texture keys across frames
     Image liveGsImage;            // live: the game's own GS picture of the frame (POP_NATIVE_WINDOW_GS=d)
@@ -530,6 +534,7 @@ int main(int argc, char **argv)
         imageTotal = loader.imageTotal;
         std::memcpy(glow, extras.glow, sizeof glow);
         std::memcpy(haze, extras.haze, sizeof haze);
+        std::memcpy(after, extras.after, sizeof after);
         glowOn = extras.glowOn;
         hazeOn = extras.hazeOn;
         liveGsImages = std::move(extras.gsImages);
@@ -623,6 +628,10 @@ int main(int argc, char **argv)
             pe.haze = hazeOn && !noHaze;
             pe.hazeColour = haze[0];
             std::memcpy(&pe.hazeFade, &haze[1], 4);
+            pe.motionSmooth = after[0] & 1;
+            pe.motionDx = int(after[1]);
+            pe.motionDy = int(after[2]);
+            pe.fixBlend = after[0] & 2 ? int(after[3]) : 0;
             r.setPostEffects(pe);
         }
         if (livePort)
@@ -700,6 +709,10 @@ int main(int argc, char **argv)
                     pe.haze = livePost && hazeOn;
                     pe.hazeColour = haze[0];
                     std::memcpy(&pe.hazeFade, &haze[1], 4);
+                    pe.motionSmooth = livePost && (after[0] & 1);
+                    pe.motionDx = int(after[1]);
+                    pe.motionDy = int(after[2]);
+                    pe.fixBlend = livePost && (after[0] & 2) ? int(after[3]) : 0;
                     r.setPostEffects(pe);
                     glowOn = hazeOn = false; // the next frame's trailer says again
                 }
@@ -900,6 +913,33 @@ int main(int argc, char **argv)
     }
     if (glowOn && !noGlow)
         pop_postfx::colorDiffusion(rgba, int(width), int(height), int(glow[0]), int(glow[1]), glow[2] != 0, glow[3] != 0, int(glow[4]));
+    {
+        // MotionSmooth, then FixBlend over the previous frame (--prev: offline, the save's displayed picture)
+        pop_postfx::Surface frame, temp, prev;
+        frame.w = int(width);
+        frame.h = int(height);
+        frame.rgba = std::move(rgba);
+        std::vector<pop_postfx::Blit> blits;
+        if (after[0] & 1)
+            blits = pop_postfx::motionSmoothBlits(int(after[1]), int(after[2]), frame.w, frame.h, frame.w / 640);
+        if (after[0] & 2)
+        {
+            int pw = 0, ph = 0, pc = 0;
+            stbi_uc *px = prevPath ? stbi_load(prevPath, &pw, &ph, &pc, 4) : nullptr;
+            if (px && pw == frame.w && ph == frame.h)
+            {
+                prev.w = pw;
+                prev.h = ph;
+                prev.rgba.assign(px, px + size_t(pw) * ph * 4);
+                blits.push_back(pop_postfx::fixBlendBlit(int(after[3]), frame.w, frame.h));
+            }
+            else
+                std::fprintf(stderr, "FixBlend (FIX %u) skipped: no --prev picture of %ux%u\n", after[3], width, height);
+            stbi_image_free(px);
+        }
+        pop_postfx::runBlits(blits, frame, temp, &prev);
+        rgba = std::move(frame.rgba);
+    }
     if (hazeOn && !noHaze)
     {
         pop_postfx::Surface frame, work;

@@ -145,6 +145,9 @@ namespace pop_native
         bool haze = false;
         uint32_t hazeColour = 0; // effect object +0x124
         float hazeFade = 0.0f;   // +0x144
+        bool motionSmooth = false; // CAfterEffect::MotionSmooth(dx, dy), pixels of the 640-wide frame
+        int motionDx = 0, motionDy = 0;
+        int fixBlend = 0;          // FixBlend's FIX (0 off, 128 = all previous frame): the last presented frame over this one
     };
 
     // the game's projection: clip z = w - 0.2 (graphics object +0x300), so 1 - z / w ~ 0.2 / w

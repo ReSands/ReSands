@@ -16,9 +16,10 @@ for st in "$IN"/*.state; do
     n=$(basename "$st" .state)
     "$B/${STATE_FRAME:-pop_state_frame}" "$st" "$OUT/$n.pnf" --bigfile DATA/PRINCE.BF --packindex "$P/game/analysis/packindex.txt" \
         > "$OUT/$n.log" 2>&1 || { echo "$n state_frame FAILED" | tee -a "$OUT/scores.txt"; continue; }
-    "$B/pop_native_view" "$OUT/$n.pnf" "$OUT/identity.clip" "$OUT/$n.native.png" --frame ${VIEW_ARGS:-} >> "$OUT/$n.log" 2>&1 ||
-        { echo "$n view FAILED" | tee -a "$OUT/scores.txt"; continue; }
     python3 -I "$P/tools/popstate.py" "$st" --frame "$OUT/$n.game.png" >> "$OUT/$n.log" 2>&1
+    # --prev: FixBlend's previous frame = the save's displayed picture (the game's other draw buffer)
+    "$B/pop_native_view" "$OUT/$n.pnf" "$OUT/identity.clip" "$OUT/$n.native.png" --frame --prev "$OUT/$n.game.png" ${VIEW_ARGS:-} \
+        >> "$OUT/$n.log" 2>&1 || { echo "$n view FAILED" | tee -a "$OUT/scores.txt"; continue; }
     python3 -I "$P/tools/livecmp.py" side "$OUT/$n.native.png" "$OUT/$n.game.png" "$OUT/$n.side.png" >> "$OUT/$n.log" 2>&1
     echo "$n $(python3 -I "$P/tools/livecmp.py" score "$OUT/$n.native.png" "$OUT/$n.game.png" | tail -1)" | tee -a "$OUT/scores.txt"
 done

@@ -10,7 +10,8 @@
 //   { vec4 xy; vec4 uv; ivec4 size /* srcW, srcH, dstW, dstH */; uint colour; uint flags; }
 //   flags bit 0 = textured, bit 1 = blend 0x44 (else copy). One invocation per destination pixel,
 //   local size 8x8, dispatched over the whole destination. The host runs AE_ProcessSmartBlur's 11
-//   blits with it (self-reads get a snapshot copy as src), at scale 1 and 2.
+//   blits with it (self-reads get a snapshot copy as src), at scale 1 and 2; then MotionSmooth's blits (flags bit 2 =
+//   add, Cs + Cd) and FixBlend's (the frame flipped as the previous frame).
 // diffusion: ColorDiffusion's four kernels on float RGBA planes (vec4 arrays, 0..255). Bindings:
 //   0 = src, 1 = dst, 2 = aux. Push: { int op; int sw; int sh; int dw; int dh; int strength; float k; }
 //   op 0 RESAMPLE dst(dw x dh) = bilinear(src(sw x sh)) at ((x+0.5)*sw/dw, (y+0.5)*sh/dh)
@@ -302,6 +303,52 @@ int main(int argc, char **argv)
                 ok += pass;
                 std::printf("%s\n", describe((std::string(what) + ", work buffer").c_str(), dw, sw.w).c_str());
                 std::printf("%s\n", describe((std::string(what) + ", frame").c_str(), df, fw).c_str());
+            }
+            // MotionSmooth (odd and even pass counts, negative offsets) + FixBlend, frame / temp / previous on the GPU
+            struct Motion
+            {
+                int dx, dy, fix;
+            } ms[] = {{37, -5, 0}, {-300, 140, 66}, {6, 2, 128}};
+            for (const Motion &c : ms)
+            {
+                pop_postfx::Surface sf, st, sp;
+                sf.w = sp.w = w;
+                sf.h = sp.h = h;
+                sf.rgba = frame;
+                sp.rgba.resize(frame.size());
+                for (int y = 0; y < h; ++y)
+                    std::memcpy(&sp.rgba[size_t(y) * w * 4], &frame[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
+                std::vector<pop_postfx::Blit> bl = pop_postfx::motionSmoothBlits(c.dx, c.dy, w, h);
+                if (c.fix)
+                    bl.push_back(pop_postfx::fixBlendBlit(c.fix, w, h));
+                std::vector<uint8_t> gpuIn[3] = {sf.rgba, std::vector<uint8_t>(frame.size(), 0), sp.rgba};
+                pop_postfx::runBlits(bl, sf, st, &sp);
+                char what[256];
+                std::snprintf(what, sizeof what, "%s MotionSmooth %d %d (%zu blits) FixBlend %d", name, c.dx, c.dy, bl.size(), c.fix);
+                ++cases;
+                int b3[3];
+                for (int k = 0; k < 3; ++k)
+                {
+                    b3[k] = gpu.createBuffer(frame.size());
+                    std::memcpy(gpu.data(b3[k]), gpuIn[k].data(), frame.size());
+                }
+                bool ran = true;
+                for (const pop_postfx::Blit &b : bl)
+                {
+                    SpritePush p{{b.x0, b.y0, b.x1, b.y1}, {b.u0, b.v0, b.u1, b.v1}, {w, h, w, h}, b.colour,
+                                 (b.src >= 0 ? 1u : 0u) | (b.blend == pop_postfx::Blend::Lerp44 ? 2u : 0u) | (b.blend == pop_postfx::Blend::Add ? 4u : 0u)};
+                    ran = ran && gpu.dispatch(pipe, {b.src >= 0 ? b3[b.src] : b3[2], b3[b.dst]}, &p, sizeof p, uint32_t((w + 7) / 8),
+                                              uint32_t((h + 7) / 8), 1, error);
+                }
+                if (!ran)
+                {
+                    std::printf("%s: GPU error: %s\n", what, error.c_str());
+                    continue;
+                }
+                const uint8_t *g = static_cast<uint8_t *>(gpu.data(b3[0]));
+                const Diff df = diff(sf.rgba, std::vector<uint8_t>(g, g + frame.size()), w, 1);
+                ok += !df.bad;
+                std::printf("%s\n", describe(what, df, w).c_str());
             }
         }
         else

@@ -16,6 +16,7 @@ namespace pop_native
         uint32_t glow[5] = {}; // ColorDiffusion: levels, FIX, mask, convolution, strength
         bool hazeOn = false;
         uint32_t haze[2] = {}; // SmartBlur: colour, fade (float bits)
+        uint32_t after[4] = {}; // AFTR: flags (bit 0 MotionSmooth, bit 1 FixBlend), MotionSmooth dx, dy (int), FixBlend FIX
         std::vector<Image> gsImages; // live frames: the game's GS pictures (POP_NATIVE_WINDOW_GS)
     };
 

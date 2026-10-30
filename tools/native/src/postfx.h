@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 namespace pop_postfx
@@ -146,12 +147,12 @@ namespace pop_postfx
     // One SPRITE as the GS draws it (rules of the CPU rasteriser the reference frames come from):
     // pixel i covered when x0 <= i < x1, UVs (texels, FST) interpolated at the integer pixel position
     // and rounded to 1/16, bilinear with texel centres at +0.5, texture function MODULATE
-    // (T * V >> 7), TCC 0 (As = vertex alpha), then ALPHA 0x29 (Cs) or 0x44 ((Cs - Cd) * As >> 7 + Cd),
-    // COLCLAMP. src == nullptr: untextured (flat vertex colour). A pass that reads its own target reads
+    // (T * V >> 7), TCC 0 (As = vertex alpha), then ALPHA 0x29 (Cs), 0x44 ((Cs - Cd) * As >> 7 + Cd; also 0x64 with
+    // FIX in place of As) or 0x68 FIX 0x80 (Cs + Cd), COLCLAMP. src == nullptr: untextured (flat vertex colour). A pass that reads its own target reads
     // it as it was before the pass (a snapshot): closer to the reference frames than reading pixels
     // already written (blits 9-10 of the haze: mean error 1.7/2.4 vs 2.5/3.3), and what a GPU version
     // does anyway. The real GS's texture cache sits somewhere in between.
-    enum class Blend { Copy, Lerp44 };
+    enum class Blend { Copy, Lerp44, Add };
     inline void gsSprite(Surface &dst, const Surface *src, float x0, float y0, float x1, float y1, float u0, float v0, float u1,
                          float v1, uint32_t colour, Blend blend)
     {
@@ -187,7 +188,9 @@ namespace pop_postfx
                 }
                 uint8_t *d = &dst.rgba[4 * (size_t(y) * dst.w + x)];
                 for (int c = 0; c < 3; ++c)
-                    d[c] = uint8_t(blend == Blend::Copy ? cs[c] : std::clamp(((cs[c] - int(d[c])) * va >> 7) + int(d[c]), 0, 255));
+                    d[c] = uint8_t(blend == Blend::Copy  ? cs[c]
+                                   : blend == Blend::Add ? std::min(255, cs[c] + int(d[c]))
+                                                         : std::clamp(((cs[c] - int(d[c])) * va >> 7) + int(d[c]), 0, 255));
             }
         }
     }
@@ -254,5 +257,67 @@ namespace pop_postfx
                      (s.y0 - 0x7200) * k, (s.x1 - 0x6C00) * k, (s.y1 - 0x7200) * k, s.u0 * k, s.v0 * k, s.u1 * k, s.v1 * k, col,
                      s.blend ? Blend::Lerp44 : Blend::Copy);
         }
+    }
+
+    // ---- CAfterEffect::MotionSmooth (retail 0x4ADD80) and the dispatcher's FixBlend (FUN_004ABFC0, +0x120 bit 0) ----
+    // Both are full-screen blits through FUN_004AFFC0 (source, target: 0 = the frame, 1 = the other draw buffer = the
+    // previous frame, 2 = a frame-sized temp) and FUN_004AF940 (rect at an integer pixel offset, UVs from texel centres:
+    // a pure shift). Surfaces here: 0 frame, 1 temp, 2 previous frame; src -1 = untextured.
+    struct Blit
+    {
+        int dst, src;
+        float x0, y0, x1, y1, u0, v0, u1, v1;
+        uint32_t colour;
+        Blend blend;
+    };
+    inline Blit fullBlit(int dst, int src, float ox, float oy, int w, int h, uint32_t colour, Blend blend)
+    {
+        return {dst, src, ox, oy, ox + float(w), oy + float(h), 0.5f, 0.5f, float(w) + 0.5f, float(h) + 0.5f, colour, blend};
+    }
+    // MotionSmooth(dx, dy) (pixels of the 640-wide frame): passes = halvings of max(|dx|, |dy|) / 2 until 0, at most 6; each
+    // pass draws two half-brightness copies shifted by -/+ (d >> 1), d halving per pass, ping-ponging frame -> temp -> frame
+    // (an odd count copies the temp back). The temp is cleared to black first. No pass: nothing visible.
+    // `scale` = internal resolution multiple (frame 640 * scale wide).
+    inline std::vector<Blit> motionSmoothBlits(int dx, int dy, int w, int h, int scale = 1)
+    {
+        int n = 0;
+        for (int m = std::max(std::abs(dx) >> 1, std::abs(dy) >> 1); m; m >>= 1)
+            ++n;
+        n = std::min(n, 6);
+        std::vector<Blit> b;
+        if (!n)
+            return b;
+        b.push_back(fullBlit(1, -1, 0, 0, w, h, 0u, Blend::Copy));
+        int sx = dx >> 1, sy = dy >> 1;
+        for (int i = 0; i < n; ++i, sx >>= 1, sy >>= 1)
+        {
+            const int src = i & 1 ? 1 : 0, dst = 1 - src;
+            const float ox = float(sx * scale), oy = float(sy * scale);
+            b.push_back(fullBlit(dst, src, -ox, -oy, w, h, 0x40404040u, Blend::Copy)); // ALPHA 0x29
+            b.push_back(fullBlit(dst, src, ox, oy, w, h, 0x40404040u, Blend::Add));    // ALPHA 0x68 FIX 0x80
+        }
+        if (n & 1)
+            b.push_back(fullBlit(0, 1, 0, 0, w, h, 0x80808080u, Blend::Copy));
+        return b;
+    }
+    // FixBlend: the previous frame over this one, ALPHA 0x64 ((Cs - Cd) * FIX >> 7 + Cd), FIX = min(+0x20 * 128, 128); as
+    // Lerp44 with FIX as the vertex alpha
+    inline Blit fixBlendBlit(int fix, int w, int h)
+    {
+        return fullBlit(0, 2, 0, 0, w, h, 0x00808080u | (uint32_t(std::clamp(fix, 0, 128)) << 24), Blend::Lerp44);
+    }
+    // the blits on CPU surfaces (frame, temp, previous); the temp is sized here if empty
+    inline void runBlits(const std::vector<Blit> &blits, Surface &frame, Surface &temp, const Surface *prev = nullptr)
+    {
+        if (temp.rgba.empty())
+        {
+            temp.w = frame.w;
+            temp.h = frame.h;
+            temp.rgba.assign(frame.rgba.size(), 0);
+        }
+        Surface *s[3] = {&frame, &temp, const_cast<Surface *>(prev)};
+        for (const Blit &b : blits)
+            if (s[b.dst] && (b.src < 0 || s[b.src]))
+                gsSprite(*s[b.dst], b.src < 0 ? nullptr : s[b.src], b.x0, b.y0, b.x1, b.y1, b.u0, b.v0, b.u1, b.v1, b.colour, b.blend);
     }
 }

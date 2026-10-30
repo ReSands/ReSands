@@ -983,7 +983,8 @@ namespace pop_native
         VkPipelineLayout postLayout = VK_NULL_HANDLE;
         VkPipeline postSprite = VK_NULL_HANDLE, postDiffusion = VK_NULL_HANDLE, postConvert = VK_NULL_HANDLE;
         VkDescriptorPool postPool = VK_NULL_HANDLE;
-        Buffer postFrame, postWork, postSnap, postFull, postAlpha, postDummy;
+        Buffer postFrame, postWork, postSnap, postFull, postAlpha, postDummy, postPrev; // postPrev: the last frame (FixBlend)
+        bool postPrevValid = false;
         std::vector<Buffer> postPlanes; // ColorDiffusion levels: per level the plane and its convolved copy
         uint32_t postW = 0, postH = 0;
 
@@ -1036,7 +1037,7 @@ namespace pop_native
 
         void destroyPostBuffers()
         {
-            for (Buffer *b : {&postFrame, &postWork, &postSnap, &postFull, &postAlpha, &postDummy})
+            for (Buffer *b : {&postFrame, &postWork, &postSnap, &postFull, &postAlpha, &postDummy, &postPrev})
                 destroyBuffer(*b);
             for (Buffer &b : postPlanes)
                 destroyBuffer(b);
@@ -1056,7 +1057,9 @@ namespace pop_native
             const VkMemoryPropertyFlags d = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             bool ok = createBuffer(frame, u, d, postFrame, error) && createBuffer(work, u, d, postWork, error) &&
                       createBuffer(std::max(frame, work), u, d, postSnap, error) && createBuffer(frame * 4, u, d, postFull, error) &&
-                      createBuffer(frame * 4, u, d, postAlpha, error) && createBuffer(64, u, d, postDummy, error);
+                      createBuffer(frame * 4, u, d, postAlpha, error) && createBuffer(64, u, d, postDummy, error) &&
+                      createBuffer(frame, u, d, postPrev, error);
+            postPrevValid = false;
             // ColorDiffusion planes: level 0 at half size (+ its resampled mask), then halvings, each with
             // a convolved copy: at most 2 per level, 10 levels
             uint32_t lw = w / 2, lh = h / 2;
@@ -1181,18 +1184,32 @@ namespace pop_native
                 cvt.op = 1;
                 dispatchPost(cb, postConvert, postFrame.buffer, postFull.buffer, postAlpha.buffer, &cvt, sizeof cvt, w, h);
             }
+            struct SpritePush
+            {
+                float xy[4], uv[4];
+                int32_t size[4];
+                uint32_t colour, flags;
+            };
+            const uint32_t scale = std::max(1u, w / 640);
+            // MotionSmooth, then FixBlend (the previous frame over this one): full-frame blits, the temp in postSnap
+            std::vector<pop_postfx::Blit> blits;
+            if (post.motionSmooth)
+                blits = pop_postfx::motionSmoothBlits(post.motionDx, post.motionDy, int(w), int(h), int(scale));
+            if (post.fixBlend > 0 && postPrevValid)
+                blits.push_back(pop_postfx::fixBlendBlit(post.fixBlend, int(w), int(h)));
+            for (const pop_postfx::Blit &b : blits)
+            {
+                const VkBuffer surf[3] = {postFrame.buffer, postSnap.buffer, postPrev.buffer};
+                SpritePush p{{b.x0, b.y0, b.x1, b.y1}, {b.u0, b.v0, b.u1, b.v1}, {int32_t(w), int32_t(h), int32_t(w), int32_t(h)}, b.colour,
+                             (b.src >= 0 ? 1u : 0u) | (b.blend == pop_postfx::Blend::Lerp44 ? 2u : 0u) | (b.blend == pop_postfx::Blend::Add ? 4u : 0u)};
+                dispatchPost(cb, postSprite, b.src >= 0 ? surf[b.src] : postDummy.buffer, surf[b.dst], postDummy.buffer, &p, sizeof p, w, h);
+            }
             if (post.haze)
             {
-                const uint32_t scale = std::max(1u, w / 640), ww = 448 * scale, wh = 288 * scale;
+                const uint32_t ww = 448 * scale, wh = 288 * scale;
                 const float kk = float(scale) / 16.0f;
                 const int a = int(float(post.hazeColour >> 24) * (1.0f - post.hazeFade));
                 const pop_postfx::SmartBlurBlit *bl = pop_postfx::smartBlurBlits();
-                struct SpritePush
-                {
-                    float xy[4], uv[4];
-                    int32_t size[4];
-                    uint32_t colour, flags;
-                };
                 for (int i = 0; i < 11; ++i)
                 {
                     const auto &b = bl[i];
@@ -1227,6 +1244,10 @@ namespace pop_native
                     dispatchPost(cb, postSprite, b.textured ? src : postDummy.buffer, dst, postDummy.buffer, &p, sizeof p, dw, dh);
                 }
             }
+            // the finished frame for the next one's FixBlend (the game's other draw buffer; ours has no HUD in it)
+            const VkBufferCopy keep{0, 0, VkDeviceSize(w) * h * 4};
+            vkCmdCopyBuffer(cb, postFrame.buffer, postPrev.buffer, 1, &keep);
+            postPrevValid = true;
             barrier(cb, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_READ_BIT,
                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
             vkCmdCopyBufferToImage(cb, postFrame.buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
@@ -1903,7 +1924,7 @@ namespace pop_native
         const bool overlay = m->overlayOn && m->overlay.image;
         if (!overlay)
             m->recordScene(cb, m->targetFb, m->targetColour.image, internalWidth, internalHeight, clip, draws);
-        if (!overlay && (m->post.glow || m->post.haze))
+        if (!overlay && (m->post.glow || m->post.haze || m->post.motionSmooth || m->post.fixBlend > 0))
         {
             if (!m->ensurePostBuffers(internalWidth, internalHeight, error))
                 return false;

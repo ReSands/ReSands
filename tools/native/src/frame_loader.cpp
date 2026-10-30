@@ -252,12 +252,23 @@ namespace pop_native
                 if (verbose)
                     std::printf("haze (SmartBlur): %u calls, colour %08X fade %.3f\n", calls, extras.haze[0], double(fade));
             }
+            std::memset(extras.after, 0, sizeof extras.after);
+            bool more = bool(f.read(tag, 4));
+            if (more && std::memcmp(tag, "AFTR", 4) == 0) // MotionSmooth / FixBlend
+            {
+                f.read(reinterpret_cast<char *>(extras.after), sizeof extras.after);
+                if (verbose && extras.after[0])
+                    std::printf("after effects: MotionSmooth %u (dx %d dy %d), FixBlend %u (FIX %u)\n", extras.after[0] & 1,
+                                int(extras.after[1]), int(extras.after[2]), (extras.after[0] >> 1) & 1, extras.after[3]);
+                more = bool(f.read(tag, 4));
+            }
             // live frames: the game's own GS pictures latched at the next frame boundaries
             // (POP_NATIVE_WINDOW_GS=<d>); the first is shown with T, all are scored on --live-shots
             extras.gsImages.clear();
             uint32_t gw = 0, gh = 0;
-            while (f.read(tag, 4) && std::memcmp(tag, "GSFB", 4) == 0 && f.read(reinterpret_cast<char *>(&gw), 4) &&
-                   f.read(reinterpret_cast<char *>(&gh), 4) && gw && gh && gw <= 4096 && gh <= 4096)
+            for (; more && std::memcmp(tag, "GSFB", 4) == 0 && f.read(reinterpret_cast<char *>(&gw), 4) &&
+                   f.read(reinterpret_cast<char *>(&gh), 4) && gw && gh && gw <= 4096 && gh <= 4096;
+                 more = bool(f.read(tag, 4)))
             {
                 Image g;
                 g.width = gw;

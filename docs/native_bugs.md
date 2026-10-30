@@ -467,8 +467,8 @@ ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8
 155110, 1029 185650 / 185807 / 185943, ...), **MotionSmooth 9**, **FixBlend 2** (24 Oct 200337 0.52, 19 Oct 185803
 0.70); ZoomSmooth, Spiral, Vision in none. **The Pinch saves are the rewind saves** (155110, 115853, 1029 185650 / 185807 /
 185943): Pinch is the rewind's warp. The sand visions are movies (39 `vis_*.int` in MOVIEPS2.BIG, `docs/movies.md`), not an
-after-effect, so ZoomSmooth / Spiral / VisionEffect have unknown triggers: find what sets their flags before asking for saves. Not native: Pinch,
-MotionSmooth, FixBlend, ZoomSmooth, Spiral, Vision. Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
+after-effect, so ZoomSmooth / Spiral / VisionEffect have unknown triggers: find what sets their flags before asking for saves. Not native:
+ZoomSmooth, Spiral, Vision (Pinch, MotionSmooth, FixBlend: sections below). Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
 
 **Light-shaft lead ruled out (30 Oct):** GFX type 0x12 GFX_Sun_Render 0x464C40 (GFX_NeedGeom, GFX_Sun_ComputeRay) is
 not the beam. GFX_Render keeps its list head pointer at 0x674D04 (node: type byte +0, flags u16 +2, id +4, data +8,
@@ -503,3 +503,29 @@ native brighter at the frame edges (glow sampling at the borders?). Not checked 
 `-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves), not looked at. The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).
+
+## Native MotionSmooth and FixBlend (30 Oct, Mac, offline)
+
+From the disassembly (the decompile drops the ALPHA FIX and the vertex colours on the stack). Blit helpers: FUN_004AFFC0(this,
+source, target, FBMSK, bilinear, TCC, ...) with buffers **0 = the frame** (FetchSystemDrawEnv(true)), **1 = the other draw
+buffer = the previous displayed frame** (FetchSystemDrawEnv(false), 0x4A4800 picks +0xC30 / +0xDA0 by +0xBCC bit 0), **2 = a
+frame-sized temp** (env +0x10), 3 = untextured; FUN_004AF940 draws the full rect at an integer pixel offset (a1, a2) with UVs on
+texel centres (a pure shift), the colours of the two vertex rows at sp+0 / sp+8.
+- **MotionSmooth 0x4ADD80** (+0x120 bit 5; args = the camera's turn since the last frame: the previous forward 0x6DF150
+  through the current camera +0x1B0, x * 0.2 * width, y * 0.25 * height): n = halvings of max(|dx|, |dy|) >> 1 until 0, at most
+  6. Clear the temp (colour 0, ALPHA 0x29); per pass two copies at colour 0x40 (half), shifted by -(d >> 1) (ALPHA 0x29: Cs)
+  and +(d >> 1) (ALPHA 0x68 FIX 0x80: Cs + Cd), d halving, frame -> temp -> frame; an odd n copies the temp back. So an
+  iterated 2-tap blur along the motion; **n = 0 below 2 pixels: nothing visible**.
+- **FixBlend** (inline in FUN_004ABFC0, +0x120 bit 0): the previous frame over this one, colour 0x80, ALPHA 0x64
+  ((Cs - Cd) * FIX >> 7 + Cd), FIX = min(+0x20 * 128, 128): an afterimage. The previous frame includes the HUD.
+- Natively: `pop_postfx::motionSmoothBlits` / `fixBlendBlit` / `runBlits` (`postfx.h`, CPU), the same blits in
+  `Renderer::recordPost` after the glow, before the haze (`gs_sprite.comp` flag bit 2 = add; temp in postSnap; the last
+  finished frame kept in postPrev, no HUD in ours). GPU = CPU exactly (`pop_postfx_gpu_judge sprite`, 3 new cases). Frame
+  trailer `AFTR` (flags, dx, dy, FIX) after HAZE: MotionSmooth hooked at 0x4ADD80 (records, the original still runs), FixBlend
+  read in the ColorDiffusion hook. Viewer: `--prev <png>` = FixBlend's previous frame offline; `score_saves.sh` passes the
+  save's displayed picture.
+- Offline: MotionSmooth is always dx = dy = 0 in a save (0x6DF150 already holds the current camera), so it cannot be scored;
+  the 9 saves are unchanged. FixBlend: 1019 185803 (FIX 89) 8.93 -> 2.72, 1024 200337 (FIX 66) 5.25 -> 3.14, but **circular**:
+  the previous frame offline is the reference picture itself. No GS-only save has either, so no gate line. Live the GS still
+  draws both over the injected picture (the world frame sends no post effects), so they matter for the viewer and 0.2.
+  Not modelled: the alpha these blits write (FBMSK 0 in the game; nothing after them reads it), the half-width mode.

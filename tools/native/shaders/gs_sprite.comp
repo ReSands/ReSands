@@ -1,8 +1,8 @@
 #version 450
 // One GS sprite as pop_postfx::gsSprite draws it (postfx.h): pixel i covered when x0 <= i < x1,
 // UVs interpolated at the integer pixel position and rounded to 1/16 texel, bilinear with texel
-// centres at +0.5 (clamped to the source), MODULATE (T * V >> 7), TCC 0, then ALPHA 0x29 (copy) or
-// 0x44 ((Cs - Cd) * As >> 7 + Cd), clamped. Buffers hold packed RGBA8 (r = bits 0-7); the
+// centres at +0.5 (clamped to the source), MODULATE (T * V >> 7), TCC 0, then ALPHA 0x29 (copy),
+// 0x44 ((Cs - Cd) * As >> 7 + Cd) or 0x68 FIX 0x80 (Cs + Cd), clamped. Buffers hold packed RGBA8 (r = bits 0-7); the
 // destination's alpha is never written (FBMSK 0xFF000000). A blit that reads its own target gets a
 // copy of it as `src` from the host.
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -14,7 +14,7 @@ layout(push_constant) uniform Push
     vec4 uv;     // u0, v0, u1, v1 (texels)
     ivec4 size;  // src w, h, dst w, h
     uint colour; // vertex RGBA, 0x80 = 1.0
-    uint flags;  // bit 0 textured, bit 1 blend 0x44
+    uint flags;  // bit 0 textured, bit 1 blend 0x44, bit 2 add
 } p;
 
 float lround16(float v) // std::lround(v * 16) / 16
@@ -58,6 +58,6 @@ void main()
     uint i = uint(pix.y * p.size.z + pix.x);
     uint old = dst[i];
     ivec3 cd = ivec3(old & 0xFFu, (old >> 8) & 0xFFu, (old >> 16) & 0xFFu);
-    ivec3 o = (p.flags & 2u) != 0u ? clamp(((cs - cd) * vc.a >> 7) + cd, 0, 255) : cs;
+    ivec3 o = (p.flags & 4u) != 0u ? min(cs + cd, 255) : (p.flags & 2u) != 0u ? clamp(((cs - cd) * vc.a >> 7) + cd, 0, 255) : cs;
     dst[i] = uint(o.r) | (uint(o.g) << 8) | (uint(o.b) << 16) | (old & 0xFF000000u);
 }
