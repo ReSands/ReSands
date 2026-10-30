@@ -130,6 +130,7 @@ namespace pop_native
         bool ownFogColour = false;     // per draw FOGCOL (live frames: the render state's, 0 for additive blends)
         float fogColour[3] = {0, 0, 0};
         bool copyFrame = false;        // copy the frame (as drawn so far) for kFrameCopyImage before this draw (one pass in game order only)
+        float copyRect[4] = {0, 0, 1, 1}; // the part copied (x0, y0, x1, y1 of the frame, 0..1); the rest of the copy is stale
     };
 
     // The game's post effects for the window path (present): CAfterEffect::ColorDiffusion (glow) and

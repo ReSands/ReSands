@@ -83,6 +83,7 @@ namespace pop_native
             Draw d;
             f.read(reinterpret_cast<char *>(d.model), 64);
             int material = -1;
+            bool haloCopy = false;
             if (v2)
             {
                 int32_t image = -1;
@@ -115,7 +116,8 @@ namespace pop_native
                 // image -3: a halo's visibility (pop_native_live haloRecord): the frame is copied before the draw, its alpha averaged;
                 // -4: the same read of that copy without a new one (the glow mask put back after the halo)
                 const bool haloAlpha = v3 && (image == -3 || image == -4);
-                d.copyFrame = refraction || (v3 && image == -3);
+                haloCopy = v3 && image == -3;
+                d.copyFrame = refraction || haloCopy;
                 if (hasImage || v3)
                 {
                     const auto key = std::make_tuple(hasImage || refraction || haloAlpha ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
@@ -175,6 +177,26 @@ namespace pop_native
                 mesh.indices.resize(ni);
                 f.read(reinterpret_cast<char *>(mesh.vertices.data()), std::streamsize(nv) * sizeof(Vertex));
                 f.read(reinterpret_cast<char *>(mesh.indices.data()), std::streamsize(ni) * 4);
+                // a halo's spread and restore read the frame copy only inside the spread's own square: copy just that, with
+                // two GS pixels to spare (frame UV = (NDC + 1) / 2; columns of the column-major model and clip matrices)
+                if (haloCopy && d.copyFrame && !mesh.vertices.empty())
+                {
+                    float box[4] = {1, 1, 0, 0};
+                    for (const Vertex &v : mesh.vertices)
+                    {
+                        float p[4], c[4];
+                        for (int r = 0; r < 4; ++r)
+                            p[r] = d.model[r] * v.pos[0] + d.model[4 + r] * v.pos[1] + d.model[8 + r] * v.pos[2] + d.model[12 + r];
+                        for (int r = 0; r < 4; ++r)
+                            c[r] = clip[r] * p[0] + clip[4 + r] * p[1] + clip[8 + r] * p[2] + clip[12 + r] * p[3];
+                        if (!(c[3] > 0.0f))
+                            box[0] = box[1] = 0, box[2] = box[3] = 1; // behind the eye: copy it all
+                        const float u = (c[0] / c[3] + 1) / 2, w = (c[1] / c[3] + 1) / 2;
+                        box[0] = std::min(box[0], u), box[1] = std::min(box[1], w), box[2] = std::max(box[2], u), box[3] = std::max(box[3], w);
+                    }
+                    d.copyRect[0] = box[0] - 2 / 640.0f, d.copyRect[1] = box[1] - 2 / 448.0f;
+                    d.copyRect[2] = box[2] + 2 / 640.0f, d.copyRect[3] = box[3] + 2 / 448.0f;
+                }
                 // no robustBufferAccess: an index past the vertices reads arbitrary GPU memory, so drop the batch
                 if (f)
                     if (const auto bad = std::find_if(mesh.indices.begin(), mesh.indices.end(), [nv](uint32_t x) { return x >= nv; });

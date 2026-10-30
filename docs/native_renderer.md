@@ -1250,7 +1250,10 @@ core +- (+0x14 / w), ALPHA 0x58 = Cs * Ad + Cd, no Z test, colour 0x808080 or th
 **Natively** (`haloRecord` in `pop_native_live.cpp`, hook on 0x4AA240, `POP_NATIVE_HALOS=0` off; live only with `-NativeLate`
 while the frame is pure after +0xA8): five GS sprites through `gifToBatch`: clear, Z test, spread (image -3: the frame copied
 before it, mesh.frag bit 256 averages the copy's alpha over the core square, 8x8 samples), the halo (blend kind 6 + dest
-alpha), restore (image -4: the same copy read per pixel, no new copy). Shortcuts: halos with ghosts stay on the GS (none
+alpha), restore (image -4: the same copy read per pixel, no new copy). The copy covers only the spread's square
+(`Draw::copyRect`, from its vertices in `frame_loader`; review 30 Oct: ~30 full copies a frame in torch rooms otherwise); a
+halo whose texture index is not in the texture list stays on the GS. Nightly gate: the `vu1` lines of
+`tools/nightly/render_gate.txt` (162621, 145139 through `pop_state_frame_vu1 --noglow`). Shortcuts: halos with ghosts stay on the GS (none
 seen); the core square keeps the test's alpha instead of the glow mask. `pop_state_frame`: the save's count is always 0 and
 the array holds stale entries from longer frames (162621: the sun at 0, 22 and 27), so it replays entries up to the first
 without a material and skips repeats within 0.5 units. The 25 Oct live halo log read the texture node at +0x20 (wrong; fixed).

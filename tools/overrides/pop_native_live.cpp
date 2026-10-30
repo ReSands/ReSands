@@ -2621,6 +2621,8 @@ namespace pop_native_live
                 const uint32_t index = guest16(rdram, node);
                 if ((key = textureKey(rdram, index)))
                     key = recolouredKey(rdram, index, key);
+                if (!key)
+                    return false; // not in the texture list: untextured would be a flat square where the GS draws the texture
             }
             if (!sprite(ox0, oy0, ox1, oy1, colour, glow))
                 return false;

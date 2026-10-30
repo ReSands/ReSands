@@ -263,22 +263,28 @@ def check_render(work):
     build = os.path.join(ROOT, 'game', 'native-build')
     code, so, se = run([os.path.join(build, 'pop_blend_test')], timeout=300)
     out['blend_wrong'] = [l for l in so.splitlines() if l.endswith('WRONG')] or ([] if code == 0 else [(so + se).strip()[-300:]])
-    gate = {}
+    gate, groups = {}, {'': [], 'vu1': []}  # 'vu1': pop_state_frame_vu1 + --noglow (the VU1 paths: halos)
     for l in open(os.path.join(ROOT, 'tools', 'nightly', 'render_gate.txt')):
         if l.strip() and not l.startswith('#'):
-            n, t = l.split()
-            gate[n] = float(t)
-    states = os.path.join(work, 'render_states')  # only the gate's saves, as score_saves takes a folder
-    os.makedirs(states)
+            n, t, *kind = l.split()
+            gate[n + (' vu1' if kind else '')] = float(t)
+            groups[kind[0] if kind else ''].append(n)
     src = os.path.join(ROOT, 'game', 'analysis', 'gsref1027', 'states')
-    for n in gate:
-        shutil.copy(os.path.join(src, n + '.state'), states)
-    scored = os.path.join(work, 'render')
-    run(['bash', os.path.join(ROOT, 'tools', 'native', 'score_saves.sh'), states, scored], timeout=3600)
     scores = {}
-    for l in open(os.path.join(scored, 'scores.txt')):
-        m = re.match(r'(\S+) mean difference ([\d.]+)', l)
-        scores[l.split()[0]] = float(m.group(2)) if m else l.strip()  # a FAILED line stays text
+    for kind, names in groups.items():
+        if not names:
+            continue
+        states = os.path.join(work, 'render_states' + kind)  # only the gate's saves, as score_saves takes a folder
+        os.makedirs(states)
+        for n in names:
+            shutil.copy(os.path.join(src, n + '.state'), states)
+        scored = os.path.join(work, 'render' + kind)
+        env = dict(os.environ, STATE_FRAME='pop_state_frame_vu1', VIEW_ARGS='--noglow') if kind else None
+        run(['bash', os.path.join(ROOT, 'tools', 'native', 'score_saves.sh'), states, scored], timeout=3600, env=env)
+        for l in open(os.path.join(scored, 'scores.txt')):
+            m = re.match(r'(\S+) mean difference ([\d.]+)', l)
+            scores[l.split()[0] + (' ' + kind if kind else '')] = float(m.group(2)) if m else l.strip()  # a FAILED line stays text
+    scored = os.path.join(work, 'render')
     out['scores'] = scores
     out['over'] = sorted(n for n, t in gate.items() if not isinstance(scores.get(n), float) or scores[n] > t)
     out.update({'ok': True, 'blend_wrong_count': len(out['blend_wrong']), 'over_count': len(out['over']),

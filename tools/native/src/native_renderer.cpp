@@ -571,8 +571,13 @@ namespace pop_native
                                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
                         VkImageCopy c{};
                         c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                        c.extent = {width, height, 1};
-                        vkCmdCopyImage(cb, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+                        const auto px = [](float f, uint32_t size) { return uint32_t(std::clamp(f, 0.0f, 1.0f) * float(size)); };
+                        const uint32_t x0 = px(d.copyRect[0], width), y0 = px(d.copyRect[1], height);
+                        const uint32_t x1 = std::max(px(d.copyRect[2], width), x0), y1 = std::max(px(d.copyRect[3], height), y0);
+                        c.srcOffset = c.dstOffset = {int32_t(x0), int32_t(y0), 0};
+                        c.extent = {x1 - x0, y1 - y0, 1};
+                        if (c.extent.width && c.extent.height) // Vulkan forbids an empty copy (a rect off the frame)
+                            vkCmdCopyImage(cb, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
                         barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
                         VkRenderPassBeginInfo again = rb;
