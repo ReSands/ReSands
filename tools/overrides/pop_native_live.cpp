@@ -463,6 +463,18 @@ namespace pop_native_live
                 ++g_lateStats.closedInLate;
             char why[48];
             std::snprintf(why, sizeof why, "%s +0x%x", path, g_currentList);
+            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
+            if (whyLog)
+            {
+                // the render state worldStateOk judged, once per distinct ender (sub-material flags, 0x70000038, 0x70000044)
+                static std::unordered_set<std::string> seen;
+                const uint32_t sub = guestAny(rdram, 0x70000034u), flags = sub ? guestAny(rdram, sub + 4) : 0;
+                char key[96];
+                std::snprintf(key, sizeof key, "%s sub %08x flags %08x b38 %02x w44 %08x", why, sub, flags, guest8(rdram, 0x70000038u),
+                              guestAny(rdram, 0x70000044u));
+                if (seen.size() < 40 && seen.insert(key).second)
+                    std::fprintf(stderr, "[pop:world] purity ended: %s\n", key);
+            }
             ++g_lateStats.closedBy[why];
             g_frameClosedBy = why;
         }
