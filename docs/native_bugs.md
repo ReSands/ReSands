@@ -457,10 +457,13 @@ ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8
 0.70); ZoomSmooth, Spiral, Vision in none (rewind / sand vision: no save taken during one). Not native: Pinch,
 MotionSmooth, FixBlend, ZoomSmooth, Spiral, Vision. Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
 
-**Light-shaft lead (unverified):** GFX type 0x12 **GFX_Sun_Render 0x464C40** builds its own geometry (GFX_NeedGeom,
-GFX_Sun_ComputeRay, GFX_Sun_UpdateRayLum). Lens flares are types 4/5 (GFX_Flare_Render 0x4662C0, with a depth test,
-GFX_i_Flare_TestDepth). Check whether 191059's beam is a Sun object (walk the GFX list GFX_Render gets) before
-the PC capture.
+**Light-shaft lead ruled out (30 Oct):** GFX type 0x12 GFX_Sun_Render 0x464C40 (GFX_NeedGeom, GFX_Sun_ComputeRay) is
+not the beam. GFX_Render keeps its list head pointer at 0x674D04 (node: type byte +0, flags u16 +2, id +4, data +8,
+next +0x14, lifetime +0x18). Over 229 saves the list holds only the HUD: Gao (type 0x11) x8, type 0x17 = FUN_00478CC0
+(the HUD bars: GFX_ul_Bar_Geom*, screen quads through CAM_2Dto3D) x7, Interface x1; plus TransitionFade in 191358 (the
+white-out) and type 0x1A (FUN_00485700, unnamed) in 2 saves. No Sun or Flare object in any save, 191059 included.
+So the beam is an element-list draw (likely a mesh element we draw wrong or not at all) or something outside both;
+the PC capture of 191059 stays the next step.
 
 **Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
 Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
