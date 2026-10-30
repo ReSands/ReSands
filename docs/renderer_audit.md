@@ -131,8 +131,11 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    offline, the GS picture has its own post-processing). Facts from the save's last DMA chain (record 3919): the GIF
    tag has FGE on (fog F = clamp(264.47 - 4.18 w, 102, 255), same as the native draw's), and the header's STROW / STMASK
    (row (F3, E9, D3, **0x70**), mask 0x40404040: alpha from the row) gives the GS **Av = 0x70**, while
-   `currentMaterial` uses sub-material word 0 >> 25 = **116** (3.5% more). Next: the 27 Oct GS trace of this save
-   (PC `game\jobs\gscensus\20261025_115837.txt`) has the draw's RGBAQ / FOG / ALPHA; find where 0x70 comes from.
+   `currentMaterial` uses sub-material word 0 >> 25 = **116**. Not a bug: the row alpha is the byte 0x70000040 that
+   ExtractLocalAlphaAndConstantColor sets from the same word (`004c8a80.c` writes it), and the glow's alpha is animated
+   (84 / 116 / 124 / 0 in four saves); native = the chain in 202314, 115853, 155110; in 115837 the chain is the frame
+   before the replayed lists. Next: the 27 Oct GS trace of this save (PC `game\jobs\gscensus\20261025_115837.txt`)
+   has the draw's RGBAQ / FOG / ALPHA for the remaining brightness.
    Debug switches added to `pop_native_view`: `POP_VIEW_LIST` now prints each material and each draw's fog,
    `POP_VIEW_VERTS=<draw>` a draw's triangles and vertices.
 

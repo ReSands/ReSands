@@ -65,7 +65,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. Copy `game/jobs/gstrace1030.ps1` (git-ignored, not in the bundle) to the PC and run it: GS-only traces of 185807
-     (rewind glow rectangles, L1 held) and 145139 (moon Z). Copy back `game\jobs\gstrace1030\` and the 27 Oct
+     (rewind glow levels for the ramp, L1 held) and 145139 (moon Z). Copy back `game\jobs\gstrace1030\` and the 27 Oct
      `game\jobs\gscensus\` traces (115837 has the dagger glow's GS values).
   5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget";
      and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
@@ -73,9 +73,10 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Next Mac session (offline, no PC needed), in order** (30 Oct list done: `docs/native_bugs.md` "Rewind look
   resolved", `docs/renderer_audit.md` item 9; offline saves lack shadows when the save's lists were already emptied):
   1. Dagger glow: colour fixed 30 Oct (GS saturates Ct x Cv at 0xFF, `mesh.frag`); still brighter than the GS at its
-     centre. Waits on PC step 4's traces: the 115837 census trace (draw's RGBAQ / FOG / ALPHA; Av 0x70 on the GS vs
-     116 ours: `docs/renderer_audit.md` item 9 "Dagger glow").
-  2. Thin bright strip at the rewind glow's right / bottom edges (185807): waits on PC step 4's trace (rectangles' layout).
+     centre. Waits on PC step 4's traces: the 115837 census trace (draw's RGBAQ / FOG / ALPHA; the alpha is
+     animated and matches: `docs/renderer_audit.md` item 9 "Dagger glow").
+  2. Rewind frames: native -3 at the top to +12 at the bottom (185807; the "edge strip" was not a defect:
+     `docs/native_bugs.md` "Rewind look resolved"). Not looked at yet; offline.
   Waiting on the PC / user: moon halo (PC step 4), ZoomSmooth 0 score (a GS-only save while haste runs).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138

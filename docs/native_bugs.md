@@ -521,8 +521,17 @@ projectors whose caster / receiver lists are filled, and a save taken after the 
 (FUN_004B8080 zeroes the count after drawing; the rewind saves and the gate's 184926 alike; 1022 192521 was caught
 before it, so it has shadows). The entries stay in memory, but stale entries of earlier frames follow them, so the
 count can't be recovered (dump of the list memory, 30 Oct). Live shadows are native and user-checked (24 Oct).
-So no offline score includes shadows. Left: a thin strip at the right and bottom edges (likely GS bilinear reading past a
-level's rectangle into the shared buffer; needs the rectangles' layout from a GS trace). Not checked live (the glow runs natively only with
+So no offline score includes shadows. **Edge strip: not a glow defect (30 Oct, Mac, from the code):** the frame's last
+column / row is brighter in the scene itself (185807 x 639: 76 vs 62 at x 638 with `--noglow`, the GS picture too), and
+native's excess there is the same ratio as beside it (x 638 / 639: 4.2% / 5.0%; y 446 / 447: 10.4% / 11.3%). The
+layout, for the record (prototype ColorDiffusion `0046f680.c`, RectBlitter `00471d40.c` = retail FUN_004AF340): every
+level sits at x 0 of the shared buffer, level 0 (320x224) at y 0; level n's halved copy C(n) at y(V(n-1)) + h(n-1) + h(n),
+convolved into V(n) = the h(n) rows just above it. RectBlitter: CLAMP_1 REGION_CLAMP = the source rect exactly (our
+GS clamps both bilinear taps, so nothing is read past it), SCISSOR_1 = dest x..x+w, y..y+h (inclusive: one pixel
+more; the +1 convolution taps write C(n)'s top row while later taps read it, ~2% of a bottom row into the level's top
+rows: not modelled), XY -0.5 px on both corners, UVs without inset (= our centre-to-centre `resample`). **Left:** a
+vertical ramp in the rewind frames, native -3 at the top to +12 at the bottom (185807, per-row mean of native - GS);
+not looked at yet. Not checked live (the glow runs natively only with
 `-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves): **empty draw lists in the save** (0 draws offline, saved after the game cleared them), cannot be judged offline; nothing broken (30 Oct). The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
 `[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).
