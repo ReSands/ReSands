@@ -520,7 +520,7 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   waterRecord marks its draws native itself; and the mask call (returns to 0x4B9FF8) is skipped when the colour pass can be
   native (on the GS it closed the frame's purity: "ended by water +0x88" in 1,929 of 2,400 frames without P6). Fountain save
   202926, 45 s hands-off: water draws 6,099, native 2,232, not replayed 0, 60 fps; the rest stay on the GS because a GS GFX
-  draw earlier in +0x88 ends the purity first (2,285 frames; the prefix rule, 0.2). The user watched it: looks good.
+  draw earlier in +0x88 ends the purity first (2,285 frames; the prefix rule, 0.2). The user watched it: looks good. **On by default since 30 Oct** (`POP_NATIVE_P6=0` off; still only with `-NativeLate`).
 - **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
   livecmp, ~1 s per save on the Mac): all 49 saves of 19 Oct render (`game/analysis/play1019/native/`,
   `scores.txt`), mean difference 18.6. Plain scenes and fights 2-10 (the fight 185602: 9.8, only the HUD

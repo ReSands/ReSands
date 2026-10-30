@@ -2386,7 +2386,7 @@ namespace pop_native_live
             return true;
         }
 
-        // water through P6 (POP_NATIVE_P6=1, off by default; =interp: the interpreter only). CJSmWaterElement::Display
+        // water through P6 (on by default, user check 29 Oct; POP_NATIVE_P6=0 off; =interp: the interpreter only). CJSmWaterElement::Display
         // CALLs the element's ready packet (*element & 0x0FFFFFFF: BASE / OFFSET (double buffered), the 12 matrix qw
         // from 0x6C5BC0 at VU 1, a DIRECT of GS registers, then per patch 4 UNPACKs at TOPS and MSCAL 0; tools/p6packets.py
         // lists a save's). A refracting water (element +4) is drawn by CElementList::Render as FUN_004A76C0 (the frame's
@@ -2401,7 +2401,7 @@ namespace pop_native_live
         bool waterRecord(uint8_t *rdram, R5900Context *ctx)
         {
             VuProg &s = g_waterVu;
-            static const bool on = [] { const char *e = std::getenv("POP_NATIVE_P6"); return e && *e && *e != '0'; }();
+            static const bool on = [] { const char *e = std::getenv("POP_NATIVE_P6"); return !(e && *e == '0'); }();
             const uint32_t element = getRegU32(ctx, 4);
             if (!on || s.broken || !guestAny(rdram, element + 4))
                 return false; // a water without refraction: none in the saves (its packet's DIRECT would set the texture)
