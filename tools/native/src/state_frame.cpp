@@ -345,6 +345,11 @@ namespace
         // (haze) when bit 7 is set, reading the object itself
         constexpr uint32_t ae = 0x006DF170u;
         const uint8_t flags = *getConstMemPtr(g_ram.data(), ae + 0x121);
+        if (flags & 0x10) // PinchEffect (FUN_004AEA00), before the glow; its hook reads the object's fields
+        {
+            setArgs(sub, ae);
+            call(0x004AEA00u, &sub);
+        }
         if (flags & 0x20)
         {
             R5900Context g{};

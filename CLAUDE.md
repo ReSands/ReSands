@@ -48,8 +48,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
   Working on **0.13**: P5 particles and P6 water on by default (done, user-checked); halos offline-done, not yet on
   the PC; light shafts need no new path (glow-mask meshes +
-  ColorDiffusion, already native: `docs/native_bugs.md` "Light shafts"; judge live with `-NativeLate`), flashes = after-effects not yet native, Pinch first (survey: `docs/native_bugs.md`
-  "Flashes survey"; fades moved to 0.14, user 30 Oct), retry `-NativeLate`.
+  ColorDiffusion, already native: `docs/native_bugs.md` "Light shafts"; judge live with `-NativeLate`), flashes = after-effects: Pinch native offline (30 Oct, not yet on the PC), then MotionSmooth / FixBlend
+  (survey: `docs/native_bugs.md` "Flashes survey"; fades moved to 0.14, user 30 Oct), retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -58,11 +58,12 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
 - **Next PC session (ask about the TV first), in order:**
-  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix are new there).
+  1. Bundle to the PC, `-Fast` build (halos, `frameOnly`, halo purity fix, Pinch are new there).
   2. Boot check of patches 43 (MOVZ/MOVN) + 44 (640x448 screenshots: look at one) with P5 on.
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
-  5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget".
+  5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget";
+     and at a sand save (115853): `[pop:world] pinch:` native > 0; user looks at the warp in motion.
   6. Shut the PC down.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138

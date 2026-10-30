@@ -353,6 +353,8 @@ namespace pop_native_live
         constexpr uint32_t kHaloAlphaKey = 0xFE5C0001u;
         // the glow mask put back after a halo: image -4, the same read of the frame copy without a new copy
         constexpr uint32_t kHaloRestoreKey = 0xFE5C0002u;
+        // the pinch effect's grid (pinchRecord): image -5, the frame copied before the draw and read as it is
+        constexpr uint32_t kPinchKey = 0xFE5C0003u;
         std::unordered_map<uint32_t, pop_native::Image> g_framePaletteImages; // texture index -> recoloured this frame
         std::unordered_map<uint32_t, uint32_t> g_framePaletteKeys;            // texture index -> key used this frame
         uint32_t texListEntry(uint8_t *rdram, uint32_t countAddr, uint32_t listAddr, uint32_t index)
@@ -2674,6 +2676,95 @@ namespace pop_native_live
                 return;
             g_origHalo(rdram, ctx, runtime);
         }
+
+        // CAfterEffect::PinchEffect (retail FUN_004AEA00; only caller FUN_004ABFC0, after the halos, before the glow; flag +0x121
+        // bit 4), its arguments the object's fields: the frame is copied (buffer 0 -> 2), then drawn back over itself as an N x N
+        // grid (+0x4C) of triangle strips, ST the regular grid over +0x50/+0x54 + (1 - s) / 2 .. + s (s = +0x64), positions the
+        // same grid with the points inside radius +0x68 * N of the centre ((+0x58/+0x5C + 0.5) * N) pulled towards it by
+        // pow(sin(d * pi/2 / radius), +0x60). RGBAQ 0x808080 + (+0x74 >> 1); ALPHA 0x29 with FIX 0 = Cs (opaque) when +0x74 is
+        // 0xFF, else ALPHA 1; Z always; RGB only (FBMSK 0xFF000000: the glow mask stays). Natively the same strips through
+        // gifToBatch, reading a fresh frame copy (image -5). shortcut: +0x74 != 0xFF (blended) stays on the GS; none in the saves.
+        uint64_t g_pinchCalls = 0, g_pinchNative = 0;
+        bool pinchRecord(uint8_t *rdram)
+        {
+            static const bool off = [] { const char *e = std::getenv("POP_NATIVE_PINCH"); return e && *e == '0'; }();
+            ++g_pinchCalls;
+            if (off || (g_world && !(g_worldLate && g_worldOpen && g_worldPure)))
+                return false;
+            constexpr uint32_t ae = 0x006DF170u;
+            const uint32_t n = guestAny(rdram, ae + 0x4C);
+            if (guestAny(rdram, ae + 0x74) != 0xFFu || n > 64)
+                return false;
+            const float e = guestF(rdram, ae + 0x60), s = guestF(rdram, ae + 0x64), nf = float(n);
+            const float radius = guestF(rdram, ae + 0x68) * nf, cx = (guestF(rdram, ae + 0x58) + 0.5f) * nf, cy = (guestF(rdram, ae + 0x5C) + 0.5f) * nf;
+            const float ox = guestF(rdram, ae + 0x50) + (1.0f - s) / 2.0f, oy = guestF(rdram, ae + 0x54) + (1.0f - s) / 2.0f;
+            const float w = float(guestAny(rdram, 0x0066D03Cu)), h = float(guestAny(rdram, 0x0066D040u));
+            const float x0 = float(int(guestAny(rdram, 0x00675170u))), y0 = float(int(guestAny(rdram, 0x00675174u)));
+            // any Z inside the view (no depth test): the viewport (+0x280) at NDC depth 0.5
+            const uint32_t gso = guestAny(rdram, 0x00675148u);
+            const uint32_t z = uint32_t(guestF(rdram, gso + 0x280u + 16 * 2 + 8) * 0.5f + guestF(rdram, gso + 0x280u + 16 * 3 + 8));
+            std::vector<std::vector<uint8_t>> strips;
+            for (uint32_t j = 0; j < n; ++j)
+            {
+                const uint32_t nloop = 2 * (n + 1);
+                std::vector<uint8_t> pk(16 + size_t(nloop) * 48, 0);
+                const uint64_t tag[2] = {nloop | (1u << 15) | (uint64_t(1) << 46) | (uint64_t(0x5C) << 47) | (uint64_t(3) << 60), 0x521}; // RGBAQ ST XYZ2
+                std::memcpy(pk.data(), tag, 16);
+                uint8_t *q = pk.data() + 16;
+                for (uint32_t i = 0; i <= n; ++i)
+                    for (uint32_t k = 0; k < 2; ++k, q += 48)
+                    {
+                        const float row = float(j + k);
+                        float gx = float(i), gy = row;
+                        const float dx = gx - cx, dy = gy - cy, d2 = dx * dx + dy * dy;
+                        if (d2 < radius * radius)
+                        {
+                            const float t = std::clamp(std::sqrt(d2) * 1.57075f / radius, 1e-8f, 1.57075f);
+                            const float f = float(std::pow(double(std::sin(t)), double(e)));
+                            gx = cx + f * dx, gy = cy + f * dy;
+                        }
+                        const uint32_t rgbaq[4] = {0x80, 0x80, 0x80, 0x7F};
+                        const float st[4] = {ox + float(i) * s / nf, oy + row * s / nf, 1.0f, 0.0f}; // frame UV (the copy's 0..1)
+                        const uint32_t xyz[4] = {uint32_t(int((x0 + ox * w) * 16.0f + gx / nf * s * w * 16.0f)) & 0xFFFF,
+                                                 uint32_t(int((y0 + oy * h) * 16.0f + gy / nf * s * h * 16.0f)) & 0xFFFF, z, 0};
+                        std::memcpy(q, rgbaq, 16);
+                        std::memcpy(q + 16, st, 16);
+                        std::memcpy(q + 32, xyz, 16);
+                    }
+                strips.push_back(std::move(pk));
+            }
+            pop_assets::Batch grid;
+            uint64_t unused = 0;
+            if (n && (!gifToBatch(rdram, strips, grid, unused) || grid.indices.empty()))
+                return false;
+            if (n)
+            {
+                DrawMaterial m; // no fog
+                m.frameOnly = true;
+                m.seq = g_frameSeq++;
+                m.textureKey = kPinchKey;
+                m.flags = 0x200; // no depth write, not blended
+                m.zTest = 0;
+                m.fbmsk = 0xFF000000u;
+                m.list = g_currentList;
+                std::vector<pop_assets::Batch> bs;
+                bs.push_back(std::move(grid));
+                g_frameRefs.emplace_back(std::move(bs), std::make_pair(std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}, m));
+            }
+            if (!(g_world && g_worldLate))
+                return false; // offline: the draw stays in the frame, the GS emulation is not used
+            if (n)
+                worldMaterial({2, g_frameRefs.size() - 1}).native = true;
+            ++g_pinchNative;
+            return true;
+        }
+        PS2Runtime::RecompiledFunction g_origPinch = nullptr;
+        void pinchEffect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_frameCapturing && pinchRecord(rdram))
+                return;
+            g_origPinch(rdram, ctx, runtime);
+        }
 #endif
 
         // native shadows (below): which records each Display call added, so a shadow list entry finds its geometry
@@ -3872,7 +3963,7 @@ namespace pop_native_live
             }
             for (const DrawMaterial &m : allMaterials)
                 if (m.textureKey && m.textureKey != kRefractionKey && m.textureKey != kHaloAlphaKey && m.textureKey != kHaloRestoreKey &&
-                    !imageOf.count(m.textureKey))
+                    m.textureKey != kPinchKey && !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
                     bool found = false;
@@ -4030,7 +4121,7 @@ namespace pop_native_live
                     batches = &rec.first;
                 }
                 const DrawMaterial &mat = *matp;
-                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey == kPinchKey ? -5 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
                 putBytes(f, model, size_t(4) * size_t(16));
@@ -4427,6 +4518,9 @@ namespace pop_native_live
                     if (g_haloStats.calls)
                         std::fprintf(stderr, "[pop:world] halos: %llu, native %llu, with ghosts (GS) %llu\n", (unsigned long long)g_haloStats.calls,
                                      (unsigned long long)g_haloStats.native, (unsigned long long)g_haloStats.ghosts);
+                    if (g_pinchCalls)
+                        std::fprintf(stderr, "[pop:world] pinch: %llu, native %llu\n", (unsigned long long)g_pinchCalls,
+                                     (unsigned long long)g_pinchNative);
 #endif
                 }
                 if (g_nativeShadows && g_worldStats.frames % 300 == 0)
@@ -4811,6 +4905,9 @@ namespace pop_native_live
             g_origHalo = runtime.lookupFunction(0x004AA240u);
             if (g_origHalo)
                 runtime.replaceFunction(0x004AA240u, haloDisplay);
+            g_origPinch = runtime.lookupFunction(0x004AEA00u);
+            if (g_origPinch)
+                runtime.replaceFunction(0x004AEA00u, pinchEffect);
 #endif
             g_origParticles = runtime.lookupFunction(0x004584C0u);
             if (g_origParticles)

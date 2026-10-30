@@ -479,3 +479,15 @@ So the beam is an element-list draw (resolved below).
 Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
 sand areas), MotionSmooth / FixBlend, then ZoomSmooth / Spiral / Vision once a save during rewind / sand vision exists
 (ask the user for one).
+
+## Native Pinch (30 Oct, offline; not yet live-checked)
+
+`pinchRecord` / `pinchEffect` in `pop_native_live.cpp` (hook on FUN_004AEA00, `POP_NATIVE_PINCH=0` off; live only while the
+frame is pure, as the halos, so with `-NativeLate`): the game's N x N grid of triangle strips (formula in the code comment;
+`pow` = FUN_00134980, a wrapper of __ieee754_pow) through `gifToBatch`, reading a fresh frame copy (PNF image -5,
+`frame_loader`); Z any value inside the view (no depth test). `pop_state_frame` calls it between the halos and the glow
+when +0x121 bit 4 is set. Offline, with the glow, against the game picture (Pinch off -> on): 115837 4.07 -> 2.91,
+115853 28.01 -> 25.20, 155110 29.67 -> 28.76, 1029 185650 32.32 -> 30.63, 185807 32.98 -> 32.27, 185943 35.79 -> 33.98
+(the high ones are an even brightness offset over the whole frame, the sand haze, not the warp). The warp is smooth,
+content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
+`[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).

@@ -117,14 +117,17 @@ namespace pop_native
                 // -4: the same read of that copy without a new one (the glow mask put back after the halo)
                 const bool haloAlpha = v3 && (image == -3 || image == -4);
                 haloCopy = v3 && image == -3;
-                d.copyFrame = refraction || haloCopy;
+                // -5: the pinch effect's grid (pop_native_live pinchRecord): the frame is copied before the draw and read as it is
+                const bool pinch = v3 && image == -5;
+                d.copyFrame = refraction || haloCopy || pinch;
                 if (hasImage || v3)
                 {
-                    const auto key = std::make_tuple(hasImage || refraction || haloAlpha ? image : -1, mode, word, zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
+                    const auto key = std::make_tuple(hasImage || refraction || haloAlpha || pinch ? image : -1, mode, word,
+                                                     zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
-                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction || haloAlpha ? kFrameCopyImage : -1;
+                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction || haloAlpha || pinch ? kFrameCopyImage : -1;
                         mat.refraction = refraction;
                         mat.haloAlpha = haloAlpha;
                         if (v3)
