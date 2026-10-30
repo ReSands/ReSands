@@ -47,8 +47,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Where we are:** native renderer at roadmap 0.12, on by default in `play.ps1` (static world, lit statics,
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
   Working on **0.13**: P5 particles and P6 water on by default (done, user-checked); halos offline-done, not yet on
-  the PC; then light shafts (draw path unknown: FUN_00469C00 / type 0x18 turned out to be the HUD, see
-  `docs/native_bugs.md` "Light shafts"), flashes (surveyed 30 Oct: `docs/native_bugs.md` "Flashes survey"), retry `-NativeLate`.
+  the PC; light shafts need no new path (glow-mask meshes +
+  ColorDiffusion, already native: `docs/native_bugs.md` "Light shafts"; judge live with `-NativeLate`), flashes (surveyed 30 Oct: `docs/native_bugs.md` "Flashes survey"), retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
@@ -62,8 +62,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   3. GS-only fountain save (gsref job), add as a `vu1` line in `tools/nightly/render_gate.txt`.
   4. GS trace (`PS2X_GS_TRACE`) of a moon frame from 145139, GS only: the Z under the moon core at the halo test.
   5. `-NativeLate` at fountain 202926 and sun 162621: `[pop:world] halos:` native > 0, no "kept meshes over budget".
-  6. `POP_DMACAP` chain of the mirror-beam save 191059 (light shafts: find the beam's draw path).
-  7. Shut the PC down.
+  6. Shut the PC down.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 79/669 matched, Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac, mist in water): `docs/native_bugs.md` "Side jobs".

@@ -425,9 +425,16 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
 - **The light shafts' path:** 092046 ("rays of light", 17 Oct) has empty lists in the save (0 draws offline: no use).
   191059 (mirror cutscene): the beam is missing natively although every list entry is replayed (kinds 3, 4, 9, 10 in
   +0x2C..+0x98), and no replayed draw lands there. So either a draw outside the element lists, or an element drawn
-  natively with nothing visible. Next: a POP_DMACAP chain (or `PS2X_GS_TRACE`) of the beam frame on the PC, then
-  match the beam's GS draws to their DMA source / caller. (`tools/chainpost.py` reads POP_DMACAP files only; a save's chain
-  converted to that format came out as noise.)
+  natively with nothing visible.
+- **Resolved 30 Oct (Mac): the light shafts are glow-mask meshes, already native.** The "missing" beam came from
+  rendering with `--noglow` (and from the 19 Oct score, before the native glow). Per-draw renders of 191059
+  (`POP_VIEW_ONLY=i-i`) + each draw's projected screen box found 36 draws covering exactly the beam (x 128..415, y
+  146..316) that change no colour: texture 2e0057e8 (UV-animated subs, flags c001405f / c020040f), one pass with FBMSK
+  ffffffff, the +0x98 pass with FBMSK 00ffffff (alpha only: the glow mask). ColorDiffusion blooms that mask into the
+  white shaft. With the glow on, 191059 scores 5.26 against the game (beam shape and brightness match; small
+  differences inside it and at its edges). So light shafts need no new draw path: live they are native once +0x88 /
+  +0x98 and the glow are (`-NativeLate`); judge in motion there. 155110's floor patch and the moon blob (ColorDiffusion
+  over-brightening, above) are the same mechanism, so the GS check of the glow's tap FIX matters for shafts too.
 
 ## Flashes survey (30 Oct, Mac, offline; retail addresses, names from `game/proto/analysis/retail_names_from_proto.tsv`)
 
@@ -462,8 +469,7 @@ not the beam. GFX_Render keeps its list head pointer at 0x674D04 (node: type byt
 next +0x14, lifetime +0x18). Over 229 saves the list holds only the HUD: Gao (type 0x11) x8, type 0x17 = FUN_00478CC0
 (the HUD bars: GFX_ul_Bar_Geom*, screen quads through CAM_2Dto3D) x7, Interface x1; plus TransitionFade in 191358 (the
 white-out) and type 0x1A (FUN_00485700, unnamed) in 2 saves. No Sun or Flare object in any save, 191059 included.
-So the beam is an element-list draw (likely a mesh element we draw wrong or not at all) or something outside both;
-the PC capture of 191059 stays the next step.
+So the beam is an element-list draw (resolved below).
 
 **Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
 Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
