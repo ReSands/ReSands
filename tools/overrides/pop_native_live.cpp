@@ -1346,6 +1346,7 @@ namespace pop_native_live
                             {
                                 DrawMaterial dm = currentMaterial(rdram);
                                 dm.hasUvm = false; // the character program has no UV matrix
+                                dm.frameOnly = pass == 2; // env-map UVs follow the camera; pass 1's baked light stays cacheable
                                 g_frameRefs.emplace_back(std::move(posed), std::make_pair(poolMatrix(rdram, index), dm));
                                 ++(pass == 1 ? g_worldStats.litNative : g_worldStats.envNative);
                             }
@@ -3149,6 +3150,7 @@ namespace pop_native_live
                         {
                             DrawMaterial dm = currentMaterial(rdram);
                             dm.hasUvm = false; // the character program has no UV matrix
+                            dm.frameOnly = pass == 2; // env-map UVs follow the camera; pass 1's baked light stays cacheable
                             const std::array<float, 16> model = poolMatrix(rdram, index);
                             if (elemLogged(element))
                                 elemLog(pass == 1 ? "lit" : "env", element, pass, index, model, &posed, dm);
