@@ -428,3 +428,41 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
   natively with nothing visible. Next: a POP_DMACAP chain (or `PS2X_GS_TRACE`) of the beam frame on the PC, then
   match the beam's GS draws to their DMA source / caller. (`tools/chainpost.py` reads POP_DMACAP files only; a save's chain
   converted to that format came out as noise.)
+
+## Flashes survey (30 Oct, Mac, offline; retail addresses, names from `game/proto/analysis/retail_names_from_proto.tsv`)
+
+Flashes come from two places, neither drawn natively today (live they stay on the GS).
+
+**1. Full-screen fades = the GFX module's Fade (type 0xB, GFX_i_Fade_Render 0x46FCC0) and TransitionFade (0x19,
+0x46EC80)**, dispatched by GFX_Render 0x463F80 (called from FUN_003E2380, not from the element lists). Both call the
+GDI rectangle pointer `*(0x674B00) + 0x18` = **FUN_004B4580**(x0, y0, x1, y1 in 0..1 of the display, colour, mode): an
+untextured GS sprite, TEST 0x30000 (Z always), ZBUF masked, ALPHA 0x29 (mode 0; FIX 0, so Cs: opaque, decode worth a
+second look) or 0x44 (mode 1: (Cs - Cd) * As + Cd). Fade lerps two colours over in / hold / out phases (FUN_00476700);
+TransitionFade ramps the alpha (top byte, 0..0xFE) in, holds, ramps out. While the draw manager is in state 10
+(`0x700000D8`), FUN_004B4580 does not draw: it stores the rectangle in the table 0x6DF6E0 (0x18 bytes: x0, y0, x1, y1,
+colour, mode; 16 slots, count at +0x180) and queues a **kind 11** entry (type 0x2C..0x2F) in list **+0xB8**, which
+CElementList::Render draws by calling FUN_004B4580 again. `pop_state_frame` neither replays +0xB8 nor kind 11.
+Census over 231 saves: two have one. 191358 (save-point white-out) full screen `7fffffff` mode 1; 192114 full screen
+`40000000` mode 1 (black at half). Natively this is one alpha-blended screen quad after the world, before the HUD;
+it belongs with the HUD layer (+0xB8 is also where the STR text sits, see "Light shafts").
+
+**2. CAfterEffect (0x6DF170; dispatcher FUN_004ABFC0, end of Display3DElements).** Retail keeps 9 of the prototype's
+effects (flag byte.bit -> prototype name -> retail): +0x120.7 ZoomSmooth(+0x18, 0) and +0x121.0 ZoomSmooth(+0x1C, 1)
+FUN_004AD900; +0x121.4 PinchEffect FUN_004AEA00; +0x121.5 ColorDiffusion 0x4AE100 (glow, native); +0x120.5
+MotionSmooth; +0x120.0 an inline blend of buffer 1 over the frame, ALPHA (Cs - Cd) * FIX + Cd with FIX = +0x20 * 128
+("FixBlend"); +0x122.2 Spiral FUN_004AC740; +0x121.7 SmartBlur 0x4A93C0 (native); +0x122.0 VisionEffect FUN_004A7980.
+Gone in retail: BrightnessContrast, DepthBlur(Near), Blur, Remanance, RadialBlur, ClearBorderExtend,
+ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8** (sand-haze saves 115837, 115853,
+155110, 1029 185650 / 185807 / 185943, ...), **MotionSmooth 9**, **FixBlend 2** (24 Oct 200337 0.52, 19 Oct 185803
+0.70); ZoomSmooth, Spiral, Vision in none (rewind / sand vision: no save taken during one). Not native: Pinch,
+MotionSmooth, FixBlend, ZoomSmooth, Spiral, Vision. Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
+
+**Light-shaft lead (unverified):** GFX type 0x12 **GFX_Sun_Render 0x464C40** builds its own geometry (GFX_NeedGeom,
+GFX_Sun_ComputeRay, GFX_Sun_UpdateRayLum). Lens flares are types 4/5 (GFX_Flare_Render 0x4662C0, with a depth test
+FUN of GFX_i_Flare_TestDepth). Check whether 191059's beam is a Sun object (walk the GFX list GFX_Render gets) before
+the PC capture.
+
+**Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
+Suggested order: fades (tiny, but needs the 2D layer: do with 0.14's HUD or as a single quad now), Pinch (8 saves,
+sand areas), MotionSmooth / FixBlend, then ZoomSmooth / Spiral / Vision once a save during rewind / sand vision exists
+(ask the user for one).

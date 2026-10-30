@@ -48,7 +48,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   characters, translucents, shadows, P9 sprites); late lists (+0x88/+0xA8) stay on the GS unless `-NativeLate`.
   Working on **0.13**: P5 particles and P6 water on by default (done, user-checked); halos offline-done, not yet on
   the PC; then light shafts (draw path unknown: FUN_00469C00 / type 0x18 turned out to be the HUD, see
-  `docs/native_bugs.md` "Light shafts"), flashes (survey first), retry `-NativeLate`.
+  `docs/native_bugs.md` "Light shafts"), flashes (surveyed 30 Oct: `docs/native_bugs.md` "Flashes survey"), retry `-NativeLate`.
   Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, 0.13 candidates,
   parked list), `docs/renderer_audit.md`.
 - **0.1 still needs:** crash 1 closed (fix 3b80b66; close after a fight-heavy session without `missing-target`).
