@@ -458,8 +458,8 @@ ComputeWaterReflection. Census (231 saves): glow and SmartBlur always; **Pinch 8
 MotionSmooth, FixBlend, ZoomSmooth, Spiral, Vision. Pinch is a likely part of the "sand haze thicker on the GS" note (115853).
 
 **Light-shaft lead (unverified):** GFX type 0x12 **GFX_Sun_Render 0x464C40** builds its own geometry (GFX_NeedGeom,
-GFX_Sun_ComputeRay, GFX_Sun_UpdateRayLum). Lens flares are types 4/5 (GFX_Flare_Render 0x4662C0, with a depth test
-FUN of GFX_i_Flare_TestDepth). Check whether 191059's beam is a Sun object (walk the GFX list GFX_Render gets) before
+GFX_Sun_ComputeRay, GFX_Sun_UpdateRayLum). Lens flares are types 4/5 (GFX_Flare_Render 0x4662C0, with a depth test,
+GFX_i_Flare_TestDepth). Check whether 191059's beam is a Sun object (walk the GFX list GFX_Render gets) before
 the PC capture.
 
 **Not done:** survey of other projects (`docs/ps2_projects.md`) for these effects; the PC capture of 191059.
