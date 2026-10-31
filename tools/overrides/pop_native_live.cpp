@@ -233,9 +233,10 @@ namespace pop_native_live
             g_uvSub = getRegU32(ctx, 5);
             g_origUvMatrix(rdram, ctx, runtime);
         }
-        // dedupe key bit for the alpha-only pass (list +0x98, render state 0x44 = 0xFF000000): the game
-        // draws mask elements again there, depth-tested against the finished scene
-        uint64_t alphaPassBit(uint8_t *rdram);
+        // dedupe key bits: bit 62 for the alpha-only pass (list +0x98, render state 0x44 = 0xFF000000: the game draws
+        // mask elements again there, depth-tested against the finished scene); bits 42-55 for the entry's layer (sub-material
+        // 0x70000034): the game draws one element once per layer, e.g. two caustic layers with other scrolls (N22)
+        uint64_t drawKeyBits(uint8_t *rdram);
         // the element list being rendered (CElementList::Render 0x4B9440, a0 - the draw manager given to
         // Display3DElements): EraseAlphaBuffer runs just before list +0x98, so only lists +0x98 and
         // +0xA8 leave alpha (the glow mask) in the frame
@@ -697,7 +698,11 @@ namespace pop_native_live
             float dir[4][3] = {}, col[4][3] = {}, amb[3] = {};
             float pos[4][3] = {}, pcol[4][3] = {}, fall[4][2] = {}; // point lights: world position, colour, (a, b)
         };
-        uint64_t alphaPassBit(uint8_t *rdram) { return guestAny(rdram, 0x70000044u) == 0xFF000000u ? uint64_t(1) << 62 : 0; }
+        uint64_t drawKeyBits(uint8_t *rdram)
+        {
+            const uint64_t layer = ((guestAny(rdram, 0x70000034u) * 0x9E3779B1u) >> 18) & 0x3FFFu;
+            return (layer << 42) | (guestAny(rdram, 0x70000044u) == 0xFF000000u ? uint64_t(1) << 62 : 0);
+        }
         LightEnv readLightEnv(uint8_t *rdram)
         {
             LightEnv e;
@@ -1372,7 +1377,7 @@ namespace pop_native_live
                     // pass 2 (the second layer) has its own key: sharing pass 0's lost one of the two (22 Oct)
                     // pass 3: lightmapRecord's key
                     const uint64_t key = pass == 3 ? (uint64_t(ref) << 16) | index | (uint64_t(3) << 56)
-                                                   : (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | alphaPassBit(rdram) |
+                                                   : (uint64_t(ref) << 16) | index | (uint64_t(1) << 63) | drawKeyBits(rdram) |
                                                          (pass == 2 ? uint64_t(2) << 56 : 0);
                     const uint64_t base = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63);
                     const bool seen = worldOk && g_frameSeen.count(key);
@@ -3270,7 +3275,7 @@ namespace pop_native_live
                     break;
                 ++g_stats.draws;
                 const uint64_t worldKey = (uint64_t(element) << 16) | index | (pass == 2 ? uint64_t(2) << 56 : 0) |
-                                          (pass == 3 ? uint64_t(3) << 56 : alphaPassBit(rdram));
+                                          (pass == 3 ? uint64_t(3) << 56 : drawKeyBits(rdram));
                 const bool worldSeen = worldOk && g_frameSeen.count(worldKey);
                 const size_t world0 = worldOk ? worldCount0() : 0, world1 = worldOk ? worldCount1() : 0, world2 = worldOk ? worldCount2() : 0;
                 if (g_frameCapturing && !g_elements.count(element) && !g_skipped.count(element) && !g_skinned.count(element))
@@ -3313,7 +3318,7 @@ namespace pop_native_live
                 const auto it = g_elements.find(element);
                 const auto sk = g_skinned.find(element);
                 if (sk != g_skinned.end() && g_frameCapturing && (pass == 0 || pass == 1 || pass == 4) &&
-                    g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
+                    g_frameSeen.insert((uint64_t(element) << 16) | index | drawKeyBits(rdram)).second)
                 {
                     std::vector<pop_assets::Batch> posed;
                     const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
@@ -3410,7 +3415,7 @@ namespace pop_native_live
                         std::fprintf(stderr, "[pop:elem] unknown el %08x pass %u: skipped as '%c', palette %08x, capturing %d\n", element, pass,
                                      sk == g_skipped.end() ? '-' : sk->second, palette, int(g_frameCapturing));
                     if (sk == g_skipped.end() && !(palette && guest8(rdram, palette)) && g_frameCapturing && pass == 0 &&
-                        g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
+                        g_frameSeen.insert((uint64_t(element) << 16) | index | drawKeyBits(rdram)).second)
                     {
                         const uint32_t packet = guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass)) & ~0xFu;
                         auto &batches = g_fromPacket[(uint64_t(element) << 8) | pass];
@@ -3430,7 +3435,7 @@ namespace pop_native_live
                     }
                 }
                 else if (pass == 2 && g_frameCapturing && !g_skinned.count(element) &&
-                         g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(2) << 56) | alphaPassBit(rdram)).second)
+                         g_frameSeen.insert((uint64_t(element) << 16) | index | (uint64_t(2) << 56) | drawKeyBits(rdram)).second)
                 {
                     // pass 2 (a material's second layer, CJMeshElement::Display with the constant
                     // colour / local alpha of ExtractLocalAlphaAndConstantColor): its own packet at
@@ -3469,7 +3474,7 @@ namespace pop_native_live
                     g_stats.positionsFound += found;
                     if (found == pos.size() / 3 && !pos.empty())
                         ++g_stats.drawsExact;
-                    if (g_frameCapturing && g_frameSeen.insert((uint64_t(element) << 16) | index | alphaPassBit(rdram)).second)
+                    if (g_frameCapturing && g_frameSeen.insert((uint64_t(element) << 16) | index | drawKeyBits(rdram)).second)
                     {
                         // matrix pool: base pointer at scratchpad 0x70000260, 0x40 bytes per index
                         const uint32_t m = guestAny(rdram, 0x70000260u) + index * 0x40u;
