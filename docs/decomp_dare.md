@@ -71,6 +71,19 @@ the compiler check: `docs/roadmap.md` "2.0".
     `SND_fn_bCanFreeSubBlock` 20/22, `SND_fn_vSynchroSxd` 19/21, `CThemeManager::SynchroTheme` 16/18,
     `SndManager::DesInitMTTrackVolumeArray` 15/17, `SND_fn_lGetSpuBiggestReverb` 13/15, `SND_fn_vStrncpy` 16/19.
 
+- **Run 3 (30 Oct 21:39-22:26, cut short by a PC shutdown; resumed 31 Oct 08:01-10:26, stopped by the user): 5 of 23
+  matched (22%)**, 2 header requests (sndCList members `m_pHead` / `RemoveHead`, `sndCListNode`), 16 misses. Now
+  **84 of 669**. The queue has reached 100-112-byte functions (runs 1-2: 32-90). **25 of the misses' 64 rounds did not
+  compile (39%)**; 165d80 and 182c80 never compiled. Near misses: 166940 (1 of 27: `slt` vs `sltu`, signedness),
+  16d640 (4: float compare operands swapped), 173440 (6), 188c00 (8). Folders copied to `game/analysis/qwen_pc/`.
+  Compile errors over all runs, by cause (first error of each failed round): raw linker names used as C++ names
+  (`@110` string literals, `clock$localstatic3$GetInstance__15SND_ClockNativeFv`, mangled
+  `gs_CallBackRequestList__10SndManager` / `RemoveHead__55sndCList<...>Fv` / `..._Fv`): ~20; member names guessed
+  under nested unions (`uRes.stMultiTrack.ulDataSize`, `m_pData`): ~15; sndCList with no members: ~5; `int` into an
+  enum without a cast: ~5; static methods not marked (`SndManager::GetRendererRate`): ~5; types of free-function
+  declarations missing (`TFader` -> "implicit int"): ~6; "NEEDS HEADER CHANGE" written inside the code block (compiled
+  as code, so the request was lost): seen in 182c80.
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669
