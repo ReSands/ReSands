@@ -501,6 +501,41 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   Fix: each halo first draws a save marker over its square (image -6, writes nothing; `Draw::saveFrame` copies into a
   second image `kFrameSaveImage`), the restore (-4) reads that save. Gate unchanged, blend test ok. Still for the
   **real-PS2 check:** the faint wall glow at 193136 popping in and out as the camera turns (GS and native alike now).
+- **N18 rubble seam (31 Oct session; NOT closed: a faint flicker is left).** The user's save
+  `play_20261031_112025` (+ `.glitch`; Mac copy `game/analysis/saves1031/`): a ruined courtyard with stone blocks, the
+  Prince standing. **What the user sees:** along the foot of the big blocks (where block meets ground) a dark line that
+  blinks out (flickers LIGHT) while the Prince or camera moves, and keeps going ~0.5 s after. **`gs` mode: no flicker, and
+  the block-to-ground transition is much softer** (no hard dark line). What we found and changed, in order:
+  1. **The frame was hybrid there** (`purity ended by ref +0x88`, ~85 late draws on the GS each frame). Cause: texture
+     600001ce (8x8, format 3, white) refused by `assets.cpp` texture8: it is sent at its own size (TRXREG 8x8), so it is
+     linear PSMT8, not the PSMCT32 half-size swizzle the decoder assumed (refused for being under a 16x16 block). Fix
+     (e4cf885): TRXREG width == w -> linear; `jadetex.py` the same.
+     Live after: pure at +0x88 in 3,899 / 3,900 frames. **Flicker unchanged** (so the hybrid was not the cause).
+  2. **The dark line is the lightmap pass + our decal depth bias.** Offline (draws 0-347 vs 0-460: material flags
+     0x30284 = CLMElementList's lightmaps) the seams at the blocks' feet are lightmap darkening. Live switches:
+     `POP_NATIVE_DECAL_ZBIAS=256`: no flicker with the camera, slight with the Prince; a slope-scaled bias
+     (added then reverted: 0346867 / 9a1505f) made it subtler; 256 + slope 2: no flicker but the seam "judders".
+     **Stills** (job `game/jobs/n18shots.ps1`, PC `game\recomp-sotc\shots1031\n18_{gs,native,nobias}_field-25262.png`):
+     native with the default bias has a hard dark line along the big block's foot (y ~0.81 of the frame, left two
+     thirds) that GS has not; **native with ZBIAS=0 looks like GS.** Reading: the bias (f8daecb, 29 Oct, for the N16 moss
+     decal) also moved the lightmaps nearer, so the part of a block's lightmap just under the ground showed through as a
+     line, blinking with depth precision. N18 was first reported 30 Oct, the day after that change.
+  3. **Fix in place (2fdf0fa): no decal bias for lightmaps** (`native_renderer.cpp`, `mat->fogAlpha` = flags 0x30284).
+     Gate and blend test unchanged. **User check: still a faint flicker** (not described further; the session ended).
+  **Next, with fresh eyes:** (a) ask what the faint flicker looks like now (the seam line, or something else at the same
+  spot) and get the user's circle on a still (send `n18_native` / `n18_gs` shots to annotate on the Mac); (b) the
+  lightmaps now draw at exactly their base's depth with GEQUAL: that is only stable if the base and lightmap vertices
+  give identical depth. Check that the pass-3 positions equal the base packet's (offline: same element's batches) and
+  consider `invariant gl_Position` in `mesh.vert` (different pipelines may round differently); (c) a GS-only trace of a
+  seam pixel would show whether the GS itself draws that lightmap texel there; (d) check the other no-depth-write draws
+  over this spot (list of no-Z-write materials in the 112025 offline frame: kinds 0x10604-ish decals, receivers) with
+  bias 0 vs 32, since the remaining flicker may be a real decal there; (e) re-check N16's moss save 163042 is still
+  clean (unchanged for decals, but confirm). Captures: `game/analysis/saves1031/`, offline scratch: rerun
+  `pop_state_frame_vu1` + `POP_VIEW_LIST=1 pop_native_view` on the save.
+- **N19 (orange band on the wall at frieze height, 192645): not started.** Native only (GS-only clean, 30 Oct). Check
+  first whether that frame is pure now (N18's texture fix may have changed it): boot it with `POP_NATIVE_WORLD_WHY=1`
+  and read `late lists: ... ended by` and the `no texture:` lines (the why-log for refused textures is "no texture",
+  not "not decoded").
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.

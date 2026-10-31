@@ -297,3 +297,17 @@ mode boots the game check for an active display first, so a mistake like this ca
   the frames right after a load, so a 25 s boot's steady state showed an ender "without a reason" (30 Oct). Before
   calling a refusal silent, grep the whole log for every why-line of that path, not only its last lines; log once per
   distinct cause rather than the first N.
+
+## 31 Oct 2026
+- **When a bug appears, check what changed just before it was first seen.** N18 (rubble seam) was first reported the
+  day after the decal depth bias went in for N16; the bias was moving every no-depth-write draw, including the
+  lightmaps. Tuning the bias up (and adding a slope bias) only traded flicker for judder; a three-way still (GS /
+  native / native with the suspect switch off) showed the line itself was ours. Scope a fix to the draws it was made for.
+- **A per-pass "same object already drawn" key must hold everything that makes two draws differ.** The native dedupe
+  key had element, matrix and pass but not the layer (sub-material), so a two-layer caustic kept only the layer the
+  depth sort put first (N22). A/B by freezing one input (`POP_NATIVE_NOUVM`) first told which input mattered.
+- **A frame copy shared by two steps is read at the wrong time by one of them.** The halo's restore read the copy the
+  visibility test's spread took, after the test had written alpha (N20 / N21). The game saves before; give each reader
+  its own copy taken where the game takes it.
+- The live log is written only when the game exits (`boot.ps1`: stdout then stderr): kill the game before reading it.
+  Why-lines for refused textures say `no texture:`, not `not decoded`.

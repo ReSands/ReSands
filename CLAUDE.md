@@ -57,10 +57,12 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   `POP_NATIVE_POST=1` (with `-NativeLate`) sends them to the world frame's post chain while pure and skips the GS
   originals; GPU in `renderOffscreen` = CPU exactly on 4 saves (`POP_VIEW_GPU_POST=1`). Live since a6feee4 (glow native
   ~99% where pure to the HUD); user look 30 Oct evening fixed N24 / N25; **default on in `play.ps1`** (`-NoNativePost`).
-  **Before 0.14 (user, 30 Oct): close the open bugs first** (`docs/native_bugs.md` N18-N27). State at the end of 30 Oct:
+  **Before 0.14 (user, 30 Oct): close the open bugs first** (`docs/native_bugs.md` N18-N27). State at 31 Oct midday:
   - **N22 (caustic hop): fixed 31 Oct (4a8c5bf, user check)**: the draw dedupe key left out the layer; entry in `docs/native_bugs.md`.
   - **N20 (window rays 193136) + N21 (candle white square): fixed 31 Oct (fbf650f, user checks)**: halo restore read the wrong copy.
-  - N18 (ledge-edge sliver 192544), N19 (orange band 192645): ours, not started. 
+  - **N18 (rubble seam flicker, save `play_20261031_112025`): in progress, resume here.** Fixed on the way: an 8x8 linear
+    texture refused (frame hybrid), decal Z bias applied to lightmaps (dark seam). A faint flicker is left: next steps
+    (a)-(e) in its `docs/native_bugs.md` entry. N19 (orange band 192645): not started (check purity first).
     N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
