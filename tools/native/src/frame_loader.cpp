@@ -134,12 +134,14 @@ namespace pop_native
                 // read through the refraction buffer
                 const bool refraction = v3 && image == -2;
                 // image -3: a halo's visibility (pop_native_live haloRecord): the frame is copied before the draw, its alpha averaged;
-                // -4: the same read of that copy without a new one (the glow mask put back after the halo)
+                // -6: the halo's square saved before it touches the alpha (draws nothing); -4: that save read back (the glow
+                // mask put back after the halo)
                 const bool haloAlpha = v3 && (image == -3 || image == -4);
-                haloCopy = v3 && image == -3;
+                haloCopy = v3 && (image == -3 || image == -6);
+                d.saveFrame = v3 && image == -6;
                 // -5: the pinch effect's grid (pop_native_live pinchRecord): the frame is copied before the draw and read as it is
                 const bool pinch = v3 && image == -5;
-                d.copyFrame = refraction || haloCopy || pinch;
+                d.copyFrame = refraction || (haloCopy && !d.saveFrame) || pinch;
                 if (hasImage || v3)
                 {
                     const auto key = std::make_tuple(hasImage || refraction || haloAlpha || pinch ? image : -1, mode, word,
@@ -147,7 +149,10 @@ namespace pop_native
                     if (!materials.count(key))
                     {
                         Material mat;
-                        mat.baseImage = hasImage ? imageIndex[size_t(image)] : refraction || haloAlpha || pinch ? kFrameCopyImage : -1;
+                        mat.baseImage = hasImage                          ? imageIndex[size_t(image)]
+                                        : v3 && image == -4               ? kFrameSaveImage
+                                        : refraction || haloAlpha || pinch ? kFrameCopyImage
+                                                                           : -1;
                         mat.refraction = refraction;
                         mat.haloAlpha = haloAlpha;
                         if (v3)
@@ -194,7 +199,7 @@ namespace pop_native
                     if (d.kept < 0)
                         ++keptMissing;
                     else
-                        draws.push_back(d), d.copyFrame = false;
+                        draws.push_back(d), d.copyFrame = d.saveFrame = false;
                     continue;
                 }
                 f.read(reinterpret_cast<char *>(&ni), 4);
@@ -205,7 +210,7 @@ namespace pop_native
                 f.read(reinterpret_cast<char *>(mesh.indices.data()), std::streamsize(ni) * 4);
                 // a halo's spread and restore read the frame copy only inside the spread's own square: copy just that, with
                 // two GS pixels to spare (frame UV = (NDC + 1) / 2; columns of the column-major model and clip matrices)
-                if (haloCopy && d.copyFrame && !mesh.vertices.empty())
+                if (haloCopy && (d.copyFrame || d.saveFrame) && !mesh.vertices.empty())
                 {
                     float box[4] = {1, 1, 0, 0};
                     for (const Vertex &v : mesh.vertices)
@@ -251,14 +256,14 @@ namespace pop_native
                     d.kept = r.keepMesh(key, std::move(mesh));
                     d.material = material;
                     draws.push_back(d);
-                    d.copyFrame = false;
+                    d.copyFrame = d.saveFrame = false;
                     continue;
                 }
                 d.mesh = r.addMesh(std::move(mesh));
                 // debug: POP_VIEW_ONLY=<first>-<last> keeps only those element draws (bisecting a frame)
                 static const char *only = std::getenv("POP_VIEW_ONLY");
                 if (!only || (int(i) >= std::atoi(only) && int(i) <= std::atoi(std::strchr(only, '-') ? std::strchr(only, '-') + 1 : only)))
-                    draws.push_back(d), d.copyFrame = false;
+                    draws.push_back(d), d.copyFrame = d.saveFrame = false;
             }
             static const bool listDraws = std::getenv("POP_VIEW_LIST") != nullptr;
             if (listDraws)

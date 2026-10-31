@@ -361,8 +361,10 @@ namespace pop_native_live
         constexpr uint32_t kRefractionKey = 0xFE5C0000u;
         // a halo's visibility (haloRecord): written as image -3, the frame copy's alpha averaged over the core square
         constexpr uint32_t kHaloAlphaKey = 0xFE5C0001u;
-        // the glow mask put back after a halo: image -4, the same read of the frame copy without a new copy
+        // the glow mask put back after a halo: image -4, the read of the save (image -6: the halo square copied before the
+        // halo's clear, a draw that writes nothing)
         constexpr uint32_t kHaloRestoreKey = 0xFE5C0002u;
+        constexpr uint32_t kHaloSaveKey = 0xFE5C0004u;
         // the pinch effect's grid (pinchRecord): image -5, the frame copied before the draw and read as it is
         constexpr uint32_t kPinchKey = 0xFE5C0003u;
         std::unordered_map<uint32_t, pop_native::Image> g_framePaletteImages; // texture index -> recoloured this frame
@@ -2699,8 +2701,9 @@ namespace pop_native_live
         // ALPHA 0x58 = Cs * Ad + Cd, no Z test; colour 0x808080, or the material's +8 when the node's flags & 0xE000 = 0x4000.
         // Natively the same draws as GS sprites; the averaging is the spread draw's read of the frame copy (mesh.frag bit 256).
         // shortcut: halos with lens-flare ghosts (more texture nodes; tables 0x63F430..) stay on the GS; none in the saves yet.
-        // The game saves the frame's alpha (the glow mask) before the halos and restores it after; natively the restore reads
-        // the copy the spread took. shortcut: so the core square keeps the test's alpha, not the glow mask's (16x16 px or so).
+        // The game saves the frame's alpha (the glow mask) before the halos and restores it after; natively each halo saves its
+        // square before its clear (image -6) and the restore reads that save (N20 / N21: reading the spread's copy instead
+        // left the test's alpha in the core square, and the glow bloomed it into a white square).
         struct HaloStats
         {
             uint64_t calls = 0, native = 0, ghosts = 0, outside = 0; // outside: after the frame's capture ended (kick)
@@ -2775,8 +2778,8 @@ namespace pop_native_live
                 uint64_t unused = 0;
                 return gifToBatch(rdram, {pk}, b, unused) && !b.indices.empty();
             };
-            pop_assets::Batch clear, test, spread, glow, restore;
-            if (!sprite(px0, py0, px1, py1, 0, clear) || !sprite(px0, py0, px1, py1, alpha << 24, test) ||
+            pop_assets::Batch save, clear, test, spread, glow, restore;
+            if (!sprite(ox0, oy0, ox1, oy1, 0, save) || !sprite(px0, py0, px1, py1, 0, clear) || !sprite(px0, py0, px1, py1, alpha << 24, test) ||
                 !sprite(ox0, oy0, ox1, oy1, 0x80000000u, spread) || !sprite(ox0, oy0, ox1, oy1, 0x80000000u, restore))
                 return false;
             // the spread reads the core square of the frame copy: its corners in frame UV, the same on every vertex
@@ -2822,6 +2825,7 @@ namespace pop_native_live
                 g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, m));
                 recs.push_back({2, g_frameRefs.size() - 1});
             };
+            add(std::move(save), kHaloSaveKey, 0x200, 0, 0xFFFFFFFFu);    // writes nothing: the glow mask saved for the restore
             add(std::move(clear), 0, 0x200, 0, 0x00FFFFFFu);              // alpha only, no Z test
             add(std::move(test), 0, 0x200, 1, 0x00FFFFFFu);               // alpha only, ZGEQUAL at the light's Z
             add(std::move(spread), kHaloAlphaKey, 0x200, 0, 0x00FFFFFFu); // alpha only: the core's mean over the halo square
@@ -4116,7 +4120,7 @@ namespace pop_native_live
             }
             for (const DrawMaterial &m : allMaterials)
                 if (m.textureKey && m.textureKey != kRefractionKey && m.textureKey != kHaloAlphaKey && m.textureKey != kHaloRestoreKey &&
-                    m.textureKey != kPinchKey && !imageOf.count(m.textureKey))
+                    m.textureKey != kPinchKey && m.textureKey != kHaloSaveKey && !imageOf.count(m.textureKey))
                 {
                     pop_native::Image img;
                     bool found = false;
@@ -4274,7 +4278,7 @@ namespace pop_native_live
                     batches = &rec.first;
                 }
                 const DrawMaterial &mat = *matp;
-                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey == kPinchKey ? -5 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
+                const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey == kPinchKey ? -5 : mat.textureKey == kHaloSaveKey ? -6 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
                 putBytes(f, model, size_t(4) * size_t(16));

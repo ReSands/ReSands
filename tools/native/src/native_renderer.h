@@ -45,6 +45,9 @@ namespace pop_native
     // Material::baseImage: the frame as it was at the last Draw::copyFrame of this frame (colour and alpha; the GS
     // reading its own frame as a texture, as the water's refraction copy does)
     constexpr int kFrameCopyImage = -2;
+    // Material::baseImage: the frame as it was at the last Draw::saveFrame (a halo's glow mask, kept apart from the copy
+    // its visibility test reads)
+    constexpr int kFrameSaveImage = -3;
 
     struct Material
     {
@@ -130,6 +133,7 @@ namespace pop_native
         bool ownFogColour = false;     // per draw FOGCOL (live frames: the render state's, 0 for additive blends)
         float fogColour[3] = {0, 0, 0};
         bool copyFrame = false;        // copy the frame (as drawn so far) for kFrameCopyImage before this draw (one pass in game order only)
+        bool saveFrame = false;        // as copyFrame, into kFrameSaveImage
         float copyRect[4] = {0, 0, 1, 1}; // the part copied (x0, y0, x1, y1 of the frame, 0..1); the rest of the copy is stale
     };
 

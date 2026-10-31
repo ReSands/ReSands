@@ -87,6 +87,7 @@ namespace pop_native
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VkRenderPass renderPassLoad = VK_NULL_HANDLE; // the scene pass resumed after a mid-frame copy (Draw::copyFrame)
         Texture frameCopy;                            // kFrameCopyImage: the frame at the last copyFrame
+        Texture frameSave;                            // kFrameSaveImage: the frame at the last saveFrame
         uint32_t frameCopyW = 0, frameCopyH = 0;
         Buffer vertexBuffer, indexBuffer;
         // kept meshes (keepMesh): append-only device buffers, grown by doubling; pending = not uploaded yet
@@ -497,29 +498,35 @@ namespace pop_native
         // draw asks for it. Call with no frame in flight (descriptor sets are rewritten).
         bool prepareFrameCopy(const std::vector<Draw> &draws, uint32_t w, uint32_t h, std::string &error)
         {
-            const bool copies = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.copyFrame; });
-            const bool samples = std::any_of(materials.begin(), materials.end(), [](const Material &mt) { return mt.baseImage == kFrameCopyImage; });
+            const bool copies = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.copyFrame || d.saveFrame; });
+            const bool samples = std::any_of(materials.begin(), materials.end(),
+                                             [](const Material &mt) { return mt.baseImage == kFrameCopyImage || mt.baseImage == kFrameSaveImage; });
             if (!copies && !samples)
                 return true;
             if (!frameCopy.image || frameCopyW != w || frameCopyH != h)
             {
                 vkDeviceWaitIdle(device);
                 destroyImage(frameCopy);
+                destroyImage(frameSave);
                 frameCopyW = frameCopyH = 0;
-                if (!createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
-                                 frameCopy, error) ||
-                    !oneShot([&](VkCommandBuffer cb) {
-                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT,
-                                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                for (Texture *t : {&frameCopy, &frameSave})
+                    if (!createImage(w, h, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+                                     *t, error))
+                        return false;
+                if (!oneShot([&](VkCommandBuffer cb) {
+                        for (Texture *t : {&frameCopy, &frameSave})
+                            barrier(cb, t->image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 0, VK_ACCESS_SHADER_READ_BIT,
+                                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
                     }, error))
                     return false;
                 frameCopyW = w;
                 frameCopyH = h;
             }
             for (size_t i = 0; i < materials.size() && i < materialSets.size(); ++i)
-                if (materials[i].baseImage == kFrameCopyImage)
+                if (materials[i].baseImage == kFrameCopyImage || materials[i].baseImage == kFrameSaveImage)
                 {
-                    const VkDescriptorImageInfo info{clampSampler, frameCopy.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+                    const VkDescriptorImageInfo info{clampSampler, (materials[i].baseImage == kFrameSaveImage ? frameSave : frameCopy).view,
+                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
                     VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                     wr.dstSet = materialSets[i];
                     wr.dstBinding = 0;
@@ -563,11 +570,12 @@ namespace pop_native
                 VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
                 {
-                    if (d.copyFrame && pass == 0 && frameCopy.image && frameCopyW == width && frameCopyH == height)
+                    if ((d.copyFrame || d.saveFrame) && pass == 0 && frameCopy.image && frameCopyW == width && frameCopyH == height)
                     {
+                        const VkImage target = d.saveFrame ? frameSave.image : frameCopy.image;
                         // the frame so far (colour + alpha) into frameCopy, then the pass goes on over it
                         vkCmdEndRenderPass(cb);
-                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
+                        barrier(cb, target, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_SHADER_READ_BIT,
                                 VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
                         VkImageCopy c{};
                         c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -577,8 +585,8 @@ namespace pop_native
                         c.srcOffset = c.dstOffset = {int32_t(x0), int32_t(y0), 0};
                         c.extent = {x1 - x0, y1 - y0, 1};
                         if (c.extent.width && c.extent.height) // Vulkan forbids an empty copy (a rect off the frame)
-                            vkCmdCopyImage(cb, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
-                        barrier(cb, frameCopy.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                            vkCmdCopyImage(cb, colour, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+                        barrier(cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                                 VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
                         VkRenderPassBeginInfo again = rb;
                         again.renderPass = renderPassLoad;
@@ -1320,6 +1328,7 @@ namespace pop_native
             if (m->renderPassLoad)
                 vkDestroyRenderPass(m->device, m->renderPassLoad, nullptr);
             m->destroyImage(m->frameCopy);
+            m->destroyImage(m->frameSave);
             if (m->sampler)
                 vkDestroySampler(m->device, m->sampler, nullptr);
             if (m->clampSampler)
