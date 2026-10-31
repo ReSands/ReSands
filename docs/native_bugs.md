@@ -470,12 +470,14 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     Glitch captures made while moving: `game/analysis/glitch1030/play_20261030_202309` / `_202313` (.glitch, .txt, .state;
     `_202313_all/` = all 600 frames via `glitchview.py --every 1`; mean of the circled spot at half size (82-122,
     180-215) moves smoothly 34.7 -> 30.9 -> 36.9 with the camera, nothing visible at half size yet). All frames pure.
-    **Next leads:** (1) UVs that follow the camera, like the lit statics' environment-map pass (`docs/native_renderer.md`
-    "Review 30 Oct", cddb051: sent frameOnly because its UVs move with the camera): check whether draw 418's batches are
-    kept by the renderer (content key) while the GS recomputes their UVs per frame; the hop would be a kept batch being
-    replaced. (2) Draw order: the sorted +0x88 order around the caustic changes as the camera moves; compare draw 416-418
-    order across two capture frames (POP_VIEW_LIST on frames from the two saves' states). (3) Make full-size evidence: a
-    short boot of 202313's state with `-Shots` every 10 fields while R1-walking, native vs gs.
+    **Fixed (31 Oct, 4a8c5bf; user in-motion check: "reflection is consistent as I move", two overlapping animations
+    as the original).** A/B first: `POP_NATIVE_NOUVM=1` (scroll frozen) had no hop, so the scroll was involved. Cause: the
+    native "drawn this frame" key (element or ref << 16 | matrix index | pass bits) left out the entry's layer.
+    CElementList::Render (cases 0x24-0x2B) picks the sub-material by the entry's layer byte (+0xC) and sets 0x70000034 per
+    entry, so one element is drawn once per layer. Draw 418's element has two caustic layers (U+V scroll blend 0x600, V-only)
+    and four caustic refs beside it have two each; only the first in the depth sort was kept, and that order changes as
+    the Prince moves. Fix: `drawKeyBits` (was `alphaPassBit`) adds a 14-bit hash of 0x70000034 at bits 42-55. Offline
+    202313: 481 -> 488 draws (both layers), render gate unchanged (16 saves). The 724edd9 UV-sub hook stays (right by the code).
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.
