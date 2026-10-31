@@ -648,8 +648,10 @@ namespace pop_native
                     // (bit 6 no depth write, bit 7 the water's refraction read, bit 8 a halo's visibility: below, bit 9 AddAlpha: Cs * As)
                     const bool test = mat && (mat->alphaTest || mode == AlphaMode::Mask);
                     const bool less = mat && mat->alphaTestLess;
-                    // bit 6: no depth write (a decal over its wall): moved nearer by the decal bias (mesh.vert, N16 moss)
-                    const bool noDepthWrite = !(pipelineKey(afail ? &failMat : mat) & (1u << 6));
+                    // bit 6: no depth write (a decal over its wall): moved nearer by the decal bias (mesh.vert, N16 moss); not the
+                    // lightmaps (fogAlpha): they redraw their base's own triangles, and the bias showed the part of a block's lightmap
+                    // just under the ground as a dark seam along its foot (N18)
+                    const bool noDepthWrite = !(pipelineKey(afail ? &failMat : mat) & (1u << 6)) && !(mat && mat->fogAlpha);
                     push.params[0] = float((test ? 1 : 0) | (isBlended(mode) ? 2 : 0) | (less ? 4 : 0) | (mat && mat->legacyBlend ? 8 : 0) | (afail ? 16 : 0) | (mat && mat->fogAlpha ? 32 : 0) |
                                            (noDepthWrite ? 64 : 0) | (mat && mat->refraction ? 128 : 0) |
                                            (mat && mat->haloAlpha ? 256 : 0) | (mode == AlphaMode::AddAlpha && !mat->destAlpha ? 512 : 0));
