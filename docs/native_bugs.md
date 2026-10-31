@@ -478,6 +478,21 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     and four caustic refs beside it have two each; only the first in the depth sort was kept, and that order changes as
     the Prince moves. Fix: `drawKeyBits` (was `alphaPassBit`) adds a 14-bit hash of 0x70000034 at bits 42-55. Offline
     202313: 481 -> 488 draws (both layers), render gate unchanged (16 saves). The 724edd9 UV-sub hook stays (right by the code).
+- **N20, 31 Oct (user looks + offline):** with the post chain on, the cyan column beside the Prince is gone and the
+  window's shaft brightness is right. **Left: rays native only** (diagonal up the wall to the left, horizontal across the
+  floor); `gs` mode shows only a much fainter general glow on the wall that pops in and out as the camera turns (**real-PS2
+  check**, with N15 / N17 / N27). Native with `POP_NATIVE_HALOS=0` looks the same as `gs` to the user: **our halo is the
+  cause.** Offline 193136: the rays are halo 2 (draws 543-547) lighting up the colour under the glow-mask shafts, which the
+  glow (ColorDiffusion, after the halos in the game too) then blooms; `--noglow` shows the halo itself as a soft round
+  glow. So our halo is visible where the GS's mostly is not. Halo 2 has a huge core square (half size 208 px; halo 1 at
+  nearly the same position: 18 px; offline entries are stale replays, live values unknown). ProcessLensFlare (0x4AB500):
+  clear alpha over the core, test sprite ZGEQUAL with alpha = param << 24, then halving from the core rect into a square
+  of the shorter side at its top-left, repeated (bilinear, +-8 subpixel insets) down to 2x2, then the spread over the
+  halo square; our 8x8-sample mean is the same idea, so the occlusion test result itself is the likely difference
+  (native depth vs GS Z under the core). Native shaft meshes (flags 0x1400F / 0x1600F, alpha only) do write depth (flag
+  0x200 clear). **Next:** a GS-only trace (`PS2X_GS_TRACE`) of 193136 to read the GS's test sprite, its Z buffer under the
+  core and the alpha after halving, against ours (debug print of the halo's screen box: add back in `haloRecord` before
+  `onScreen`).
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.
