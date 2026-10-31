@@ -59,9 +59,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   ~99% where pure to the HUD); user look 30 Oct evening fixed N24 / N25; **default on in `play.ps1`** (`-NoNativePost`).
   **Before 0.14 (user, 30 Oct): close the open bugs first** (`docs/native_bugs.md` N18-N27). State at the end of 30 Oct:
   - **N22 (caustic hop): fixed 31 Oct (4a8c5bf, user check)**: the draw dedupe key left out the layer; entry in `docs/native_bugs.md`.
-  - **N20 (193136): column fixed by the post chain; rays left, from our native halo (GS halo looks right; 31 Oct entry). Next: GS trace of the halo test.**
-  - N18 (ledge-edge sliver 192544), N19 (orange band 192645): ours, not started. N21 (candle bloom 193240): needs the
-    user's native vs gs look. N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
+  - **N20 (window rays 193136) + N21 (candle white square): fixed 31 Oct (fbf650f, user checks)**: halo restore read the wrong copy.
+  - N18 (ledge-edge sliver 192544), N19 (orange band 192645): ours, not started. 
+    N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not

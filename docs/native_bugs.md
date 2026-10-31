@@ -493,6 +493,14 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   0x200 clear). **Next:** a GS-only trace (`PS2X_GS_TRACE`) of 193136 to read the GS's test sprite, its Z buffer under the
   core and the alpha after halving, against ours (debug print of the halo's screen box: add back in `haloRecord` before
   `onScreen`).
+- **N20 + N21 fixed (31 Oct, fbf650f; user checks: 193136 "no rays up the wall, glow on the wall looks good", candle save
+  `play_20261031_111155` (Mac copy `game/analysis/saves1031/`, first-person view at the wall candles) "identical to the GS
+  render"; before: a near-white square over the candles).** Cause: the halo's restore read the copy the spread took, after
+  the clear and the test had written alpha into the core square, so the core kept the test's alpha instead of the glow mask
+  and ColorDiffusion bloomed it (N21: an 18 px core = a white square; N20: a 208 px core = rays where the test passed).
+  Fix: each halo first draws a save marker over its square (image -6, writes nothing; `Draw::saveFrame` copies into a
+  second image `kFrameSaveImage`), the restore (-4) reads that save. Gate unchanged, blend test ok. Still for the
+  **real-PS2 check:** the faint wall glow at 193136 popping in and out as the camera turns (GS and native alike now).
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.

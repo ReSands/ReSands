@@ -1276,8 +1276,8 @@ alpha), restore (image -4: the same copy read per pixel, no new copy). The copy 
 halo whose texture index is not in the texture list stays on the GS. Live it asks only for a pure frame (22697b4,
 review 30 Oct): `worldStateOk` judged the leftover +0xA8 sub-material, usually +0x98's glow mask, and refused nearly
 every halo. Halo geometry is sent with key 0 (`frameOnly`, see the water review). Nightly gate: the `vu1` lines of
-`tools/nightly/render_gate.txt` (162621, 145139 through `pop_state_frame_vu1 --noglow`). Shortcuts: halos with ghosts stay on the GS (none
-seen); the core square keeps the test's alpha instead of the glow mask. `pop_state_frame`: the save's count is always 0 and
+`tools/nightly/render_gate.txt` (162621, 145139 through `pop_state_frame_vu1 --noglow`). Shortcut: halos with ghosts stay on the GS (none
+seen). 31 Oct: the restore reads a save taken before the clear (image -6, `kFrameSaveImage`; N20 / N21). `pop_state_frame`: the save's count is always 0 and
 the array holds stale entries from longer frames (162621: the sun at 0, 22 and 27), so it replays entries up to the first
 without a material and skips repeats within 0.5 units. The 25 Oct live halo log read the texture node at +0x20 (wrong; fixed).
 
