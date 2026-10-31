@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'llm_port', 'meshdecode'))
 import match  # noqa: E402
-from dare_header import mangled_class  # noqa: E402
+from dare_header import mangled_class, demangle_params  # noqa: E402
 from dare_callees import data_refs  # noqa: E402
 from port import ask, extract  # noqa: E402  (meshdecode/port.py: model API with a fresh seed, code extraction)
 
@@ -30,7 +30,7 @@ Declaration: {decl}
 Parameter names: {params}
 Original local variable names: {locals}
 
-## Retail assembly (branch delay slots are written with a leading _; call targets are named with mangled names;
+## Retail assembly (branch delay slots are written with a leading _; call targets show the mangled name = the C++ name;
 ## "; = name" names the global an instruction reaches, "; = 1.5f" the float constant an mtc1 moves)
 ```
 {asm}
@@ -54,7 +54,10 @@ Original local variable names: {locals}
   class, struct, union, enum and template it uses: never write a type definition yourself. You may add extern
   declarations (functions, and globals that dare.h does not declare: extern <type of that size> <name>;). If the
   function cannot be written without a header change (a missing member, type or declaration, or a method that is
-  called with no `this` but is not declared static), reply with one line "NEEDS HEADER CHANGE: <what>" and no code.
+  called with no `this` but is not declared static), reply with one line "NEEDS HEADER CHANGE: <what>" and no code
+  block at all (never put that line inside code).
+- In code, use C++ names only: never a mangled name (Name__10Class...), a name with @ or $, or a symbol as a
+  variable. @<number> constants are literals the compiler placed: write the literal itself.
 - Use members by name: the header excerpt gives each member's offset (// +0x..); never cast raw offsets.
 - The judge compares every instruction; call targets and global addresses only need the right symbol.
 - What earlier matches taught us about this compiler:
@@ -70,6 +73,9 @@ Original local variable names: {locals}
   - Locals on the stack are laid out in declaration order, the first at the lowest address.
   - Locking with a call to (file string, line number) between = EnterCriticalSectionTool_(); MouchardThreadTool(
     __FILE__, <line>); ... QuitCriticalSectionTool(); (the SND_fn_v...ThreadSnd functions the same way).
+  - Assigning a number to an enum member or variable needs a cast to the enum type: m_eState = (_SND_tdeState)0.
+  - slt / slti / sltu / sltiu: the first two are signed compares, the last two unsigned: make the compared
+    variables int or unsigned to match (a mismatch here is a type, not a logic, difference).
 - Write the complete file in ONE ```cpp code block.
 """
 
@@ -100,7 +106,7 @@ def header_blocks():
             if line.startswith('};'):
                 blocks[name], name = ''.join(cur), None
             continue
-        m = re.match(r'(struct|union) (\w+)\b[^;]*\{\s*$', line)
+        m = re.match(r'(?:template <[^>]*> )?(struct|union) (\w+)\b[^;]*\{\s*$', line)  # sndCList is a template
         if m:
             name = m.group(2)
             cur = [line.rstrip() + ('  // size %d\n' % size[name] if name in size else '\n')]
@@ -116,9 +122,9 @@ def header_for(mangled, decl, asm, ghidra):
     blocks = header_blocks()
     cls = mangled_class(mangled)[0]
     seeds = ([cls] if cls else []) + re.findall(r'\w+', decl + ' ' + asm + ' ' + ghidra)
-    out, seen, size, queue = [], set(), 0, [s for s in seeds if s in blocks]
+    out, seen, size, queue = [], set(), 0, [(s, 0) for s in seeds if s in blocks]
     while queue:
-        n = queue.pop(0)
+        n, depth = queue.pop(0)
         if n in seen:
             continue
         seen.add(n)
@@ -127,10 +133,84 @@ def header_for(mangled, decl, asm, ghidra):
             continue
         out.append(text)
         size += len(text)
-        # bases and member types of the class itself one level deeper; other structs only their bases
-        names = re.findall(r'\w+', text if n == cls or len(seen) < 4 else text.split('{')[0])
-        queue += [x for x in names if x in blocks and x not in seen]
+        # member types two levels down (pResMem->uRes.stMultiTrack.ulDataSize needs the union and the struct in it);
+        # deeper only bases; breadth first, so the budget cuts the farthest types
+        names = re.findall(r'\w+', text if depth < 2 else text.split('{')[0])
+        queue += [(x, depth + 1) for x in names if x in blocks and x not in seen]
     return ''.join(out), cls
+
+
+def cpp_name(m):
+    # mangled -> the C++ name to write: Name__<n>Class... -> Class::Name, Name__F... -> Name
+    cls = mangled_class(m)[0]
+    i = m.find('__', 1 if not m.startswith('__') else 2)
+    base = m[:i] if i > 0 else m
+    if cls and '<' in cls:  # template arguments are mangled too: sndCList<18stCallBackRequest_,...>
+        t, args = cls.split('<', 1)
+        try:
+            cls = '%s<%s>' % (t, ', '.join(a('') for a in demangle_params(args.rstrip('>').replace(',', ''))))
+        except (IndexError, ValueError):
+            pass
+    return '%s::%s' % (cls, base) if cls else base
+
+
+def elf_bytes(elf, addr, n):
+    # n bytes at a virtual address of the retail ELF (its program headers), or None
+    phoff, = struct.unpack_from('<I', elf, 0x1c)
+    es, cnt = struct.unpack_from('<HH', elf, 0x2a)
+    for i in range(cnt):
+        _t, off, va, _pa, fsz = struct.unpack_from('<5I', elf, phoff + i * es)
+        if va <= addr and addr + n <= va + fsz:
+            return elf[off + addr - va:off + addr - va + n]
+    return None
+
+
+def global_note(name, addr, size, elf):
+    # (note on the instruction, line for the globals list or None) for symbols that are not C++ names
+    base, _, plus = name.partition('+')
+    if base.startswith('@'):
+        b = elf_bytes(elf, addr - (int(plus, 0) if plus else 0), size) or b''
+        text = b.split(b'\0')[0]
+        # sizes are POP1's: a retail string can be shorter (NUL-padded)
+        if text and len(text) < len(b) and all(32 <= c < 127 for c in text):
+            lit = '"%s"' % text.decode().replace('\\', '\\\\').replace('"', '\\"')
+            if re.search(r'\.(cpp|c)$', text.decode()):
+                return lit + ' (__FILE__)', 'the source file name %s: write __FILE__' % lit
+            return lit, 'the string literal %s: write it in the code' % lit
+        if size == 12:
+            return 'a constant pointer to member function', ('a pointer-to-member-function constant the compiler made '
+                                                             '(&Class::Method in the code)')
+        return 'a constant the compiler made', 'an unnamed constant the compiler made from a literal in the source'
+    if '$localstatic' in base:
+        var, _, func = base.split('$', 2)
+        owner = cpp_name(func)
+        return 'static local %s of %s()%s' % (var, owner, '+' + plus if plus else ''), (
+            'the function-local static variable `%s` inside %s(); if this function is not %s, that function '
+            'was inlined here' % (var, owner, owner))
+    if mangled_class(base)[0]:
+        return cpp_name(base) + ('+' + plus if plus else ''), 'the static data member %s' % cpp_name(base)
+    return name, None
+
+
+def diff_hints(report):
+    # short hints for diffs that earlier rounds kept missing
+    rows = [r.split('|') for r in report.splitlines() if r.startswith('>>') and '|' in r]
+    op = lambda t: (t.split() or [''])[0].lstrip('_')
+    hints = set()
+    for a, b in rows:
+        a, b = a.split(None, 2)[-1] if len(a.split()) > 2 else a, b.strip()
+        oa, ob = op(a), op(b)
+        if {oa, ob} in ({'slt', 'sltu'}, {'slti', 'sltiu'}):
+            hints.add('slt vs sltu: a signed/unsigned difference: change the type of a compared value (int vs '
+                      'unsigned), not the logic.')
+        elif {oa, ob} in ({'beq', 'bne'}, {'beql', 'bnel'}, {'bc1t', 'bc1f'}, {'blez', 'bgtz'}, {'bltz', 'bgez'}):
+            hints.add('%s vs %s: the branch sense is inverted: swap the if and else bodies, or negate the '
+                      'condition.' % (oa, ob))
+        elif oa == ob and oa.startswith('c.') and len(a.split()) > 1 and len(b.split()) > 1 and \
+                a.split()[1].split(',') == b.split()[1].split(',')[::-1]:
+            hints.add('%s with its operands swapped: write the comparison the other way round (a == b vs b == a, '
+                      'a < b vs b > a).' % oa)
+    return ('\n\nHints: ' + ' '.join(sorted(hints))) if hints else ''
 
 
 def callee_names():
@@ -154,7 +234,9 @@ def name_callees(asm, ghidra):
         if a not in names:
             return m.group(0)
         used.add(names[a])
-        return m.group(0).split(';')[0] + '; ' + names[a] if ';' in m.group(0) else names[a]
+        c = cpp_name(names[a])
+        return m.group(0).split(';')[0] + '; ' + names[a] + ('' if c == names[a] else ' = ' + c) \
+            if ';' in m.group(0) else c
     asm = re.sub(r'jal 0x([0-9a-f]+)\s+; \S+', sub, asm)
     ghidra = re.sub(r'\bFUN_([0-9a-f]{8})\b', sub, ghidra)
     return asm, ghidra, ' '.join(used | {mangled_class(n)[0] or '' for n in used})
@@ -170,8 +252,9 @@ def annotate(asm, ghidra, addr, size):
     notes, used = {}, {}
     for ia, t in data_refs(word, addr, size):
         if t in gl:
-            notes[ia] = gl[t][0]
-            used[gl[t][0].split('+')[0]] = gl[t][1]
+            note, desc = global_note(gl[t][0], t, gl[t][1], elf)
+            notes[ia] = note
+            used[gl[t][0].split('+')[0]] = (gl[t][1], desc)
     const = {}
     for a in range(addr, addr + size, 4):
         w = word(a)
@@ -190,7 +273,7 @@ def annotate(asm, ghidra, addr, size):
             const.pop(rt, None)  # I-type ALU ops and loads write rt (stores and branches do not)
     asm = '\n'.join(l + '   ; = ' + notes[int(l[:8], 16)] if re.match(r'[0-9a-f]{8} ', l) and int(l[:8], 16) in notes
                     else l for l in asm.splitlines())
-    names = {t: n for t, (n, sz) in gl.items()}
+    names = {t: global_note(n, t, sz, elf)[0] for t, (n, sz) in gl.items()}
     # Ghidra writes DAT_00680c80, _DAT_..., PTR_..., or a type prefix + Ram00680c80 (iRam, puRam, ...)
     ghidra = re.sub(r'\b(?:_?DAT_|PTR_|[a-z]*Ram)([0-9a-f]{8})\b', lambda m: names.get(int(m.group(1), 16), m.group(0)),
                     ghidra)
@@ -205,8 +288,10 @@ def prompt(mangled, addr, size, file):
     asm, ghidra, callees = name_callees(asm, ghidra)
     asm, ghidra, used = annotate(asm, ghidra, addr, size)
     header, cls = header_for(mangled, proto[2], asm + ' ' + callees + ' ' + ' '.join(used), ghidra)
-    globs = '\n'.join('- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
-                       else 'not in dare.h: declare it yourself') for n, sz in sorted(used.items())) or 'none'
+    globs = '\n'.join('- %s (%d bytes)' % (desc, sz) if desc else
+                      '- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
+                                              else 'not in dare.h: declare it yourself')
+                      for n, (sz, desc) in sorted(used.items())) or 'none'
     how = 'as %s::<name>' % cls if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
@@ -263,11 +348,35 @@ def summary():
         print('  near miss: %d of %d instructions  %s' % (best, n, name))
 
 
+def selftest():
+    c = cpp_name('RemoveHead__55sndCList<P18_tdstMemoryCluster,RCP18_tdstMemoryCluster>Fv')
+    assert c.startswith('sndCList<_tdstMemoryCluster *, ') and c.endswith('>::RemoveHead') and '18' not in c, c
+    assert cpp_name('RemoveHead__51sndCList<18stCallBackRequest_,18stCallBackRequest_>Fv') == \
+        'sndCList<stCallBackRequest_, stCallBackRequest_>::RemoveHead'
+    assert cpp_name('SND_fn_bInitSourceMemoryModule__Fv') == 'SND_fn_bInitSourceMemoryModule'
+    assert cpp_name('gs_CallBackRequestList__10SndManager') == 'SndManager::gs_CallBackRequestList'
+    assert 'static local clock of SND_ClockNative::GetInstance()' == \
+        global_note('clock$localstatic3$GetInstance__15SND_ClockNativeFv', 0, 4, b'')[0]
+    assert global_note('clock$localstatic3$GetInstance__15SND_ClockNativeFv+0x10', 0, 24, b'')[0].endswith('()+0x10')
+    assert global_note('gs_CallBackRequestList__10SndManager+0x8', 0, 12, b'')[0] == \
+        'SndManager::gs_CallBackRequestList+0x8'
+    rep = ('x\ny\n>>  14  slt at,t0,v1                       | sltu at,t0,v1\n'
+           '>>  3c  c.eq.s $f0,$f1                     | c.eq.s $f1,$f0\n'
+           '>>  40  c.eq.s $f0,$f1                     | c.eq.s $f2,$f3\n'
+           '>>  44  bne at,zero,0x188c48               | beq at,zero,0x188c48\n')
+    h = diff_hints(rep)
+    assert 'signed/unsigned' in h and 'operands swapped' in h and 'branch sense' in h and h.count('c.eq.s') == 1, h
+    print('selftest ok')
+
+
 def main(argv):
     opt = lambda k, v: argv[argv.index(k) + 1] if k in argv else v
     url, rounds, until = opt('--url', 'http://127.0.0.1:8033'), int(opt('--rounds', '8')), int(opt('--until', '0'))
     if argv[0] == '--queue':
         print('\n'.join(queue()))
+        return 0
+    if argv[0] == '--selftest':
+        selftest()
         return 0
     if argv[0] == '--summary':
         summary()
@@ -301,7 +410,12 @@ def main(argv):
     best = max((score(open(os.path.join(att, f[:-4] + '.report.txt')).read()) for f in done), default=-2)
     # --rounds = this many more rounds; rounds that wrote no code leave a .nocode.txt so a resume counts them
     last = max((int(f[5:7]) for f in os.listdir(att) if f.startswith('round')), default=0)
-    for n in range(last + 1, last + rounds + 1):
+    n, end, extra = last, last + rounds, False
+    while n < end or (not extra and best >= size // 4 - 2 and n == end > last):
+        if n == end:  # within 2 instructions after the last round (whatever it wrote): two more rounds, once
+            extra, end = True, end + 2
+            say('round%02d: within 2 instructions, 2 more rounds' % n)
+        n += 1
         if until and time.time() > until:
             say('round%02d: past --until, stopping' % n)
             return 1
@@ -309,7 +423,7 @@ def main(argv):
         if prev:
             messages += [{'role': 'assistant', 'content': '```cpp\n' + prev[0] + '```'},
                          {'role': 'user', 'content': 'Judge report for that file (retail | yours, >> = differs):\n\n' +
-                          prev[1] + '\n\nChange the source so the compiler produces the retail instructions, and '
+                          prev[1] + diff_hints(prev[1]) + '\n\nChange the source so the compiler produces the retail instructions, and '
                           'reply with the complete file in one ```cpp block. Keep your reasoning short.'}]
         try:
             content, reasoning, usage, secs = ask(url, messages)
@@ -317,14 +431,15 @@ def main(argv):
             say('round%02d: request failed (%s); waiting 60 s' % (n, str(e)[:100]))
             time.sleep(60)
             continue
+        # a header request counts wherever the answer puts it (31 Oct: one inside the code block was compiled as code)
+        need = re.search(r'NEEDS HEADER CHANGE:.*', content or '')
+        if need:
+            say('round%02d: %s' % (n, need.group(0)[:200]))
+            open(os.path.join(out, 'HEADER'), 'w').write(need.group(0) + '\n')
+            return 3
         # a draft inside the reasoning still gets judged when the answer has none (lesson from 23 Oct)
         code = extract(content) or extract(reasoning)
         if code is None:
-            need = re.search(r'NEEDS HEADER CHANGE:.*', content)
-            if need:
-                say('round%02d: %s' % (n, need.group(0)[:200]))
-                open(os.path.join(out, 'HEADER'), 'w').write(need.group(0) + '\n')
-                return 3
             open(os.path.join(att, 'round%02d.nocode.txt' % n), 'w').write((content or reasoning)[-4000:])
             say('round%02d: no code block (%.0f s, %s tokens)' % (n, secs, usage.get('completion_tokens')))
             continue
@@ -341,7 +456,7 @@ def main(argv):
             open(os.path.join(out, 'PASS'), 'w').write('round%02d\n' % n)
             say('PASS in round%02d' % n)
             return 0
-    say('no match after %d more rounds' % rounds)
+    say('no match after %d more rounds' % (end - last))
     return 1
 
 

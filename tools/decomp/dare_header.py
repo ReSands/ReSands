@@ -46,7 +46,8 @@ SNDCLIST_ARGS = {('CTheme', 'm_PartList'): 'CThemePart *, CThemePart *',
                  (None, 'gs_CallBackRequestList'): 'stCallBackRequest_, stCallBackRequest_'}
 TEMPLATED = {'sndCList', 'sndCNode'}
 # methods retail calls without 'this' (DWARF does not mark static)
-STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength')}
+STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength'),
+                  ('SndManager', 'GetRendererRate')}  # 0x189180 never reads a0; its callers set none (31 Oct)
 # C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
 C_PARAMS = {'MouchardThreadTool': 'char *file, int line', 'SND_fn_vMouchardThreadsnd': 'char *file, int line'}
 
