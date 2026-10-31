@@ -908,15 +908,6 @@ namespace pop_native
                 rs.cullMode = options.cull ? VK_CULL_MODE_BACK_BIT : VK_CULL_MODE_NONE; // converter: all double-sided
                 rs.frontFace = options.cull == 2 ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
             }
-            // draws without depth write (decals over their walls): besides the constant decal bias (mesh.vert), a slope bias,
-            // depth slopes per pixel nearer, for grazing angles where the constant alone still flickered (N18 ledge seam;
-            // POP_NATIVE_DECAL_SLOPE, default 1; nearer is larger)
-            static const float decalSlope = [] {
-                const char *e = std::getenv("POP_NATIVE_DECAL_SLOPE");
-                return e && *e ? std::strtof(e, nullptr) : 1.0f;
-            }();
-            rs.depthBiasEnable = !(key & (1u << 6)) && decalSlope != 0.0f ? VK_TRUE : VK_FALSE;
-            rs.depthBiasSlopeFactor = decalSlope;
             VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
             ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
