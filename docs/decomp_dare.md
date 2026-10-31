@@ -84,6 +84,19 @@ the compiler check: `docs/roadmap.md` "2.0".
   declarations missing (`TFader` -> "implicit int"): ~6; "NEEDS HEADER CHANGE" written inside the code block (compiled
   as code, so the request was lost): seen in 182c80.
 
+- **Tweaks after run 3 (31 Oct, 6b5d617; `qwen_match.py --selftest`):** readable names in the prompt (the `@NNN`
+  constants as their string literal, `__FILE__` for file names, pointer-to-member or plain compiler constants;
+  `x$localstaticN$f` as the static local of `f`; static members and callees as `Class::name`, template arguments
+  demangled; offsets kept); the `sndCList` template now reaches the header excerpt (`header_blocks` skipped
+  `template <...> struct`); member types two levels deep (the `uRes` unions' structs); a "NEEDS HEADER CHANGE" line
+  counts wherever the answer puts it; feedback hints for `slt`/`sltu`, an inverted branch and swapped compare operands;
+  2 extra rounds once when the best attempt is within 2 instructions; lessons: enum casts, signed vs unsigned
+  compares; `SndManager::GetRendererRate` static (0x189180 never reads `a0`, its callers set none). Prompts grew
+  (e.g. 171a80 9.7k -> 28.8k characters; the 30 KB header cap holds). **Test (31 Oct 10:36-10:43):** 166940 (1 of 27
+  off for 4 rounds) **matched in its next round**; 182c80 (`SND_fn_vSynchroTimer`, never compiled) compiled for the
+  first time, 30 of 33 off: it needs `SND_ClockNative` with an inline `GetInstance()` and a COP0 `Count` read, a
+  header job, not a runner one. **85 of 669.**
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669
