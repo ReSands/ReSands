@@ -116,7 +116,10 @@ def ps2_texture(pack, recs, off):
     pp = image_data(pack, po, po + ps, 1024)
     pal = pack[pp:pp + 1024]
     dp = image_data(pack, off, off + 0x200, w * h)
-    idx = unswizzle8(pack[dp:dp + w * h], w, h)
+    # TRXREG (A+D 0x52) width = the texture's own: sent as PSMT8 itself, linear; else PSMCT32 at half size, swizzled
+    linear = any(struct.unpack_from('<Q', pack, q + 8)[0] == 0x52 and struct.unpack_from('<Q', pack, q)[0] & 0xFFF == w
+                 for q in range(off, dp - 15, 4))
+    idx = pack[dp:dp + w * h] if linear else unswizzle8(pack[dp:dp + w * h], w, h)
     out = bytearray(w * h * 4)
     for i, c in enumerate(idx):
         c = (c & 0xE7) | ((c & 0x08) << 1) | ((c & 0x10) >> 1)

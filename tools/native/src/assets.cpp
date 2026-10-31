@@ -104,6 +104,15 @@ namespace pop_assets
                 return true;
             }
             const uint8_t *buf = p.d + dp, *palette = paletteOverride ? paletteOverride : p.d + pp;
+            // TRXREG (A+D 0x52) width = the texture's own: sent as PSMT8 itself, linear (an 8x8 white, 600001ce: N18);
+            // otherwise as PSMCT32 at half size, swizzled in the pack
+            bool linear = false;
+            for (size_t q = off; q + 16 <= dp; q += 4)
+            {
+                uint64_t v, a;
+                if (u64(p, q, v) && u64(p, q + 8, a) && a == 0x52)
+                    linear = (v & 0xFFF) == w;
+            }
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x)
                 {
@@ -113,11 +122,10 @@ namespace pop_assets
                     const uint32_t py = (((y & ~3u) >> 1) + (y & 1)) & 7;
                     const size_t col = size_t(py) * w * 2 + ((x + swap) & 7) * 4;
                     const uint32_t byte = ((y >> 1) & 1) + ((x >> 2) & 2);
-                    // the formula assumes 16x16 swizzle blocks: textures smaller than that (8x8 seen)
-                    // index past their data; refused, as the Python reference does (IndexError)
-                    if (block + col + byte >= size_t(w) * h)
-                        return false;
-                    uint32_t c = buf[block + col + byte];
+                    const size_t at = linear ? size_t(y) * w + x : block + col + byte;
+                    if (at >= size_t(w) * h)
+                        return false; // swizzled but smaller than a 16x16 block: layout unknown
+                    uint32_t c = buf[at];
                     c = (c & 0xE7) | ((c & 0x08) << 1) | ((c & 0x10) >> 1); // CSM1 palette order
                     uint8_t *o = &out.rgba[(size_t(y) * w + x) * 4];
                     o[0] = palette[c * 4];
