@@ -13,7 +13,8 @@
 # Run 2 (28 Oct night) is the first with -sdatathreshold 0, global names, float constants and member offsets in
 # the prompt; the queue starts with run 1's misses (moved to game\analysis\qwen_run1_misses\ to retry them).
 # -Until HH:mm: no new round after that time. -NoShutdown keeps the PC on. -Shortcut: (re)make the desktop shortcut.
-param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut)
+# -Addrs a,b,c: only these functions (a test run), in this order.
+param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut, [string]$Addrs = '')
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 
@@ -84,8 +85,11 @@ try {
     foreach ($f in 'dare.h', 'dare_fix.h', 'units.tsv', 'protos.tsv', 'callees.tsv', 'asm', 'ghidra_c') {
         if (-not (Test-Path "$Root\game\decomp\dare\$f")) { throw "missing game\decomp\dare\$f (copy it from the Mac)" }
     }
-    $queue = @(& $Python -I $Match --queue)
-    if ($LASTEXITCODE -ne 0) { throw "qwen_match.py --queue failed: $($queue -join ' ')" }
+    if ($Addrs) { $queue = @($Addrs -split ',') }
+    else {
+        $queue = @(& $Python -I $Match --queue)
+        if ($LASTEXITCODE -ne 0) { throw "qwen_match.py --queue failed: $($queue -join ' ')" }
+    }
     Ensure-Llama
     Say "llama-server up; $($queue.Count) functions queued"
     $ErrorActionPreference = 'Continue'
