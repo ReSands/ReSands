@@ -218,9 +218,11 @@ namespace pop_native
         // per-pixel GS Z as the game's VU1 programs write it (Z24, 2^23 * (1 - z / w); 0 = nothing drawn)
         // frees renderOffscreen's targets (kept between calls of the same size)
         void releaseOffscreen();
+        // under (optional, width x height RGBA): only the 2D layer (Draw::afterPost) is drawn, over this picture (a scene
+        // post-processed elsewhere, e.g. by the CPU references in postfx.h)
         bool renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
                              std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut = nullptr,
-                             std::vector<uint32_t> *gsZOut = nullptr);
+                             std::vector<uint32_t> *gsZOut = nullptr, const std::vector<uint8_t> *under = nullptr);
         // windowed: renders the frame at internalWidth x internalHeight and shows it scaled into the
         // window (aspect kept, bars around it); recreates the swapchain when the window size changes
         bool present(uint32_t windowWidth, uint32_t windowHeight, uint32_t internalWidth, uint32_t internalHeight,

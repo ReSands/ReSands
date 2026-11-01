@@ -3772,7 +3772,13 @@ namespace pop_native_live
                             DrawMaterial dm = currentMaterial(rdram);
                             dm.hasUvm = false; // the character program has no UV matrix
                             dm.frameOnly = pass == 2; // env-map UVs follow the camera; pass 1's baked light stays cacheable
-                            const std::array<float, 16> model = poolMatrix(rdram, index);
+                            std::array<float, 16> model = poolMatrix(rdram, index);
+                            if (g_chainBones) // offline: the object matrix (VU 0) the save's last chain drew this pass with
+                            {
+                                std::vector<std::array<float, 16>> m{model};
+                                g_chainBones(guest32(rdram, element + 0x20 + 4 * pass) & 0x01FFFFF0u, m);
+                                model = m[0];
+                            }
                             if (elemLogged(element))
                                 elemLog(pass == 1 ? "lit" : "env", element, pass, index, model, &posed, dm);
                             g_frameRefs.emplace_back(std::move(posed), std::make_pair(model, dm));

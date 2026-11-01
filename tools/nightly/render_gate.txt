@@ -8,22 +8,25 @@
 # chain); every line dropped except 115853 plain 10.76 -> 11.38: that build has no dust cloud (P5), so the game's shadows
 # under the dust add to the gap there (its vu1 score fell 6.30 -> 6.06).
 # 1 Nov (point 5): 145139 vu1 7.12 -> 4.43, halos only as the chain drew them (its offline-only moon halo gone).
+# 1 Nov (step 4c leftovers): pop_native_view draws the 2D layer after its CPU post chain (before, ZoomSmooth / glow /
+# FixBlend ran over the HUD), an emptied 2D list is drawn from its stale entries (134636, 174131: HUD and text back), lit
+# static passes take the chain's object matrix; every line with 2D dropped (re-based + 0.1), the others unchanged.
 # A save that gets better: lower its line in the same commit as the fix.
 # A third column `vu1`: the same save through pop_state_frame_vu1 with --noglow (VU1 paths: sprites, P5, P6, halos;
 # baseline 30 Oct; 162621 (plain) raised 10.89 -> 11.22 on 30 Oct by the Cs saturation in mesh.frag: its sky overshoot stood in for the missing sun glow, its vu1 line got better; 115837 with the native Pinch: 8.49, 9.26 without it; P5 particles on offline since 30 Oct evening: 8.28 / 8.20 / 2.62). 174131 (haste running, ZoomSmooth 0 on; the HUD is most of the difference) 7.45. 202926 (fountain, GS-only save from 30 Oct evening) 6.67. 145139 is the moon whose halo is too bright natively (docs/native_renderer.md "Native halos").
 20261024_201540.gs 1.53
-20261024_202314.gs 2.66
-20261025_134636.gs 7.60
+20261024_202314.gs 2.01
+20261025_134636.gs 6.21
 20261025_162246.gs 2.42
 20261025_162621.gs 11.22
-20261024_184926.gs 5.44
-20261025_115837.gs 4.17
-20261025_115853.gs 11.38
+20261024_184926.gs 4.94
+20261025_115837.gs 3.63
+20261025_115853.gs 10.76
 20261025_125052.gs 2.91
-20261025_145139.gs 5.14
-20261025_155110.gs 8.83
+20261025_145139.gs 4.70
+20261025_155110.gs 8.34
 20261025_162621.gs 2.69 vu1
-20261025_145139.gs 4.43 vu1
-20261025_115837.gs 2.84 vu1
-20261029_202926.gs 5.92 vu1
-20261030_174131.gs 7.18 vu1
+20261025_145139.gs 4.12 vu1
+20261025_115837.gs 2.24 vu1
+20261029_202926.gs 5.55 vu1
+20261030_174131.gs 2.80 vu1

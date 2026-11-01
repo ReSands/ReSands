@@ -522,7 +522,7 @@ namespace
     // clear (else a mask texture may replace the path) and both lists (counts +4, +0x14) are filled with
     // +0x111 set. FUN_004C2400 multiplies +0x45C for the call and restores it; so does this replay.
     uint64_t g_shadowProjectors = 0;
-    bool g_chainShadows = false;
+    bool g_stateChain = false; // POP_STATE_CHAIN on: shadow lists and an emptied 2D list from the chain / stale entries
     // A list entry's packet (as entryGeometry: CJMeshElement +0x20 + 4 x pass, pass 4 -> 1; ref + 4 x pass, pass 4 -> 0);
     // 0 for other kinds (CJIdxMesh: not matched, ends the list)
     uint32_t entryPacket(uint32_t entry)
@@ -587,7 +587,7 @@ namespace
     }
     void displayShadows(R5900Context *ctx)
     {
-        if (g_chainShadows)
+        if (g_stateChain)
             chainShadowCounts();
         const uint32_t n = rd32(0x70000600u), mask = rd32(0x70000610u);
         for (uint32_t i = 0; i < n && i < 32; ++i)
@@ -704,6 +704,17 @@ namespace
             std::memcpy(&r.f[12], f, sizeof f);
             setArgs(r, 0, 0);
             call(0x004B4580u, &r);
+        }
+        // step 4c: some saves come after the 2D list's count was zeroed, last frame's entries still behind it (as the shadow
+        // lists; 134636, 174131). The count = the entries up to the first empty one; text in it only as the chain sent it.
+        // shortcut: rectangles are not checked against the chain; do that if a save shows a HUD the game did not draw
+        if (g_stateChain && !rd32(dm + 0xBC))
+        {
+            uint32_t n = 0;
+            while (n < 4096 && rd32(rd32(dm + 0xB8) + 16 * n))
+                ++n;
+            wr32(dm + 0xBC, n);
+            std::fprintf(stderr, "[state] 2D list empty in the save: %u stale entries drawn\n", n);
         }
         setArgs(sub, dm + 0xB8);
         call(0x004B9440u, &sub);
@@ -869,7 +880,7 @@ int main(int argc, char **argv)
     {
         readLastChain();
         pop_native_live::g_chainBones = chainBones;
-        g_chainShadows = true;
+        g_stateChain = true;
         pop_native_live::g_haloFilter = haloFilter;
         pop_native_live::g_chainTextSlot = chainTextSlot;
     }

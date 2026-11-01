@@ -1805,7 +1805,7 @@ namespace pop_native
 
     bool Renderer::renderOffscreen(uint32_t width, uint32_t height, const float clip[16], const std::vector<Draw> &draws,
                                    std::vector<uint8_t> &rgbaOut, std::string &error, std::vector<float> *depthOut,
-                                   std::vector<uint32_t> *gsZOut)
+                                   std::vector<uint32_t> *gsZOut, const std::vector<uint8_t> *under)
     {
         auto &o = m->off;
         bool ok = true;
@@ -1859,15 +1859,48 @@ namespace pop_native
         ok = ok && m->prepareFrameCopy(draws, width, height, error);
         // the post chain set by setPostEffects (the in-game world: the effects the game left to the native frame) runs over
         // the colour before the readback; the depth read back is the scene's
-        const bool post = m->postOn();
+        const bool post = m->postOn() && !under;
         const bool twoD = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.afterPost; });
         ok = ok && (!post || m->ensurePostBuffers(width, height, error));
+        Buffer staging; // `under`, uploaded into the colour target
+        if (ok && under)
+        {
+            ok = under->size() == size_t(width) * height * 4 &&
+                 m->createBuffer(under->size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, staging, error);
+            void *p = nullptr;
+            ok = ok && check(vkMapMemory(m->device, staging.memory, 0, VK_WHOLE_SIZE, 0, &p), "vkMapMemory", error);
+            if (ok)
+            {
+                std::memcpy(p, under->data(), under->size());
+                vkUnmapMemory(m->device, staging.memory);
+            }
+            else if (error.empty())
+                error = "renderOffscreen: `under` is not width x height RGBA";
+        }
         if (!post)
             m->postPrevValid = false;
         if (ok)
         {
             ok = m->oneShot([&](VkCommandBuffer cb) {
-                m->recordScene(cb, fb, colour.image, width, height, clip, draws);
+                if (under)
+                {
+                    // the picture into colour, left in the layout the resumed pass expects; depth unused (2D has no Z test)
+                    Impl::barrier(cb, colour.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                    VkBufferImageCopy up{};
+                    up.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                    up.imageExtent = {width, height, 1};
+                    vkCmdCopyBufferToImage(cb, staging.buffer, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &up);
+                    Impl::barrier(cb, colour.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+                    Impl::barrier(cb, depth.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 0,
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                                  VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                }
+                else
+                    m->recordScene(cb, fb, colour.image, width, height, clip, draws);
                 if (post)
                     m->recordPost(cb, colour.image, width, height);
                 if (twoD)
@@ -1886,6 +1919,7 @@ namespace pop_native
                 }
             }, error);
         }
+        m->destroyBuffer(staging); // oneShot waited for the queue
         if (ok && o.cached)
         {
             const VkMappedMemoryRange ranges[2] = {{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE, nullptr, readback.memory, 0, VK_WHOLE_SIZE},

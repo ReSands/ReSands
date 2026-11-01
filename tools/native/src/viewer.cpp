@@ -889,7 +889,13 @@ int main(int argc, char **argv)
         zoom = 0.0f;
         after[0] = 0;
     }
-    if (!r.renderOffscreen(width, height, clip, draws, rgba, error, depthPath ? &depth : nullptr, gsZPath ? &gsZ : nullptr))
+    // the CPU post chain below runs on the scene only; the 2D layer (HUD, text) goes over it afterwards, as in the game
+    std::vector<Draw> scene;
+    for (const Draw &d : draws)
+        if (!d.afterPost)
+            scene.push_back(d);
+    const bool twoDAfter = !std::getenv("POP_VIEW_GPU_POST") && scene.size() != draws.size();
+    if (!r.renderOffscreen(width, height, clip, twoDAfter ? scene : draws, rgba, error, depthPath ? &depth : nullptr, gsZPath ? &gsZ : nullptr))
     {
         std::fprintf(stderr, "render: %s\n", error.c_str());
         return 1;
@@ -949,6 +955,16 @@ int main(int argc, char **argv)
         std::memcpy(&fade, &haze[1], 4);
         pop_postfx::smartBlur(frame, work, haze[0], fade, 11, false, int(width) / 640);
         rgba = std::move(frame.rgba);
+    }
+    if (twoDAfter)
+    {
+        std::vector<uint8_t> out;
+        if (!r.renderOffscreen(width, height, clip, draws, out, error, nullptr, nullptr, &rgba))
+        {
+            std::fprintf(stderr, "render (2D): %s\n", error.c_str());
+            return 1;
+        }
+        rgba = std::move(out);
     }
     const auto t2 = std::chrono::steady_clock::now();
     // opaque output (the colour target's alpha is not meaningful for the comparison)
