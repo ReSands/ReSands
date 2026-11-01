@@ -160,6 +160,16 @@ the compiler check: `docs/roadmap.md` "2.0".
   15e940 r1 vs r3, 15ae00 r2 vs r6, 181ac0 r2): ~6 min per function vs ~9.5. Too few to call the pass rate; a full
   night will. Test folders in `game\analysis\qwen_test1101\` on the PC; run 5's put back; 181ac0's PASS kept:
   **124 of 669**. 164580, 180d80, 17e140 were not reached: normal queue.
+- **Prepared for run 6 (1 Nov evening; ideas from memdoor's team-solve workflow, github.com/guregodevo/memdoor
+  `examples/workflows/team-solve`: a 27B Qwen in a plan / two ideators / solve / test / review / one-repair loop, 47 vs 35
+  of 100 problems over a single call, one run):** (1) **compile fixes outside the round count**: an attempt that does
+  not compile gets up to 2 "fix only the compile errors" calls (`roundNN.fix1/.fix2.cpp`), against run 5's 41% of
+  rounds that never compiled; (2) **two first drafts on a fresh function**: the usual one plus `roundNN.b` written from the
+  assembly's control flow (Ghidra's C only for types and names); the better one is the base for round 2. Not
+  taken: separate manager / planner roles (our judge is exact, so a manager has nothing to add) and memdoor itself. Each
+  function now costs ~1-3 more model calls, so expect fewer functions per night. **To read in the morning:** how many
+  `.fix` files compile (`grep -l "^MATCH\|instructions differ" */attempts/*.fix*.report.txt`), and how often `.b`
+  beats round 1 (`match.log`).
 
 ## Fixes after run 1 (all done 28 Oct night)
 

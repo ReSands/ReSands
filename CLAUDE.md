@@ -60,7 +60,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   pure game frames draw only alpha on the GS; colour comes from fallback frames (~1 in 300: blended Pinch, water,
   single calls). Next: dump the title / movie / loading frames, why-lines for the fallbacks. Parked (`docs/native_bugs.md`):
   N28 (Retry fade pop-in), progressive scan from the title menu crashes (check GS-only first).
-- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
+- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); run 6 prepared: compile-fix calls + second first draft (team-solve ideas); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".
 

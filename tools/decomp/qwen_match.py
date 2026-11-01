@@ -362,6 +362,50 @@ def score(report):
     return -1 if report.startswith('COMPILE') else sum(not r.startswith('>>') for r in report.splitlines()[2:])
 
 
+FIX = ('That file did not compile:\n\n{err}\n\nFix only the compile errors and change nothing else. Reply with the '
+       'complete file in one ```cpp block. Keep your reasoning short.')
+# second first draft on a fresh function (team-solve's "different family" ideator, 1 Nov)
+DRAFT_B = ('\n\nWrite this draft from the assembly: follow the retail control flow, branch structure, loop shape and the '
+           'order values are computed in, not Ghidra\'s structure; use Ghidra\'s C only for types and names.')
+
+
+def attempt(url, messages, att, tag, check, say, out):
+    # one model answer, judged; a compile error gets up to 2 fix-only calls that use no round (memdoor team-solve's
+    # narrow repair worker; run 5: 41% of rounds did not compile). -> (code, report, score, matched), 'HEADER' or None
+    res = None
+    for fix in range(3):
+        try:
+            content, reasoning, usage, secs = ask(url, messages)
+        except Exception as e:  # server hiccup: the caller goes on with the next round
+            say('%s: request failed (%s); waiting 60 s' % (tag, str(e)[:100]))
+            time.sleep(60)
+            return res
+        # a header request counts wherever the answer puts it (31 Oct: one inside the code block was compiled as code)
+        need = re.search(r'NEEDS HEADER CHANGE:.*', content or '')
+        if need:
+            say('%s: %s' % (tag, need.group(0)[:200]))
+            open(os.path.join(out, 'HEADER'), 'w').write(need.group(0) + '\n')
+            return 'HEADER'
+        # a draft inside the reasoning still gets judged when the answer has none (lesson from 23 Oct)
+        code = extract(content) or extract(reasoning)
+        if code is None:
+            open(os.path.join(att, tag + '.nocode.txt'), 'w').write((content or reasoning)[-4000:])
+            say('%s: no code block (%.0f s, %s tokens)' % (tag, secs, usage.get('completion_tokens')))
+            return res
+        path = os.path.join(att, tag + '.cpp')
+        open(path, 'w').write(code)
+        ok, got, text = check(path)
+        open(path[:-4] + '.report.txt', 'w').write(text)
+        say('%s: %s; %.0f s, %s tokens' % (tag, text.splitlines()[0][:100], secs, usage.get('completion_tokens')))
+        res = (code, text, got, ok)
+        if got >= 0:
+            return res
+        messages = messages[:1] + [{'role': 'assistant', 'content': '```cpp\n' + code + '```'},
+                                   {'role': 'user', 'content': FIX.format(err=text[:3000])}]
+        tag = tag.split('.fix')[0] + '.fix%d' % (fix + 1)
+    return res
+
+
 def queue():
     # functions not yet PASS / HEADER: RETRY-marked first (reopened after a header or prompt fix), then untried, then the same-size ones (most likely to match POP1's layouts), smallest first
     rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
@@ -411,6 +455,20 @@ def selftest():
            '>>  44  bne at,zero,0x188c48               | beq at,zero,0x188c48\n')
     h = diff_hints(rep)
     assert 'signed/unsigned' in h and 'operands swapped' in h and 'branch sense' in h and h.count('c.eq.s') == 1, h
+    # attempt(): a compile error gets fix-only calls (files .fix1, .fix2), at most 2; a compiling answer stops them
+    import tempfile
+    global ask
+    real_ask, sent = ask, []
+    for answers, want in ((['bad', 'bad', 'good'], ['t', 't.fix1', 't.fix2']), (['good'], ['t']),
+                          (['bad', 'bad', 'bad'], ['t', 't.fix1', 't.fix2'])):
+        d, it = tempfile.mkdtemp(), iter(answers)
+        ask = lambda url, m: (sent.append(m) or '```cpp\n%s\n```' % next(it), '', {}, 0.0)
+        check = lambda p: (False, 5, 'x\ny') if 'good' in open(p).read() else (False, -1, 'COMPILE ERROR\nno')
+        r = attempt('', [{'role': 'user', 'content': 'task'}], d, 't', check, lambda s: None, d)
+        assert sorted(f[:-4] for f in os.listdir(d) if f.endswith('.cpp')) == want and r[2] == (5 if answers[-1] == 'good' else -1), (answers, r)
+        shutil.rmtree(d)
+    assert 'did not compile' in sent[1][-1]['content'] and len(sent[1]) == 3, 'fix call = task + bad file + error'
+    ask = real_ask
     if os.path.exists(os.path.join(DARE, 'asm', '00160a80.s')):  # needs the git-ignored working files
         p = prompt(*row('160a80'))  # unnamed string + Ghidra's bare address for it
         assert '; = "sndthrd_ee.c" (__FILE__)' in p and 'MouchardThreadTool(__FILE__,' in p, 'string notes'
@@ -454,9 +512,10 @@ def main(argv):
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     tries = [(open(os.path.join(att, f)).read(), open(os.path.join(att, f[:-4] + '.report.txt')).read(), f[:-4])
              for f in done]
-    if tries and tries[-1][1].startswith('MATCH'):  # an earlier run died between judging and writing PASS (28 Oct, over ssh)
-        open(os.path.join(out, 'PASS'), 'w').write(tries[-1][2] + '\n')
-        say('PASS in %s (found on resume)' % tries[-1][2])
+    hit = next((t for t in tries if t[1].startswith('MATCH')), None)
+    if hit:  # an earlier run died between judging and writing PASS (28 Oct, over ssh)
+        open(os.path.join(out, 'PASS'), 'w').write(hit[2] + '\n')
+        say('PASS in %s (found on resume)' % hit[2])
         return 0
     # a resume starts from the best attempt, not the last one (1 Nov: the last was often a compile error)
     best_try = max(tries, key=lambda t: score(t[1]), default=None)
@@ -480,29 +539,17 @@ def main(argv):
                           'Judge report for that file (retail | yours, >> = differs):\n\n' +
                           prev[1] + diff_hints(prev[1]) + '\n\nChange the source so the compiler produces the retail instructions, and '
                           'reply with the complete file in one ```cpp block. Keep your reasoning short.'}]
-        try:
-            content, reasoning, usage, secs = ask(url, messages)
-        except Exception as e:  # server hiccup: try the round again later
-            say('round%02d: request failed (%s); waiting 60 s' % (n, str(e)[:100]))
-            time.sleep(60)
-            continue
-        # a header request counts wherever the answer puts it (31 Oct: one inside the code block was compiled as code)
-        need = re.search(r'NEEDS HEADER CHANGE:.*', content or '')
-        if need:
-            say('round%02d: %s' % (n, need.group(0)[:200]))
-            open(os.path.join(out, 'HEADER'), 'w').write(need.group(0) + '\n')
+        check = lambda p: judge(p, mangled, addr, size, elf)
+        res = [attempt(url, messages, att, 'round%02d' % n, check, say, out)]
+        if not prev and not res[0] == 'HEADER':  # fresh function: a second, differently framed first draft
+            res.append(attempt(url, [{'role': 'user', 'content': first + DRAFT_B}], att, 'round%02d.b' % n, check,
+                               say, out))
+        if 'HEADER' in res:
             return 3
-        # a draft inside the reasoning still gets judged when the answer has none (lesson from 23 Oct)
-        code = extract(content) or extract(reasoning)
-        if code is None:
-            open(os.path.join(att, 'round%02d.nocode.txt' % n), 'w').write((content or reasoning)[-4000:])
-            say('round%02d: no code block (%.0f s, %s tokens)' % (n, secs, usage.get('completion_tokens')))
+        res = [r for r in res if r]
+        if not res:
             continue
-        path = os.path.join(att, 'round%02d.cpp' % n)
-        open(path, 'w').write(code)
-        ok, got, text = judge(path, mangled, addr, size, elf)
-        open(path[:-4] + '.report.txt', 'w').write(text)
-        say('round%02d: %s; %.0f s, %s tokens' % (n, text.splitlines()[0][:100], secs, usage.get('completion_tokens')))
+        code, text, got, ok = max(res, key=lambda r: r[2])
         if got > best:
             best, best_try = got, (code, text)
             open(os.path.join(out, 'best.cpp'), 'w').write(code)
