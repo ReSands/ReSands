@@ -57,8 +57,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
 - **Next: 0.2** (GS off by default; plan + progress `docs/gs_off.md`). Step 1 (GS census, `POP_NATIVE_GS_CENSUS`) 1 Nov:
-  pure game frames draw only alpha on the GS; colour comes from fallback frames (~1 in 300: blended Pinch, water,
-  single calls). Next: dump the title / movie / loading frames, why-lines for the fallbacks. Parked (`docs/native_bugs.md`):
+  pure game frames draw only alpha on the GS; title menu and intro movie draw no colour either. Fallbacks fixed and
+  user-checked 1 Nov: blended Pinch native (6054f84), all-clipped water skipped natively (4e7a046); left: rare single
+  calls (~1 per session, judge in step 4). N29 (rewind's white flash) is the game's own. **Next: step 2, native presenter.** Parked (`docs/native_bugs.md`):
   N28 (Retry fade pop-in), progressive scan from the title menu crashes (check GS-only first).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); run 6 prepared: compile-fix calls + second first draft (team-solve ideas); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
