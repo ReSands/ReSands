@@ -591,7 +591,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   (user A/B, same save), so it is the game's own effect, not ours. The four user saves (`play_20261101_155605` ..
   `155619`, copies in `game/analysis/saves1101/`) are mid-rewind, flash not caught, Pinch +0x74 0xFF in all. Re-check on a
   real PS2 / video with N15 / N17 / N27.
-- **N30 (open; user 1 Nov, GS off): enemy slowed by the dagger drawn bone white, "no skin".** Save 170233 (user circled
+- **N30 (parked until the real-PS2 reference, user 1 Nov; GS off report): enemy slowed by the dagger drawn bone white, "no skin".** Save 170233 (user circled
   the knife enemy right of centre; `game/analysis/gsoff1101h/`, also 170118), `play.ps1 -GsOff`, log
   `play_20261101_165944.log` (all draws native, 0 missed). Offline `pop_state_frame` shows the same white, so it is in
   the native path, not the GS-off switch. The 25 Oct save 134636 (GS still running) already differs: GS picture keeps
