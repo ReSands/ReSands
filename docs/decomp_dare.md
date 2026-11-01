@@ -152,7 +152,7 @@ the compiler check: `docs/roadmap.md` "2.0".
     second compiler build for register-only misses (fnvdecomp's were VC++ 2008 RTM vs SP1), a plan/regions step for
     big functions (the queue is at ~250 bytes).
 - **Test run (1 Nov from 10:18): the first 12 non-header functions of run 5 again, fresh** (run 5: 4 of 12 matched),
-  `oct28.ps1 -NoShutdown -Addrs ...`, 4 rounds each. Run 5's folders held in `game\analysis\qwen_run5_held\` on
+  `oct28.ps1 -NoShutdown -AddrsFile game\jobs\test1101.txt`, 4 rounds each. Run 5's folders held in `game\analysis\qwen_run5_held\` on
   the PC: put back afterwards (keep a new PASS). Result: (pending)
 
 ## Fixes after run 1 (all done 28 Oct night)
