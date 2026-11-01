@@ -70,3 +70,21 @@ native; water; single calls).
 **Not yet covered (older note):** non-game screens (title menu, movie, loading screen, load transitions such as marker 832 of
 session 1: `046` 684 kicks, `15e`/`14e` on fbp 0x118) were seen only as first sightings, not dumped. Next: a cold-boot
 dump (`POP_NATIVE_GS_CENSUS=50`, intro movie + title menu) and a why-line boot over the fallback saves.
+
+## Step 2: native presenter (1 Nov, code; not built or booted yet)
+**Switch:** `POP_NATIVE_PRESENT=1` (off by default). Runtime patch 45 (`GSHostPresent`, `gs_host_inject.h`): at each
+presentation a hook gets the display registers and may return its own frame; the backend's Present is then skipped and
+the window loop does not take the GS's shared GPU texture. Override (`pop_native_world.cpp`): each native picture also goes
+into a private 4 MB GS memory (a `GSCpuBackend`, same buffer as the frame's target fbp), and the hook runs the runtime's
+own CPU display merge (`PresentFromLocalMemory`: PMODE ALP, DISPFB1/2, DISPLAY1/2) on it. So the line blend is the GS's
+formula exactly, ALP 255 included. MMOD is 1 (fixed ALP: PMODE 0x7f23), so the GS's alpha-only draws after the marker
+change nothing on screen. Until the first native picture the GS's picture is shown.
+**Known limits (review 1 Nov, deliberate for step 2):**
+- A frame with no native picture ("no native picture" log line; normally 0) repeats the picture from two frames
+  earlier in that buffer (a stutter), where the GS showed the frame without its static world.
+- Frames whose purity ended (~1 in 300, mostly load frames) lose the colour the GS drew over the native picture. Step 4
+  measures this; step 3 must make those frames native or accept them.
+- The merge runs on the CPU every refresh (4 MB copy + 640x448 merge on the window thread; ~1-3 ms, estimate). A GPU line
+  blend later (performance waits until fully native).
+**Next:** PC build (`rebuild.ps1 -Fast` after applying patch 45), then a short boot with the user's OK:
+`play.ps1 -Env 'POP_NATIVE_PRESENT=1'` (game, title menu, a movie, a loading screen) against the default.

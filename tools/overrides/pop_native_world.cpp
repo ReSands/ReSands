@@ -19,6 +19,9 @@
 #if __has_include("runtime/gs/gs_host_inject.h")
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_host_inject.h"
+#ifdef GS_HOST_PRESENT
+#include "runtime/gs/gs_cpu_backend.h"
+#endif
 // the native sources, by path (this file is copied to <runtime>/ps2xRuntime/src/runner)
 #include "../../../../../../tools/native/src/frame_loader.h"
 
@@ -28,6 +31,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
 #include <deque>
 #include <map>
 #include <mutex>
@@ -489,6 +493,46 @@ namespace pop_native_world
                          (unsigned long long)c.intervals, (unsigned long long)c.withDraws, (unsigned long long)c.images, top.c_str());
         }
 
+#ifdef GS_HOST_PRESENT
+        // Native presenter (POP_NATIVE_PRESENT=1; 0.2 step 2, docs/gs_off.md): a GS memory of our own holding only the
+        // native pictures, each in the buffer its frame draws into; at each presentation the runtime's own CPU display
+        // merge (PMODE, DISPFB1/2, DISPLAY1/2: the game's line blend) runs on it instead of on the GS's memory (runtime
+        // patch 45). Until the first picture the GS's picture stays on screen.
+        const bool g_presentOn = [] {
+            const char *e = std::getenv("POP_NATIVE_PRESENT");
+            return e && *e && *e != '0';
+        }();
+        std::atomic<bool> g_presentReady{false};
+        GSCpuBackend &presentGs()
+        {
+            static std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE);
+            static GSCpuBackend gs;
+            static const bool init = (gs.Initialize(vram.data(), uint32_t(vram.size())), true);
+            (void)init;
+            return gs;
+        }
+        void presentUpload(uint32_t fbp, uint32_t fbw, const std::vector<uint8_t> &rgba)
+        {
+            GSTransferCommand c;
+            c.bitbltbuf.dbp = fbp * 32u;
+            c.bitbltbuf.dbw = uint8_t(fbw);
+            c.bitbltbuf.dpsm = 0; // PSMCT32
+            c.trxreg.rrw = kWidth;
+            c.trxreg.rrh = kHeight;
+            c.direction = 0; // host -> local
+            presentGs().BeginTransfer(c);
+            presentGs().UploadImage(rgba.data(), uint32_t(rgba.size()));
+            g_presentReady.store(true, std::memory_order_release);
+        }
+        bool presentHook(const GSPresentationRequest &request, PresentationFrame &frame)
+        {
+            if (!g_presentReady.load(std::memory_order_acquire))
+                return false;
+            frame = presentGs().Present(request);
+            return bool(frame);
+        }
+#endif
+
         // The GS hook: the marker is a 2-qword PACKED GIF packet (NLOOP 1, EOP, NREG 1, A+D) writing
         // register 0x7F with "PNWD" and the frame number.
         bool hook(GS &gs, const uint8_t *data, uint32_t sizeBytes, const GSHostInject::Targets &t)
@@ -567,6 +611,10 @@ namespace pop_native_world
             glitchRecord(pic, 0, t.fbp, target);
             const uint64_t frame = (uint64_t(target * 32u) << 32) | (uint64_t(t.fbw) << 48);
             gs.uploadImageNative(frame, 0, trxreg, 0, pic.rgba.data(), uint32_t(pic.rgba.size()));
+#ifdef GS_HOST_PRESENT
+            if (g_presentOn)
+                presentUpload(target, t.fbw, pic.rgba);
+#endif
             const bool z24 = t.zpsm == 0x31;
             // Depth bias (POP_NATIVE_WORLD_ZBIAS, Z24 units, default 128): the native Z lies slightly nearer
             // than the VU1 programs' Z on 27% of the world's pixels (19 Oct saves: p50 19, p99 106, p99.9 442
@@ -619,6 +667,10 @@ namespace pop_native_world
         if (!g_initDone || g_failed)
             return false;
         GSHostInject::setHook(hook);
+#ifdef GS_HOST_PRESENT
+        if (g_presentOn)
+            GSHostPresent::setHook(presentHook);
+#endif
         return true;
     }
 

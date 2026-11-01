@@ -1,0 +1,116 @@
+From 93ec57541f819c0dc44311d11d7b60a57db0d093 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 1 Nov 2026 16:16:37 +0000
+Subject: [PATCH] gs: host-present hook (the picture on screen from a game
+ override)
+
+GSHostPresent::setHook: at each presentation the hook gets the display registers (PMODE, DISPFB1/2,
+DISPLAY1/2, ...) and may return its own frame, which is then shown instead of the GS's (the backend's
+Present is skipped and the window loop does not take the shared GPU texture). For a native renderer
+that presents without the GS (PoP 0.2).
+---
+ .../include/runtime/gs/gs_host_inject.h       | 14 +++++++++++++
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp        | 20 +++++++++++++++++++
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |  5 +++--
+ 3 files changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_host_inject.h b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+index e22e350..74977f9 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_host_inject.h
++++ b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+@@ -2,6 +2,8 @@
+ 
+ #include <cstdint>
+ 
++#include "runtime/gs/gs_types.h"
++
+ class GS;
+ 
+ // Host data in the GIF stream (for game overrides). A hook sees every GIF packet the GS frontend
+@@ -26,3 +28,15 @@ namespace GSHostInject
+     bool startTrace(uint64_t firstField, uint64_t fieldCount, const char *path);
+ }
+ #define GS_HOST_INJECT_START_TRACE 1
++
++// The picture on screen from the host instead of the GS (for game overrides with their own renderer). At each
++// presentation the hook gets the display registers; returning true with a frame shows that frame (the window
++// loop then skips the GS's shared GPU texture), false leaves the GS's picture. lastUsed: the latest
++// presentation came from the hook.
++namespace GSHostPresent
++{
++    using Hook = bool (*)(const GSPresentationRequest &request, PresentationFrame &frame);
++    void setHook(Hook hook);
++    bool lastUsed();
++}
++#define GS_HOST_PRESENT 1
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index e7a874e..7727cf9 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -668,6 +668,22 @@ GSPresentationRequest GS::buildPresentationRequestUnlocked() const
+     return request;
+ }
+ 
++namespace
++{
++    std::atomic<GSHostPresent::Hook> s_hostPresentHook{nullptr};
++    std::atomic<bool> s_hostPresentUsed{false};
++}
++
++void GSHostPresent::setHook(Hook hook)
++{
++    s_hostPresentHook.store(hook);
++}
++
++bool GSHostPresent::lastUsed()
++{
++    return s_hostPresentUsed.load(std::memory_order_acquire);
++}
++
+ void GS::latchHostPresentationFrame()
+ {
+     GSPresentationRequest request{};
+@@ -685,6 +701,10 @@ void GS::latchHostPresentationFrame()
+     }
+ 
+     PresentationFrame frame{};
++    const GSHostPresent::Hook presentHook = s_hostPresentHook.load(std::memory_order_relaxed);
++    const bool fromHost = presentHook && presentHook(request, frame);
++    s_hostPresentUsed.store(fromHost, std::memory_order_release);
++    if (!fromHost)
+     {
+         std::lock_guard<std::mutex> backendLock(m_backendLifetimeMutex);
+         if (m_backend)
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 58b119c..1ddfffa 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -9,6 +9,7 @@
+ #include "ps2_runtime_macros.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/gs_shared_present.h"
++#include "runtime/gs/gs_host_inject.h"
+ #include "runtime/ee_scheduler.h"
+ #include "ThreadPriority.h"
+ #include "ThreadNaming.h"
+@@ -547,7 +548,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     }
+     s_lastPresentationTick = currentTick;
+     rt->gs().latchHostPresentationFrame();
+-    if (GSSharedPresent::Active())
++    if (GSSharedPresent::Active() && !GSHostPresent::lastUsed())
+     {
+         outWidth = outHeight = 0u;
+         return;
+@@ -2825,7 +2826,7 @@ void PS2Runtime::run()
+         GSSharedPresent::Frame sharedFrame;
+         UploadFrame(frameTex, this, presentWidth, presentHeight, hashImages, sharedFrame);
+         Texture2D displayTex = frameTex;
+-        const bool shared = GSSharedPresent::Active();
++        const bool shared = GSSharedPresent::Active() && !GSHostPresent::lastUsed();
+         if (shared)
+         {
+             sharedFrame = {};
+-- 
+2.54.0 (Apple Git-157)
+
