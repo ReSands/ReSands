@@ -280,7 +280,8 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    offline draws no 2D at all (the whole list would have to come from the chain); text inside 3D lists stays as before.
 6. **Glow and mist** (smaller): why the offline glow over-brightens (live does not; compare the post inputs), and draw or
    rule out the +0x88 GFX particles.
-7. **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
+7. **(Deferred, user 1 Nov: wait until the PS2 is in hand; how data gets on and the picture comes off decide the format.)**
+   **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
    VRAM + registers before the frame (for (a): the GS packets come from running the chain through the VU1 interpreter in
    `pop_state_frame_vu1`, or a GS trace), the native frame, our GS frame. Write the bundle format into
    `docs/roadmap.md` "Hardware reference"; the PS2 player itself is a later job.
