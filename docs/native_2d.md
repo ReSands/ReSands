@@ -91,7 +91,14 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
 2. **Live, in-game HUD and letterbox**, switch `POP_NATIVE_2D` (off until the user's check): the hooks record while
    the frame is pure and skip the originals. Why-line when the 2D pass is left to the GS. **Code done 1 Nov** (needs
    POP_NATIVE_POST and LATE; `play.ps1 -Env 'POP_NATIVE_2D=1'`; stats line `[pop:world] 2D:` every 300 frames,
-   `POP_NATIVE_WORLD_WHY=1` names what ended purity); boot pending.
+   `POP_NATIVE_WORLD_WHY=1` names what ended purity). **Boot 1 Nov** (`game\jobs\twod1101*.ps1`, 5 saves, native vs +2D,
+   shots `game\recomp-sotc\shots1101*`): the frame stays pure through +0xB8 (enders list18 / rect / idx +0xb8 gone
+   but 1 per 600 frames), no slot mismatch, fps unchanged, STR text right (tutorial, pause, save menu). Fixed the same
+   day (39f6c78): the queuing call of FUN_004B4580 (state 10) also draws (its GS sprite covered the native picture: save
+   menu at half brightness); natively it now queues the kind-11 entry itself and draws the rectangle. **Open:** (a) the
+   HUD ring above the life bar has 4 gaps and the small ring under the sand tanks shows glyph-like garbage instead of a
+   circle; (b) the save menu's 9-piece panel shows its overlaps (edges darker, corners lighter; GS: even). Both are
+   +0xB8 drawing, not text.
 3. **Movie display**: `PS2_DisplayVideo` hook, picture drawn natively full screen (a frame with no marker: the native
    frame is just the movie).
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).
