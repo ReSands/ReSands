@@ -126,8 +126,8 @@ the compiler check: `docs/roadmap.md` "2.0".
   0x189180 (`GetRendererRate`) no longer compiles since the 31 Oct static change (its best.cpp calls it on an object).
 
 - **Run 5 (1 Nov 00:54-10:09, stopped by me for the changes below): 7 of 59 matched (12%)**, 5 NEEDS HEADER CHANGE,
-  47 misses; ~9.5 min per function. Now **123 of 669**. **117 of its 244 rounds did not compile (48%)**; 11
-  functions never compiled. Folders copied to `game/analysis/qwen_pc/`.
+  47 misses; ~9.5 min per function. Now **123 of 669**. **88 of its 217 rounds did not compile (41%)**; 11
+  functions never compiled in any run. Folders copied to `game/analysis/qwen_pc/`.
 - **After run 5 (1 Nov; ideas partly from fnvdecomp.com's agents.md, the FNV byte-matching project's agent guide):**
   - **`match.py` diffs aligned (difflib on opcode + registers; same = equal with the relocation mask, branches equal
     when their targets pair).** The old diff compared instruction k with k: one extra instruction made the rest of
@@ -140,7 +140,7 @@ the compiler check: `docs/roadmap.md` "2.0".
     retail bodies) and libc. 110 of 406 callees had no declaration; now only Sony kernel / sif calls (1-2 calls each,
     left to the prompt: no Sony signatures from memory). Also `typedef struct X_ X` for the 17 `X_` tags (Qwen
     writes `ASSOCIATION_DESCRIPTION`), `#define NULL 0`, `SndManager::Renderer` static (0x189cc0 never reads a0).
-    Re-judging run 5's compile errors with the new header: only 11 of 117 compile; the rest are Qwen's own member /
+    Re-judging the compile errors in these functions' folders (runs 3-5) with the new header: only 11 of 117 compile; the rest are Qwen's own member /
     type guesses (`ulSwitchValue` for `hSwitchValue`, placement new, function-pointer casts), not header gaps.
   - **Runner:** resumes from the best attempt (was the last, often a compile error); a round worse than the best
     gets the best back as the base ("start from the best", with the compile error's first words); **matched
@@ -153,7 +153,13 @@ the compiler check: `docs/roadmap.md` "2.0".
     big functions (the queue is at ~250 bytes).
 - **Test run (1 Nov from 10:18): the first 12 non-header functions of run 5 again, fresh** (run 5: 4 of 12 matched),
   `oct28.ps1 -NoShutdown -AddrsFile game\jobs\test1101.txt`, 4 rounds each. Run 5's folders held in `game\analysis\qwen_run5_held\` on
-  the PC: put back afterwards (keep a new PASS). Result: (pending)
+  the PC: put back afterwards (keep a new PASS). **Stopped after 9 of 12 (user: little more to learn).** Same 9 in
+  run 5 vs test: **4 passes each** (test won 181ac0, lost 18a480 to the seed), **7 of 29 rounds did not compile in
+  both**; best re-judged scores (today's diff and header) **higher or equal in 8 of 9** (165900 26->27, 163100
+  26->28, 17ae40 none->25, 15ecc0 none->32 of 43; 18a480 36->34) and passes in fewer rounds (193500 r2 vs r5,
+  15e940 r1 vs r3, 15ae00 r2 vs r6, 181ac0 r2): ~6 min per function vs ~9.5. Too few to call the pass rate; a full
+  night will. Test folders in `game\analysis\qwen_test1101\` on the PC; run 5's put back; 181ac0's PASS kept:
+  **124 of 669**. 164580, 180d80, 17e140 were not reached: normal queue.
 
 ## Fixes after run 1 (all done 28 Oct night)
 

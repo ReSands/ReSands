@@ -316,7 +316,7 @@ mode boots the game check for an active display first, so a mistake like this ca
 - **A positional instruction diff lies after the first insertion.** `match.py` compared instruction k with k, so one
   extra instruction marked the rest of the function as different; the score that picks `best.cpp` and ranks near
   misses was wrong, and so was the feedback the model read. Align first (difflib on opcode + registers), then judge.
-- **Before tuning a model's prompt, count why its rounds fail.** Run 5: 48% of rounds did not compile; the header
+- **Before tuning a model's prompt, count why its rounds fail.** Run 5: 41% of rounds did not compile (count only that run's rounds: older runs' attempts share the folders); the header
   generator had silently dropped every mangled free function (214) and everything without DWARF. Check what the
   model is given against what the code it must write calls (callees.tsv vs dare.h), not only what it writes.
 
