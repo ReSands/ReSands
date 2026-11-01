@@ -50,6 +50,12 @@ STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack
                   ('SndManager', 'GetRendererRate')}  # 0x189180 never reads a0; its callers set none (31 Oct)
 # C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
 C_PARAMS = {'MouchardThreadTool': 'char *file, int line', 'SND_fn_vMouchardThreadsnd': 'char *file, int line'}
+# retail-only overloads (retail PlayToolVoice 0x18a480 passes 3 arguments; 0x18a540 / 0x18a640 never read a 4th)
+EXTRA_METHODS = {'SndManager': ['int PlayLoopingVoice(_VOICE *, _tduRefRes, _SoundParam *);  // retail',
+                                'int PlayOneShotVoice(_VOICE *, _tduRefRes, _SoundParam *);  // retail']}
+# members retail has and POP1 lacks: (record, member it goes before) -> (declaration, size); later offsets shift
+RETAIL_INSERT = {('ASSOCIATION_DESCRIPTION_', 'pstBlockEvent'): ('int _retail04', 4)}  # 1 Nov: lChannelId +0xc,
+# next link +0x60, fade +0x70 in KillSoundChannel / GetStopAssoForStopNGo / KillAndDestroyAssoPlay (POP1 +8/+0x5c/+0x6c)
 
 
 def symbols(d):
@@ -515,6 +521,7 @@ def main(elf_path, out_h, out_tsv=None):
         for m, fx, c in methods.get(n, []):
             if m not in virt:
                 mlines.append('    ' + decl(m, fx, n, c))
+        mlines += ['    ' + e for e in EXTRA_METHODS.get(n, [])]
         mlines += ['    static %s;' % gdecl(k) for k in sorted(static_members) if static_members[k] == n]
         pos = max([member_offset(b.attrs.get('location')) + records.get(g.render(b.attrs).strip(), x).attrs.get(
             'byte_size', 0) for b in bases] or [0])
@@ -522,8 +529,15 @@ def main(elf_path, out_h, out_tsv=None):
             pos = 4         # the vptr: CodeWarrior puts it where the first virtual is declared, so methods first
             L += mlines
             mlines = []
+        shift, shifts = 0, {}
         for mbr in mems:
-            off = member_offset(mbr.attrs.get('location'))
+            ins = RETAIL_INSERT.get((n, mbr.attrs.get('name')))
+            if ins:
+                L.append('    %s;  // retail only' % ins[0])
+                shift += ins[1]
+                pos += ins[1]
+            shifts[mbr.attrs.get('name')] = shift
+            off = member_offset(mbr.attrs.get('location')) + shift
             if kw == 'struct' and off > pos:
                 L.append('    char _pad%x[%d];' % (pos, off - pos))
             nm = mbr.attrs.get('name') or '_m%x' % off
@@ -544,13 +558,14 @@ def main(elf_path, out_h, out_tsv=None):
             L.append('    char _data[%d];  // no members in DWARF' % x.attrs['byte_size'])
         L += mlines
         L.append('};')
-        bs = x.attrs.get('byte_size')
+        bs = x.attrs.get('byte_size') and x.attrs['byte_size'] + shift
         if bs:
             L.append('DARE_CHECK(__size_%s, sizeof(%s) == %d);' % (n, n, bs))
         for mbr in mems:
             if 'bit_size' not in mbr.attrs and mbr.attrs.get('name') and kw == 'struct':
                 L.append('DARE_CHECK(__ofs_%s_%s, DARE_OFS(%s, %s) == %d);' % (
-                    n, mbr.attrs['name'], n, mbr.attrs['name'], member_offset(mbr.attrs.get('location'))))
+                    n, mbr.attrs['name'], n, mbr.attrs['name'],
+                    member_offset(mbr.attrs.get('location')) + shifts[mbr.attrs['name']]))
     L.append('')
     # functions known only by a declaration whose POP1 symbol is mangled were compiled as C++ (fn_vUbiEELoop__FPv)
     mangled = {s[0].split('__F')[0] for s in syms if '__F' in s[0][1:]}

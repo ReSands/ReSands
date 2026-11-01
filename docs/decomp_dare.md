@@ -97,6 +97,34 @@ the compiler check: `docs/roadmap.md` "2.0".
   first time, 30 of 33 off: it needs `SND_ClockNative` with an inline `GetInstance()` and a COP0 `Count` read, a
   header job, not a runner one. **85 of 669.**
 
+- **Run 4 (31 Oct 11:44 - 1 Nov 00:29, stopped by the user): 18 of 95 matched (19%)**, 14 NEEDS HEADER CHANGE
+  (mostly `ASSOCIATION_DESCRIPTION`, `_tdstMapMem`, fade/switch-event structs), 63 misses; 487 of 582 queued not
+  reached. Now **103 of 669** (`--summary`; 16 header requests, 128 tried without a match). Nearest misses:
+  `TFader::StartFade` 30/31, `SND_fn_eInitSpuReverb` 38/40, `TMultiTrack::FileIsValid` 42/45. Folders copied to
+  `game/analysis/qwen_pc/`.
+- **Near misses by hand (1 Nov): 13 of the top 15 matched -> 116 of 669** (`game/decomp/dare/nm/`, list in
+  `done.txt`; recorded on the PC as `PASS` = "hand (1 Nov)" + `best.cpp`). What Qwen got wrong, as candidate prompt
+  lessons: **switch case order** (CodeWarrior tests the cases in reverse source order: `SND_fn_bCanFreeSubBlock` is
+  `case 0: case 3: case 1:`, `Create_TDecoder` ADPCM, PCM, IMA, OGG); **no `(float)` cast** on an int compared with
+  a float constant (the cast swaps `$f0`/`$f1`); **a 1-bit bitfield copy** is a plain assignment (`bDynamic`); index an
+  array of structs (`g_stSndToc[i].lSize`) instead of byte offsets; pointer increments in the `for` header; the
+  pointer argument of `SND_fn_vFreeSnd(void *)`; `delete p` for `__dt__(p, 1)`; string literals from the ELF for
+  `lui`/`addiu` string addresses; nested member names (`m_stOutputFormat.uFormat.stPCM.ulFreq`). Left:
+  **`__dt__9TImaAdpcmFv`** is a header problem: retail stores a malloc'd buffer at +0x34 and its size at +0x30
+  (`AllocBuffer` 0x186a00), where POP1's DWARF has `m_bInitDone` / `short m_iExtraSample[2]`; retail `TImaAdpcm`'s
+  layout differs. **`SND_fn_vSetDefaultRollOff`** (7 of 47 off, only the first if/else's register choice): 10
+  variants tried, a job for the permuter.
+- **Prepared for run 5 (1 Nov):** prompt lessons from the hand matches above; unnamed string addresses shown as
+  their text (`__FILE__` for file names), also in Ghidra's C (44 prompts had raw addresses); the float-compare hint
+  says to drop `(float)` casts; the header excerpt follows member types 4 levels deep and is seeded with POP1's
+  parameter and local types (7 of the 16 header requests named types dare.h has but the excerpt left out; median
+  prompt 10.8k -> 15.8k characters). Header (`dare_header.py`): `RETAIL_INSERT` adds retail's extra int at +4 of
+  `ASSOCIATION_DESCRIPTION_` (size 144: 4 requests), `EXTRA_METHODS` the 3-argument `SndManager::PlayLoopingVoice` /
+  `PlayOneShotVoice` retail calls. The other 5 requests were misreadings (t0 in a delay slot, vtable slot +8 =
+  `AddChild`, sndCList members present). All 16 reopened: `HEADER` renamed `HEADER.1101`, and a `RETRY` file puts a
+  function first in the queue (removed when the runner picks it up). 115 of 116 passes still match the new header;
+  0x189180 (`GetRendererRate`) no longer compiles since the 31 Oct static change (its best.cpp calls it on an object).
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669

@@ -62,7 +62,14 @@ Original local variable names: {locals}
 - The judge compares every instruction; call targets and global addresses only need the right symbol.
 - What earlier matches taught us about this compiler:
   - Two or more tests of the same value against different constants up front, then the default path, then the
-    case bodies = a switch statement. A single test is an if.
+    case bodies = a switch statement. A single test is an if. The tests come out in REVERSE source order and
+    the bodies in source order: write the cases in the order of the bodies (e.g. tests 4, 3, 1, 2 = case 2:,
+    case 1:, case 3:, case 4:).
+  - An int compared with a float constant: write `f() == -2.0f` with no (float) cast (the cast swaps $f0/$f1).
+  - A field copied with sll/sra by 31 and an and/or mask of -2 and 1 is a 1-bit bitfield: a plain assignment.
+  - A loop over a global array with an index times the element size = index an array of structs
+    (g_arr[i].member), never byte offsets; a pointer bumped each iteration goes in the for header (i++, p++).
+  - A free/delete call gets its pointer in a0: pass it (SND_fn_vFreeSnd(p)); __dt__(p, 1) is `delete p;`.
   - Stores come out in source order: write member assignments in the order the assembly stores them.
   - Plain int shifts give sll/sra; casts to short add dsll32/dsra32 pairs.
   - The constructor's vptr store is generated; write only the member assignments.
@@ -133,9 +140,9 @@ def header_for(mangled, decl, asm, ghidra):
             continue
         out.append(text)
         size += len(text)
-        # member types two levels down (pResMem->uRes.stMultiTrack.ulDataSize needs the union and the struct in it);
+        # member types four levels down (pResMem->uRes.stMultiTrack.ulDataSize needs the union and the struct in it);
         # deeper only bases; breadth first, so the budget cuts the farthest types
-        names = re.findall(r'\w+', text if depth < 2 else text.split('{')[0])
+        names = re.findall(r'\w+', text if depth < 4 else text.split('{')[0])
         queue += [(x, depth + 1) for x in names if x in blocks and x not in seen]
     return ''.join(out), cls
 
@@ -208,8 +215,9 @@ def diff_hints(report):
                       'condition.' % (oa, ob))
         elif oa == ob and oa.startswith('c.') and len(a.split()) > 1 and len(b.split()) > 1 and \
                 a.split()[1].split(',') == b.split()[1].split(',')[::-1]:
-            hints.add('%s with its operands swapped: write the comparison the other way round (a == b vs b == a, '
-                      'a < b vs b > a).' % oa)
+            hints.add('%s with its operands swapped: drop any (float) cast on an int compared with a float '
+                      'constant, or write the comparison the other way round (a == b vs b == a, a < b vs b > a).'
+                      % oa)
     return ('\n\nHints: ' + ' '.join(sorted(hints))) if hints else ''
 
 
@@ -255,6 +263,12 @@ def annotate(asm, ghidra, addr, size):
             note, desc = global_note(gl[t][0], t, gl[t][1], elf)
             notes[ia] = note
             used[gl[t][0].split('+')[0]] = (gl[t][1], desc)
+        else:  # an unnamed string (POP1 had no symbol to pair): show its text, not a raw address
+            text = (elf_bytes(elf, t, 256) or b'').split(b'\0')[0]
+            if len(text) >= 4 and all(32 <= c < 127 for c in text):
+                lit = '"%s"' % text.decode().replace('\\', '\\\\').replace('"', '\\"')
+                notes[ia] = lit + (' (__FILE__)' if re.search(r'\.(cpp|c)$', text.decode())
+                                   else ' (string literal: write it in the code)')
     const = {}
     for a in range(addr, addr + size, 4):
         w = word(a)
@@ -277,6 +291,10 @@ def annotate(asm, ghidra, addr, size):
     # Ghidra writes DAT_00680c80, _DAT_..., PTR_..., or a type prefix + Ram00680c80 (iRam, puRam, ...)
     ghidra = re.sub(r'\b(?:_?DAT_|PTR_|[a-z]*Ram)([0-9a-f]{8})\b', lambda m: names.get(int(m.group(1), 16), m.group(0)),
                     ghidra)
+    # Ghidra passes string addresses as bare numbers (MouchardThreadTool(0x644e30,0x2a)): write what the code has
+    strs = {t: '__FILE__' if notes[ia].endswith('(__FILE__)') else notes[ia].rsplit(' (', 1)[0]
+            for ia, t in data_refs(word, addr, size) if notes.get(ia, '').startswith('"')}
+    ghidra = re.sub(r'\b0x([0-9a-f]{6,8})\b', lambda m: strs.get(int(m.group(1), 16), m.group(0)), ghidra)
     return asm, ghidra, used
 
 
@@ -287,7 +305,7 @@ def prompt(mangled, addr, size, file):
     ghidra = open(os.path.join(DARE, 'ghidra_c', '%08x.c' % addr)).read().strip()
     asm, ghidra, callees = name_callees(asm, ghidra)
     asm, ghidra, used = annotate(asm, ghidra, addr, size)
-    header, cls = header_for(mangled, proto[2], asm + ' ' + callees + ' ' + ' '.join(used), ghidra)
+    header, cls = header_for(mangled, ' '.join(proto[2:]), asm + ' ' + callees + ' ' + ' '.join(used), ghidra)
     globs = '\n'.join('- %s (%d bytes)' % (desc, sz) if desc else
                       '- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
                                               else 'not in dare.h: declare it yourself')
@@ -318,10 +336,10 @@ def score(report):
 
 
 def queue():
-    # functions not yet PASS / HEADER: untried first, then the same-size ones (most likely to match POP1's layouts), smallest first
+    # functions not yet PASS / HEADER: RETRY-marked first (reopened after a header or prompt fix), then untried, then the same-size ones (most likely to match POP1's layouts), smallest first
     rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
     at = lambda r, f: os.path.exists(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16), f))
-    rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (at(r, 'attempts'), r[5] != '1', int(r[4]), r[3]))
+    rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (not at(r, 'RETRY'), at(r, 'attempts'), r[5] != '1', int(r[4]), r[3]))
     done = lambda r: at(r, 'PASS') or at(r, 'HEADER')
     return [r[3] for r in rows if not done(r)]
 
@@ -366,6 +384,10 @@ def selftest():
            '>>  44  bne at,zero,0x188c48               | beq at,zero,0x188c48\n')
     h = diff_hints(rep)
     assert 'signed/unsigned' in h and 'operands swapped' in h and 'branch sense' in h and h.count('c.eq.s') == 1, h
+    if os.path.exists(os.path.join(DARE, 'asm', '00160a80.s')):  # needs the git-ignored working files
+        p = prompt(*row('160a80'))  # unnamed string + Ghidra's bare address for it
+        assert '; = "sndthrd_ee.c" (__FILE__)' in p and 'MouchardThreadTool(__FILE__,' in p, 'string notes'
+        assert 'struct _tdstMapMem' in prompt(*row('17ae40')), 'local-variable types reach the excerpt'
     print('selftest ok')
 
 
@@ -399,6 +421,8 @@ def main(argv):
         print(mangled, 'already passed')
         return 0
     log = open(os.path.join(out, 'match.log'), 'a')
+    if os.path.exists(os.path.join(out, 'RETRY')):  # picked up: back to the normal order if it misses again
+        os.remove(os.path.join(out, 'RETRY'))
     say = lambda s: (print(s, flush=True), log.write(time.strftime('%H:%M:%S ') + s + '\n'), log.flush())
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
     prev = (open(os.path.join(att, done[-1])).read(), open(os.path.join(att, done[-1][:-4] + '.report.txt')).read()) \
