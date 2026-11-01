@@ -522,6 +522,13 @@ mapping is by time (the user's minutes vs save names); check each picture first.
      line, blinking with depth precision. N18 was first reported 30 Oct, the day after that change.
   3. **Fix in place (2fdf0fa): no decal bias for lightmaps** (`native_renderer.cpp`, `mat->fogAlpha` = flags 0x30284).
      Gate and blend test unchanged. **User check: still a faint flicker** (not described further; the session ended).
+  4. **1 Nov (user at the TV, annotated `game/analysis/saves1101/n18_side_by_side_GS-left_NATIVE-right.png`):** the
+     faint flicker is at the foot of the lower big block (two spots along it, the left more often), **only when the
+     Prince moves, never with the camera.** That points at the shadow receivers (the Prince's projector follows him and
+     looks straight down; receivers redraw the base's own triangles, GEQUAL, no Z write, so they still had the decal
+     bias). Fix 527fca4: no bias for `clampUv` materials (= receivers only). **GS shows the same flicker once in a while**
+     (user saw one): the original has the same mechanism at the GS's rounding scale; the bias widened it. Real-PS2 check
+     wanted for that one. The thin diagonal light line in the native still is not visible in play (user): dropped.
   **Next, with fresh eyes:** (a) ask what the faint flicker looks like now (the seam line, or something else at the same
   spot) and get the user's circle on a still (send `n18_native` / `n18_gs` shots to annotate on the Mac); (b) the
   lightmaps now draw at exactly their base's depth with GEQUAL: that is only stable if the base and lightmap vertices

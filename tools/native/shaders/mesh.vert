@@ -19,6 +19,8 @@ layout(location = 1) out vec4 vColour;
 layout(location = 2) out vec2 vUv2;
 // F as the GS uses it: per vertex, interpolated linearly in screen space (Gouraud), not perspective-correct
 layout(location = 3) noperspective out float vFog;
+// lightmaps and shadow receivers redraw their base with GEQUAL, so every pipeline must give bit-identical depth (N18)
+invariant gl_Position;
 void main()
 {
     vec4 c = pc.mvp * vec4(inPos, 1.0);

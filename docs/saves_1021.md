@@ -51,8 +51,8 @@ Also 204133 has +0x90 = 0 without being first person as far as we know (no pictu
 
 **1 Nov data point (user: X reversed again in `play_20261031_112025`, the N18 rubble courtyard, Prince on a ledge
 seen from high above; copy `game/analysis/saves1031/`):** +0x90 = 1, +0x94 / +0x98 / +0x9C = 0x3cbff282 0xbf7fee03
-0x80000000, i.e. **non-zero**, so the 22 Oct candidate signal (zero = fixed camera) does not explain this one, if
-this view is fixed (not yet asked). Same session's `play_20261031_111155`: +0x90 = 0, again not known to be first
+0x80000000, i.e. **non-zero**, and the user confirms **this view is fixed** (the stick does not orbit): the 22 Oct
+candidate signal (zero = fixed camera) is refuted. Same session's `play_20261031_111155`: +0x90 = 0, again not known to be first
 person. So +0x90 / +0x94 are not the camera mode; the real fix is still to find the mode the game switches on.
 
 ## Bug 2: door flickering with a black web over it (20:50, 21 Oct)
