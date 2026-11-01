@@ -204,6 +204,15 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    for the same draw. Questions: (a) do they differ (pool ahead) while the object matrices / camera agree (scenery
    lined up in 4b)? (b) which buffer did the chain draw: render `chainskin.py`'s posed glTF or just compare silhouettes
    against the displayed (fbp 0x8c) and the other (0x0) buffer. Write the answer down before changing code.
+   **Answer (1 Nov, `tools/chainpose.py`, `popstate.py --frame --fbp 0`):** (a) yes. Object matrices (VU 0) of
+   the chain sit bit-exact in the object pool (446/593 in 134636_1, 677/918 in 185602_2; the rest are camera / moving
+   objects), bone palettes (VU 0x388+) almost never do (2/645 in 134636_1, 0/612 in 155110_1; 30-40 % on the calmer
+   115837_2 / 184926_1): nearest pool bone 0.7-3.4 cm away (median). The chain's bone matrices exist nowhere else in
+   RAM (only inside the chain buffer at 0x867000): **the chain is the only source of the drawn pose**, so point 2
+   stands. (b) The chain draws the whole frame (scene, post, HUD) into **fbp 0x0** (fbw 10); its 0x8c writes are
+   256-wide alpha-only scratch passes (fbw 4, mask 0xFFFFFF). The displayed 0x8c is the frame before: 0x0 vs 0x8c in
+   134636_1 differ only in the characters (scenery and HUD identical; mean 6.0, 155110_1 2.2). So the reference
+   picture for point 3 is `--fbp 0`, and `score_saves.sh`'s `--prev` (displayed = previous frame) stays right.
 2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
    skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
    (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if

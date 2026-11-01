@@ -6,7 +6,7 @@ VU0 code/data (4+4 KB), VU1 code/data (16+16 KB), then serialized fields.
 EGS : GSFE fields, then GSVR: VRAM as u64 size + 4 MB.
 
 Usage as a library: s = State(path); s.ram, s.spr, s.vram, s.gsregs, s.u32(addr), s.f32(addr)
-Command line: python3 -I tools/popstate.py STATE --frame OUT.png [--alpha]   (the displayed framebuffer; --alpha also OUT_alpha.png)
+Command line: python3 -I tools/popstate.py STATE --frame OUT.png [--alpha] [--fbp N]   (the displayed framebuffer or FBP N; --alpha also OUT_alpha.png)
 """
 import struct
 import sys
@@ -110,6 +110,8 @@ def main():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import gsvram
         fbp, fbw, psm, w, h = s.display()
+        if '--fbp' in sys.argv:  # another buffer, e.g. 0 = the one the last chain drew (step 4c)
+            fbp = int(sys.argv[sys.argv.index('--fbp') + 1], 0)
         h = min(h, 448)
         rows = []
         for y in range(h):
