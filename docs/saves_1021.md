@@ -24,7 +24,7 @@ code, 60 fps; the native world `POP_NATIVE_WORLD` was **not** on). Filed 22 Oct;
   Native-vs-game scores of every save (`tools/native/score_saves.sh`): `game/analysis/play1020/native/` and
   `game/analysis/play1021/native/` (`scores.txt`; see the summary at the end).
 
-## Bug 1: camera X reversed in fixed-camera views (low priority)
+## Bug 1: camera X reversed in fixed-camera views (closed 1 Nov, 21ab2c7)
 User: the saves at 20:43 and 20:46 on 21 Oct (`play_20261021_204309`, `play_20261021_204628`) had the camera's X
 axis reversed again, probably because the game was showing a fixed camera angle. The 20:43 frame is a high,
 fixed view over a cliff ledge (`frames/play_20261021_204309.png`).
@@ -55,13 +55,19 @@ seen from high above; copy `game/analysis/saves1031/`):** +0x90 = 1, +0x94 / +0x
 candidate signal (zero = fixed camera) is refuted. Same session's `play_20261031_111155`: +0x90 = 0, again not known to be first
 person. So +0x90 / +0x94 are not the camera mode; the real fix is still to find the mode the game switches on.
 
-**Fix (1 Nov, override `updateCameraInvert`, not built yet):** the mode is the camera's current zone type. Camera
+**Fix (1 Nov, 21ab2c7, override `updateCameraInvert`):** the mode is the camera's current zone type. Camera
 object = world view 0's object (`*(*(*0x674840 + 0x30) + 0xA0)`, as `AI_EvalFunc_VIEWGetObject_C`); its data
 (+0x18 -> +0x4 -> +0x44) + 0x410 = current zone object; zone data + 0x1B4 = type (`FUN_002ebd00`; read by
 `Mdl00005261_fn_GetZoneBehavior`, and `Mdl0000263C_fnf_GetFreeCamSightOffset` acts only on type 4). Saves: 204309,
 204628 and 112025 (all reported fixed) = **2**; 204133, 204457, 204516, 204813, 111155 = 4; over all 292 saves:
 244 x 4, 43 x 2, 5 unreadable (type 3 never seen). X is now inverted only in type-4 zones (and not in first
-person); unreadable keeps inverting. To check: the user's play test in a fixed view and in the normal camera.
+person); unreadable keeps inverting. **Closed 1 Nov (user check on the PC play build): the three reported fixed views
+(204309, 204628, 112025) now pan the game's way; three normal-camera controls (1017 091049, 1024 201248, 1029
+185807) still inverted as before.**
+Type 3 (not seen in play): `GetZoneBehavior` gives it `Cam_Camera_bhv_mode_zone_circular` (type 4 = free-cam mode
+0x31CE40, others = default 0x37FFC0); it gets the game's direction like type 2. How the stick reaches the camera
+modes is not traced. If X ever feels wrong in a circular-camera spot, quick-save there and check its zone type
+(user, 1 Nov: no zone-change logging for now).
 
 ## Bug 2: door flickering with a black web over it (20:50, 21 Oct)
 Save `play_20261021_205013`. The game's own picture from the save (`frames/play_20261021_205013.png`) shows

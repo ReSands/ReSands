@@ -1606,16 +1606,13 @@ namespace
         if (classic)
             return;
         auto ptr = [](uint32_t p) { return p && (p & 0x1FFFFFFFu) < 0x02000000u; };
-        uint32_t p = guestU32(rdram, 0x0066D500u);
-        p = ptr(p) ? guestU32(rdram, p + 0x18u) : 0u;
-        p = ptr(p) ? guestU32(rdram, p + 0x4u) : 0u;
-        p = ptr(p) ? guestU32(rdram, p + 0x44u) : 0u;
-        const bool firstPerson = ptr(p) && guestU32(rdram, p + 0x5E4u + 0x90u) == 0u;
         auto data = [&](uint32_t o) { // game object -> its AI data (+0x18 -> +0x4 -> +0x44)
             o = ptr(o) ? guestU32(rdram, o + 0x18u) : 0u;
             o = ptr(o) ? guestU32(rdram, o + 0x4u) : 0u;
             return ptr(o) ? guestU32(rdram, o + 0x44u) : 0u;
         };
+        const uint32_t p = data(guestU32(rdram, 0x0066D500u));
+        const bool firstPerson = ptr(p) && guestU32(rdram, p + 0x5E4u + 0x90u) == 0u;
         uint32_t z = guestU32(rdram, 0x00674840u);
         z = ptr(z) ? guestU32(rdram, z + 0x30u) : 0u;
         z = ptr(z) ? data(guestU32(rdram, z + 0xA0u)) : 0u;

@@ -343,7 +343,7 @@ Saves on the PC in `game\ps2\disc\states\` (each with `.glitch` + `.glitch.txt`;
   source with N2 (fog) and the save-point glow (CLAUDE.md handoff item 4). Hypothesis: the GS halo/glow pass
   (FUN_004ABFC0) tests visibility against the depth buffer, which now partly comes from the native world.
 - **N11 wall features drawn but the wall itself missing (20:16, dungeon, save ~201642 / 201650).**
-- **Camera X inverted again in a fixed-camera view (20:18, save ~201751):** the known bug in `docs/saves_1021.md`.
+- **Camera X inverted again in a fixed-camera view (20:18, save ~201751):** the known bug in `docs/saves_1021.md` (closed 1 Nov, 21ab2c7).
 - **N12 frame rate down to 30 fps (20:21, save ~202014 / 202128).**
 - **Crash 20:24 (save 202314, the minute before):** crash 1 again; fix built (`docs/saves_1021.md`).
 The exact save-to-report mapping above is by time (user's minutes vs save names); check each picture.
