@@ -61,8 +61,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   - **N22 (caustic hop): fixed 31 Oct (4a8c5bf, user check)**: the draw dedupe key left out the layer; entry in `docs/native_bugs.md`.
   - **N20 (window rays 193136) + N21 (candle white square): fixed 31 Oct (fbf650f, user checks)**: halo restore read the wrong copy.
   - **N18 (rubble seam flicker): closed 1 Nov (2fdf0fa, 527fca4, e51a848; user: native ~ GS, which flickers there rarely too; real-PS2 check wanted).**
-  - **N19 (orange band 192645): resume here. Cause found 1 Nov: skinned instanced refs (ref 016b2900, likely moss tufts)
-    are sent to the GS silently, ~26% of frames hybrid from +0x2c. User: fix now. Plan (5 steps) in its `docs/native_bugs.md` entry.**
+  - **N19 (orange band 192645): fixed in code 1 Nov (afa2244: skinned instanced refs posed natively, offline 192645 identical). Next: stnative WHY boot (`n19native.ps1`: `ref +0x2c` gone from "ended by"), then the user's TV check on 192645 + 162621.**
     N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits

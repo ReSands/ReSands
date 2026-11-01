@@ -544,7 +544,15 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   bias 0 vs 32, since the remaining flicker may be a real decal there; (e) re-check N16's moss save 163042 is still
   clean (unchanged for decals, but confirm). Captures: `game/analysis/saves1031/`, offline scratch: rerun
   `pop_state_frame_vu1` + `POP_VIEW_LIST=1 pop_native_view` on the save.
-- **N19 (orange band on the wall at frieze height, 192645): cause found 1 Nov, fix next (user: fix now, fresh session).**
+- **N19 (orange band on the wall at frieze height, 192645): fixed in code 1 Nov (afa2244), live boot + user check pending.**
+  **Fix (1 Nov):** `refDisplayRecord` poses skinned refs like skinned elements: `poseSkinned(element, index)` (the ref Display
+  decompile, 0x4C7B40, uses the element's palette at ref +0x20 -> +0x48 and the same first-bone table), records them in
+  `g_framePosed`, replays the driver switch. Ref packets are REF tags (3 qw per instance at ref +0x10, then the element's
+  shared 25 qw block), so `skinnedPacketBatches` flattens REF/CNT tags into one buffer for the skinned decoder (the
+  element path uses it too). Bind cache per element then packet, cleared in `readElement` (streaming reuse, as N8/N9/N11).
+  Skinned refs left on the GS (characters off, pass 2/3) now print a WHY line. Offline 192645: the 14 refs now pose
+  (83 skinned draws, was 69) and the picture is pixel-identical to before (offline drew them as statics already; live,
+  the refusal sent them to the GS a second time). Still to do: steps (4) and (5) below.
   **What the user sees (native only; GS mode clean):** a soft orange scalloped band across the wall just above the
   grass, coming and going, and **the moss/grass below it brightens at the same moments** (user's annotation:
   `game/analysis/saves1101/desk_114347_8.png`, top box = band, ellipse = moss). Not the post chain: still there with
