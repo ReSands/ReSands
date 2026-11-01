@@ -544,10 +544,25 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   bias 0 vs 32, since the remaining flicker may be a real decal there; (e) re-check N16's moss save 163042 is still
   clean (unchanged for decals, but confirm). Captures: `game/analysis/saves1031/`, offline scratch: rerun
   `pop_state_frame_vu1` + `POP_VIEW_LIST=1 pop_native_view` on the save.
-- **N19 (orange band on the wall at frieze height, 192645): not started.** Native only (GS-only clean, 30 Oct). Check
-  first whether that frame is pure now (N18's texture fix may have changed it): boot it with `POP_NATIVE_WORLD_WHY=1`
-  and read `late lists: ... ended by` and the `no texture:` lines (the why-log for refused textures is "no texture",
-  not "not decoded").
+- **N19 (orange band on the wall at frieze height, 192645): cause found 1 Nov, fix next (user: fix now, fresh session).**
+  **What the user sees (native only; GS mode clean):** a soft orange scalloped band across the wall just above the
+  grass, coming and going, and **the moss/grass below it brightens at the same moments** (user's annotation:
+  `game/analysis/saves1101/desk_114347_8.png`, top box = band, ellipse = moss). Not the post chain: still there with
+  `-NoNativePost`. **Cause:** `POP_NATIVE_WORLD_WHY=1` boot (log PC `game\recomp-sotc\play_20261101_114159_native.log`):
+  purity ended by `ref +0x2c` in 4,400 of 16,800 frames, every time `ref on the GS: ref 016b2900 pass 0 list +0x2c
+  stateOk 1` with no per-record reason. In the save, ref 016b2900 -> element 01ada6e0 with **bone palette +0x48 =
+  0169dbe0** (chain of 7 refs): a **skinned instanced mesh** (likely the moss/grass tufts). `refDisplayRecord`
+  (`tools/overrides/pop_native_live.cpp` ~1388) drops skinned refs silently (`worldOk = false; // a bone palette`), so
+  the GS draws it and everything after it over the injected picture: the moss twice (brighter) and the fringe on the
+  wall without our depth (the band). Same silent break as the sun save 162621's `ref +0x2c` (comment ~1464).
+  **Plan (fresh session):** (1) add a why-log line at the skinned-ref drop; (2) give `refDisplayRecord` the element
+  path's skinned handling (`elementDisplayRecord` ~3270-3380): bind pose from the ref's pass packet
+  (`skinnedFromPacket`, as for elements never seen at load), `poseSkinned(rdram, el, index, ...)` with the ref's matrix
+  index (bones from the palette + first-bone table indexed by `index`), `g_framePosed`, the VU1 driver switch replay
+  (`worldReplayDriver`, the element path's `worldPalettes`) and the purity bookkeeping (`worldCount0`); key the bind
+  cache per element (refs share it). (3) offline: `pop_state_frame` on 192645 (does it replay refs' skinned draws?) vs
+  the GS frame; (4) stnative boot with WHY: `ref +0x2c` gone from "ended by"; (5) user's TV check on 192645 and the
+  sun save 162621. Boot wrappers on the PC: `game\jobs\n19native.ps1` (WHY on), `n19gs.ps1`, `n19nopost.ps1`.
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.
