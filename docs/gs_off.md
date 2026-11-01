@@ -62,6 +62,8 @@ frame rather than causes: to confirm with the why-lines.
   draws 9101, native 8984, not replayed 0; frames 13200, pure 12797, **ended by water +0x88 206**. The 117 non-native
   water draws were the silent `b.indices.empty()` path (all triangles clipped: the GS got an empty colour pass that still
   closed the purity). Fixed: skipped as native, as particles already were. A 45 fps dip seen once: performance, later.
+  Re-check (build 4e7a046, user, `play_20261101_160837.log`, looks right): water 9294 / 9294 native; frames 6300, ended by
+  ref +0x2c 1 only (the rest not pure at +0x88 = menu / load frames, "ended within 0").
 So the steady game, title and movie are covered; the open fallbacks are the ones only seen in play (blended Pinch, now
 native; water; single calls).
 
