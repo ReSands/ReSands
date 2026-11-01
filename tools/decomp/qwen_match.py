@@ -73,6 +73,8 @@ Original local variable names: {locals}
   - Stores come out in source order: write member assignments in the order the assembly stores them.
   - Plain int shifts give sll/sra; casts to short add dsll32/dsra32 pairs.
   - The constructor's vptr store is generated; write only the member assignments.
+  - A call to Class::operator new (__nw__<n>Class) and then, if it returned non-zero, the constructor = `p = new
+    Class;` (never placement new: dare.h declares the class's own operator new).
   - A destructor gets a hidden short argument (a1; delete when > 0) and the `this != 0` test from the compiler:
     write a plain destructor with only the member assignments.
   - An offset the excerpt does not list is usually inside a struct or union member: member offset + field offset
@@ -122,6 +124,10 @@ def header_blocks():
              or re.match(r'extern [^(]*?\b(\w+)(\[[^\]]*\])?;$', line))
         if m and not line.startswith('DARE_'):
             blocks[m.group(1)] = line
+    for kind, tag, alias in re.findall(r'^typedef (struct|union) (\w+) (\w+);$', ''.join(lines), re.M):
+        if tag in blocks:  # ASSOCIATION_DESCRIPTION for ASSOCIATION_DESCRIPTION_: shown with the struct
+            blocks[tag] += 'typedef %s %s %s;\n' % (kind, tag, alias)
+            blocks.setdefault(alias, blocks[tag])
     return blocks
 
 

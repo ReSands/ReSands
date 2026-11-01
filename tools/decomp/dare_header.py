@@ -472,6 +472,10 @@ def main(elf_path, out_h, out_tsv=None):
     extra = sorted({g.name(o) for cu in g.cus for k in cu.children for o in refs(t, t[k])
                     if t[o].tag in RECORD} - set(records))
     L += ['struct %s;  // not defined in DARE' % n for n in extra] + ['']
+    # Tag_ structs were typedef'd without the underscore (Qwen writes ASSOCIATION_DESCRIPTION: 8 compile errors in run 5)
+    taken = set(records) | set(enums) | set(globals_) | {split_mangled(m)[0] if split_mangled(m) else m for m in funcs}
+    L += ['typedef %s %s %s;' % ('union' if n in unions else 'struct', n, n[:-1]) for n in sorted(records)
+          if n.endswith('_') and n[:-1] and n[:-1] not in taken and n not in TEMPLATED] + ['#define NULL 0', '']
     seen_enumerators = set()
     for n, x in sorted(enums.items()):
         vals = []
