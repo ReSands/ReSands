@@ -597,8 +597,12 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   the native path, not the GS-off switch. The 25 Oct save 134636 (GS still running) already differs: GS picture keeps
   the orange sash / dark trousers, native all pale (`gsoff1101h/refout/crop_*.png`). The RAM palette (N1 recolour) is
   bright tan (mean 174/145/113 vs disc 98/79/64) and the GS's VRAM holds that same palette, so the colours match on both
-  sides; open: an extra GS pass over the enemy in hybrid frames, or the GS's CLUT buffer not reloading. Next: user boot
-  `play.ps1 -Save play_20261101_170233 -Env 'POP_NATIVE_GS_CENSUS=1'` (GS on: does it look right? any colour draws?).
+  sides. User boots of 170233 (1 Nov): hybrid with census (`play_20261101_171954.log`): no GS colour draw over the enemy
+  (only 14e/15e alpha, 006 clear, 05e zero-area), the texture recoloured natively every frame; user saw "standard
+  texture in black and white". `-Mode gs`: **the same** (user). So native matches the GS live at this save; the
+  "sandy" look remembered from 25 Oct was not seen in either. Open: the bone white of the GS-off session (save
+  picture, offline render) vs the GS-only grey; the 134636 save (native whiter than the GS picture). Next: a fresh slow
+  (not from a save) in `-Mode gs` and in `-GsOff`, side by side by eye; a real-PS2 / video reference with N27.
 
 ## Storage of captures (agreed with the user 24 Oct)
 
