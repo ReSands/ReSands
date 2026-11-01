@@ -347,31 +347,56 @@ namespace pop_native_world
             return other;
         }
 
-        // GS census (POP_NATIVE_GS_CENSUS=1; 0.2 step 1, docs/roadmap.md): every draw the GS still gets, whichever path
+        // GS census (POP_NATIVE_GS_CENSUS=<n>; 0.2 step 1, docs/roadmap.md): every draw the GS still gets, whichever path
         // sent it, counted per marker-to-marker interval and keyed by PRIM and FRAME fbp. An interval holds frame N's tail
-        // after its marker and frame N+1's start before its own (the clear lands there: a constant baseline).
+        // after its marker and frame N+1's start before its own (the clear lands there: a constant baseline). Every n-th
+        // interval (1: 3000) is printed in draw order as runs (prim, fbp, FBMSK, kicks, empty sprites, box in pixels
+        // before XYOFFSET), so what lies after the marker can be told from the next frame's start.
+        struct CensusRun
+        {
+            uint32_t prim, fbp, fbmsk, kicks = 0, empty = 0, x0 = ~0u, y0 = ~0u, x1 = 0, y1 = 0;
+        };
         struct Census
         {
-            uint32_t prim = 0, seq = 0, kicksSince = 0;
+            uint32_t prim = 0, seq = 0, kicksSince = 0, vtx = 0, lastX = 0, lastY = 0;
             uint64_t intervals = 0, withDraws = 0, images = 0;
-            std::map<uint64_t, uint64_t> bySig; // prim | fbp << 16 -> vertex kicks
+            std::map<uint64_t, std::pair<uint64_t, uint64_t>> bySig; // prim | fbp << 16 -> vertex kicks, of them in zero-area sprites
+            std::vector<CensusRun> runs;                              // this interval, while it is one to print
         } g_census;
-        const bool g_censusOn = std::getenv("POP_NATIVE_GS_CENSUS") != nullptr;
+        const uint32_t g_censusEvery = [] {
+            const char *e = std::getenv("POP_NATIVE_GS_CENSUS");
+            const uint32_t n = e ? uint32_t(std::strtoul(e, nullptr, 0)) : 0;
+            return n == 1 ? 3000u : n;
+        }();
+        const bool g_censusOn = g_censusEvery != 0;
 
-        // one vertex kick (XYZ2 / XYZF2), filed under the PRIM in effect then
-        void censusKick(uint32_t fbp)
+        // one vertex kick (XYZ2 / XYZF2) at x, y (12.4), filed under the PRIM in effect then
+        void censusKick(uint32_t fbp, uint32_t fbmsk, uint32_t x, uint32_t y)
         {
             Census &c = g_census;
-            uint64_t &n = c.bySig[uint64_t(c.prim) | uint64_t(fbp) << 16];
+            // a sprite whose two corners share an x or a y covers nothing (the native letters' stand-ins)
+            const bool empty = (c.prim & 7) == 6 && (c.vtx++ & 1) && (x == c.lastX || y == c.lastY);
+            c.lastX = x;
+            c.lastY = y;
+            auto &n = c.bySig[uint64_t(c.prim) | uint64_t(fbp) << 16];
             static uint32_t logged = 0;
-            if (!n && logged++ < 64)
+            if (!n.first && logged++ < 64)
                 std::fprintf(stderr, "[pop:census] new: prim %03x fbp %x, %u kicks after marker %u\n", c.prim, fbp, c.kicksSince, c.seq);
-            ++n;
+            ++n.first;
+            n.second += empty ? 2 : 0;
             ++c.kicksSince;
+            if (c.intervals % g_censusEvery != 0 || !c.seq)
+                return;
+            if (c.runs.empty() || c.runs.back().prim != c.prim || c.runs.back().fbp != fbp || c.runs.back().fbmsk != fbmsk)
+                c.runs.push_back({c.prim, fbp, fbmsk});
+            CensusRun &r = c.runs.back();
+            ++r.kicks;
+            r.empty += empty ? 2 : 0;
+            r.x0 = std::min(r.x0, x >> 4), r.y0 = std::min(r.y0, y >> 4), r.x1 = std::max(r.x1, x >> 4), r.y1 = std::max(r.y1, y >> 4);
         }
 
         // walks one GIF packet's tags; tracks PRIM across packets as the GS does
-        void censusPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t fbp)
+        void censusPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t fbp, uint32_t fbmsk)
         {
             Census &c = g_census;
             for (uint32_t at = 0; at + 16 <= sizeBytes;)
@@ -381,7 +406,7 @@ namespace pop_native_world
                 at += 16;
                 const uint32_t nloop = tag[0] & 0x7FFF, flg = (tag[0] >> 58) & 3, nreg = (tag[0] >> 60) ? uint32_t(tag[0] >> 60) : 16u;
                 if (flg < 2 && (tag[0] >> 46) & 1) // PRE
-                    c.prim = (tag[0] >> 47) & 0x7FF;
+                    c.prim = (tag[0] >> 47) & 0x7FF, c.vtx = 0;
                 if (flg == 0) // PACKED
                     for (uint32_t i = 0; i < nloop * nreg && at + 16 <= sizeBytes; ++i, at += 16)
                     {
@@ -393,9 +418,11 @@ namespace pop_native_world
                         else if ((reg == 0x4 || reg == 0x5) && (q[1] >> 47) & 1) // ADC: no kick
                             reg = 0xF;
                         if (reg == 0x0)
-                            c.prim = q[0] & 0x7FF;
-                        else if (reg == 0x4 || reg == 0x5)
-                            censusKick(fbp);
+                            c.prim = q[0] & 0x7FF, c.vtx = 0;
+                        else if ((reg == 0x4 || reg == 0x5) && (tag[1] >> (4 * (i % nreg)) & 0xF) == 0xE) // A+D: X 0-15, Y 16-31
+                            censusKick(fbp, fbmsk, q[0] & 0xFFFF, (q[0] >> 16) & 0xFFFF);
+                        else if (reg == 0x4 || reg == 0x5) // PACKED: X 0-15, Y 32-47
+                            censusKick(fbp, fbmsk, q[0] & 0xFFFF, (q[0] >> 32) & 0xFFFF);
                     }
                 else if (flg == 1) // REGLIST: 64-bit words, padded to a qword
                 {
@@ -406,9 +433,9 @@ namespace pop_native_world
                         uint64_t v;
                         std::memcpy(&v, data + at + 8 * i, 8);
                         if (reg == 0x0)
-                            c.prim = v & 0x7FF;
+                            c.prim = v & 0x7FF, c.vtx = 0;
                         else if (reg == 0x4 || reg == 0x5)
-                            censusKick(fbp);
+                            censusKick(fbp, fbmsk, v & 0xFFFF, (v >> 16) & 0xFFFF);
                     }
                     at += ((words + 1) / 2) * 16;
                 }
@@ -424,6 +451,19 @@ namespace pop_native_world
         void censusMarker(uint32_t seq)
         {
             Census &c = g_census;
+            if (!c.runs.empty())
+            {
+                std::string text;
+                for (const CensusRun &r : c.runs)
+                {
+                    char s[112];
+                    std::snprintf(s, sizeof s, " | %03x fbp %x msk %08x: %u kicks (%u empty) %u,%u-%u,%u", r.prim, r.fbp, r.fbmsk, r.kicks, r.empty,
+                                  r.x0, r.y0, r.x1, r.y1);
+                    text += s;
+                }
+                std::fprintf(stderr, "[pop:census] interval after marker %u:%s\n", c.seq, text.c_str());
+                c.runs.clear();
+            }
             if (c.seq)
             {
                 ++c.intervals;
@@ -435,14 +475,14 @@ namespace pop_native_world
                 return;
             std::vector<std::pair<uint64_t, uint64_t>> by;
             for (const auto &[sig, n] : c.bySig)
-                by.emplace_back(n, sig);
+                by.emplace_back(n.first, sig);
             std::sort(by.rbegin(), by.rend());
             std::string top;
             for (size_t i = 0; i < by.size() && i < 10; ++i)
             {
-                char s[64];
-                std::snprintf(s, sizeof s, "%sprim %03x fbp %x %llu", i ? ", " : "", uint32_t(by[i].second & 0x7FF), uint32_t(by[i].second >> 16),
-                              (unsigned long long)by[i].first);
+                char s[80];
+                std::snprintf(s, sizeof s, "%sprim %03x fbp %x %llu (%llu empty)", i ? ", " : "", uint32_t(by[i].second & 0x7FF),
+                              uint32_t(by[i].second >> 16), (unsigned long long)by[i].first, (unsigned long long)c.bySig[by[i].second].second);
                 top += s;
             }
             std::fprintf(stderr, "[pop:census] intervals %llu, with GS draws %llu, image transfers %llu; kicks by prim/fbp: %s\n",
@@ -459,7 +499,7 @@ namespace pop_native_world
             const bool marker = sizeBytes == 32 && q[0] == 0x1000000000008001ull && (q[1] & 0xF) == 0xE && (q[3] & 0xFF) == 0x7F &&
                                 (q[2] >> 32) == kMagic;
             if (g_censusOn)
-                marker ? censusMarker(uint32_t(q[2])) : censusPacket(data, sizeBytes, t.fbp);
+                marker ? censusMarker(uint32_t(q[2])) : censusPacket(data, sizeBytes, t.fbp, t.fbmsk);
             if (!marker)
                 return false;
             const uint32_t seq = uint32_t(q[2]);
