@@ -119,3 +119,21 @@ Build note: the PC build compiles the runtime from its own clone `game\recomp-so
 census found no GS colour over the enemy); parked until the real-PS2 reference.
 **Next: step 4** (frame-by-frame judging, native vs GS). Default still GS fed: flip `play.ps1` to `-GsOff` by default
 when step 4 / step 5 are through (0.2's goal).
+
+## Step 4: frame-by-frame judging (1 Nov, first run)
+**Job** `tools/windows/gsoff-ab.ps1` (run as `game\jobs\gsoff1101i.ps1`, 11 min, TV on): cold boot + the 13 GS-only gate
+saves + 185602 (fight HUD), 192114 (save menu), 192103 (loading / movie); A = every native switch off (`-Mode gs`),
+B = play.ps1 defaults + `POP_GS_OFF=1`; shots 1, 4, 10 s after the load (field = the save's vsync counter, `popstate.py`
+GS regs, + 60/240/600). Scores and side-by-sides: `tools/native/score_ab.sh game/analysis/gsoff1101i`.
+- **Clean:** no crash, 0 missed, 0 unexpected buffers, 0 "no native picture"; impure frames only the 1-4 at each load
+  (counters frozen after). fps as before (fights 47-60).
+- **Scenery matches** wherever the view holds still (201540 1.4-1.8, 162621 2.4-3.8, 125052 2.3, 174131 2.7, 145139
+  3.1-4.4, the diff only edges / dither speckle). **145139 moon blob: gone** (moon region 224.9 native vs 222.8 GS);
+  the torch light by the wall flickers (native 169 / 160 / 162 vs GS 156 / 157 / 164 over the three shots: animation).
+  162246's halos: equal at 1 s, native ~10% brighter on the left one at 4 / 10 s (flicker or N23/N26; not judged).
+- **192114 save menu (2.5-2.8):** the GS draws faint garbled stripes (text-like ghost rows) into the box under its top
+  and bottom edges; native is clean. GS-side artefact (our emulation is not ground truth), not a native bug.
+- **Movies / cold boot:** same frames, a few fields apart (movie playback follows the clock; as in step 2).
+- **Not judged by this method: fights and effects.** Two boots do not replay the same: by the 1 s shot the fighters are
+  already elsewhere (184926 14.8, 134636 13.7, 115837 6-23, 185602 9-15), by 10 s the camera too (115853). A same-frame
+  comparison is needed for those (next).
