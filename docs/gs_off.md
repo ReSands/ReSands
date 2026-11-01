@@ -163,3 +163,18 @@ capture also keeps that frame's GS trace for the real-PS2 replay later (`docs/ro
    (offline replay misses live-only paths that matter, or alignment fails) -> build the comparison mode early
    (both renderers every frame, `docs/native_renderer.md` "Reference renderer toggle"; several days, estimate).
 Then step 5 (parked bugs with the GS off), then flip `play.ps1` to `-GsOff` by default (0.2 done).
+
+## Step 4b, first run (1 Nov)
+**Job** `tools/windows/gsoff-capture.ps1` (2.7 min, TV on, no build): 9 scenes in `-Mode gs`, three Select quick-saves
+each ~1 / 4 / 10 s after the load (R1 held between; fields e.g. 28508 / 28685 / 29026). 27 GS-only saves, no errors,
+copies in `game/analysis/gsoffcap/` (+ boot logs). Scored with `score_saves.sh` (`score/`, `score_vu1/`; vu1 better or
+equal everywhere). GS traces not taken (one timed trace per boot; can be taken from these saves later).
+- **Effects and scenery: method works, native matches.** Halos 162246 1.6-1.7 (0.1% off), fountain water / light shaft
+  202926 5.7-5.9 (0.6-0.8%), sand haze 115853 5.5-6.5 (2.6-4.4%), scenery behind every fight lines up; remaining
+  diff = characters + offline limits (no projected shadows, no hint text in 185602).
+- **Fights: method fails.** The characters are not on the same frame: offline poses come from the game's current
+  matrices, ahead of the saved picture (134636_1, 115837_2, 185602_2, 155110_1: arms, swords and positions differ,
+  scores 11-15). The save's other draw buffer (fbp 0x0, displayed 0x8c) is closer but still off (134636_1 13.6 -> 10.8;
+  others +-1). So no same-frame verdict on character rendering or on fight-only effects (hit flashes).
+- **Next (plan point 5):** the comparison mode (both renderers on the same live frame) as the fallback, or first a
+  cheaper check: pose the offline characters from the chain's matrices instead of memory (unestimated). User decides.
