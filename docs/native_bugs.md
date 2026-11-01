@@ -588,11 +588,6 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   each retry load are black; after load 03 (frame 4171-4172) 2 injected pictures show a close-up wall from a stale
   camera (the 23 Oct load-flash family, N3), the other retries black throughout. Not obviously what the user saw
   (objects on black, before the load). Not known: GS-only (`-NoNative2D`) does the same? Next: a GS-only retry A/B.
-- **N29 (not a bug for now; user 1 Nov): white flash at the start of every rewind.** Seen in native play from 155110
-  (blended Pinch native, 6054f84; `play_20261101_155413.log`: pinch 1721 calls, 1718 native) and **in `-Mode gs` too**
-  (user A/B, same save), so it is the game's own effect, not ours. The four user saves (`play_20261101_155605` ..
-  `155619`, copies in `game/analysis/saves1101/`) are mid-rewind, flash not caught, Pinch +0x74 0xFF in all. Re-check on a
-  real PS2 / video with N15 / N17 / N27.
 - **N30 (parked until the real-PS2 reference, user 1 Nov; GS off report): enemy slowed by the dagger drawn bone white, "no skin".** Save 170233 (user circled
   the knife enemy right of centre; `game/analysis/gsoff1101h/`, also 170118), `play.ps1 -GsOff`, log
   `play_20261101_165944.log` (all draws native, 0 missed). Offline `pop_state_frame` shows the same white, so it is in
@@ -625,8 +620,9 @@ the burst; 65 saves, e.g. the 18 Oct 21:39-21:40 camera pairs except 213954 / 21
   Then light shafts (not FUN_00469C00: see "Light shafts" below; the mirror beam is
   something else), flashes (full-screen after-effects: survey first), retry `-NativeLate`. Parked: N3, N4 (until they recur), N7.
   Watch: N8 / N11 in long sessions. Side jobs: `pop_world_test` dies with exit 138 on the Mac (seen 30 Oct, before the key-0 change too), `.glitch` compression, a `-Fast` rebuild that recompiled the whole
-  runtime, Esc / Alt+F4 sometimes not quitting, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
-  X reversed in fixed views, door flicker with a black web, trouser flicker, torch point lights. Missing sounds: 0.3.
+  runtime, `POP_NATIVE_SKIP` is ignored with the native world on. Lower: camera
+  X reversed in fixed views. Missing sounds: 0.3. (Deleted 1 Nov, user: N29 rewind flash = the game's own, Esc not quitting =
+  a game hang, door / trouser flicker and torch point lights fixed or not seen again.)
   Mist in water: **resolved offline (30 Oct)**: the mist is P5 GFX particles, which `pop_state_frame` only drew with
   `POP_NATIVE_P5=1` (live has them on by default). Now on by default offline too (`=0` off): 162819 9.28 -> 4.31 (the haze
   cloud is there), gate `vu1` lines 8.28 / 8.20 / 2.62. Live the +0x88 particles are on the GS unless `-NativeLate`.
