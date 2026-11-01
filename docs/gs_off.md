@@ -213,6 +213,11 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    256-wide alpha-only scratch passes (fbw 4, mask 0xFFFFFF). The displayed 0x8c is the frame before: 0x0 vs 0x8c in
    134636_1 differ only in the characters (scenery and HUD identical; mean 6.0, 155110_1 2.2). So the reference
    picture for point 3 is `--fbp 0`, and `score_saves.sh`'s `--prev` (displayed = previous frame) stays right.
+2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
+   skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
+   (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if
+   step 1 shows them ahead too. No change to live behaviour: build the live tool and run the
+   render gate (13 GS-only saves must stay pixel-identical, as for N19).
    **Done (1 Nov):** `state_frame.cpp` walks the last chain once (`walkLastChain`, shared with the particle finder),
    keeps per CALL target the VU1 matrices in effect (VU 0, VU 0x388 + 4k) and sets `pop_native_live::g_chainBones`;
    `poseSkinned` (new `packet` argument from the element / skinned-ref call sites) hands it the pool's bones and takes
@@ -225,7 +230,10 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    13 gate saves are pixel-identical to the build before (live path unchanged: the hook is null in the game); with it
    on, every one scores the same or better even against the old (displayed) reference. Live runtime not rebuilt (the
    change there is a null hook + a default argument; compiled into the offline tools on the Mac).
-3. ... **Done (1 Nov):** every one of the 40 saves (27 gsoffcap + 13 gate) is plain double buffering: the last chain
+3. **Reference picture = the chain's buffer.** `score_saves.sh` gets the buffer step 1 found (a `popstate.py --frame`
+   option for the other buffer if needed; the scratch test was `fbp 0x8c` displayed / `0x0` other). Re-score gsoffcap +
+   gate. Done when fight saves score like scenery (target: 134636_1 well under its 13.6; character edges only).
+   **Done (1 Nov):** every one of the 40 saves (27 gsoffcap + 13 gate) is plain double buffering: the last chain
    draws its colour into the buffer not displayed (0x0 <-> 0x8c; 0x118 = the glow buffer). `popstate.py --drawn` takes
    that one; `score_saves.sh` scores against it (`game.png`) and passes the displayed one (`shown.png`) as FixBlend's
    `--prev`. Re-scored (old = pool poses vs displayed, new = chain poses vs drawn; plain / vu1 build): 134636_1 13.76 ->
@@ -235,14 +243,6 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    reference (+ 0.1): most lines dropped (115837 9.53 -> 5.29, 134636 10.71 -> 7.65); 162246 plain rose 2.37 -> 2.43
    (the plain build lacks the VU1 effects, which move between the two frames; its vu1 score is 1.61). Scores in
    `game/analysis/gsoffcap/score/`, `score_vu1/`.
-2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
-   skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
-   (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if
-   step 1 shows them ahead too. No change to live behaviour: build the live tool and run the
-   render gate (13 GS-only saves must stay pixel-identical, as for N19).
-3. **Reference picture = the chain's buffer.** `score_saves.sh` gets the buffer step 1 found (a `popstate.py --frame`
-   option for the other buffer if needed; the scratch test was `fbp 0x8c` displayed / `0x0` other). Re-score gsoffcap +
-   gate. Done when fight saves score like scenery (target: 134636_1 well under its 13.6; character edges only).
 4. **Shadows from the chain.** The shadow pass's packets are in the chain even when the count is 0: draw them from there
    (or recover the projector list via the chain's order). Done when 184926 / rewind saves show shadows offline.
 5. **Halos and text from the chain.** Halo draws (ALPHA 0x58 with FIX) and 2D text packets taken from the chain instead
