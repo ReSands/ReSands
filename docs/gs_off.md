@@ -137,3 +137,29 @@ GS regs, + 60/240/600). Scores and side-by-sides: `tools/native/score_ab.sh game
 - **Not judged by this method: fights and effects.** Two boots do not replay the same: by the 1 s shot the fighters are
   already elsewhere (184926 14.8, 134636 13.7, 115837 6-23, 185602 9-15), by 10 s the camera too (115853). A same-frame
   comparison is needed for those (next).
+
+## Step 4b plan: same-frame captures for fights and effects (user 1 Nov: option A; if not useful, build the comparison mode early)
+Goal: native vs our GS on **the same frame**, mid-fight and mid-effect, which two separate boots cannot give. Each
+capture also keeps that frame's GS trace for the real-PS2 replay later (`docs/roadmap.md` "Hardware reference").
+1. **Capture route (decide first, offline where possible).** Preferred: GS-only saves taken mid-fight, scored by the
+   proven render-gate route (`tools/native/score_saves.sh`: `pop_state_frame` vs the save's own picture; same frame
+   by construction). Make them in one `-Mode gs` boot per fight save (R1 held, `POP_INPUT=r1@1:3600`) with several
+   saves a few seconds apart: `PS2X_STATE_SAVE_AT` (seen in the runtime, unverified: check its syntax in
+   `C:\tools\PS2Recomp-sotc` first) or quick-saves by `select@<s>` presses as `game\jobs\gsref1028.ps1` does (it
+   backs up / restores `quick.state`; each save is "kept as states/<name>"). Alternative if saves miss something:
+   `tools/windows/native-scenes.ps1` (`POP_NATIVE_LIVE` + `POP_NATIVE_FRAME=<pnf>:<s>`, export by seconds from start,
+   shots by field: find the export's field in its log / `.sub.txt` and pick the best-aligned shot).
+2. **GS trace of the same frame:** `PS2X_GS_TRACE=<field>:4:<path>` (>= 4 fields; ~60 MB/s, so 4-8 fields per
+   capture) in the same boot, at each save's field. Check the trace's field count lines up with the save's
+   `State saved (field N)`. Keep under `game/analysis/gsoff_ab/` with the saves.
+3. **Scenes** (fights and effects not judged in the first run): 184926, 134636, 115837, 115853, 202314, 185602 (fight
+   HUD, slow-motion dagger), plus effects: rewind (155110), time freeze, the sand haze (115853), halos (162246),
+   water (a save from the water session). ~3 saves each, 1, 4, 10 s into the fight. One job, TV on, ~15 min.
+4. **Score and look:** `score_saves.sh` per capture set (STATE_FRAME=pop_state_frame_vu1 for sprites / P5 / P6 /
+   halos), side-by-sides; every difference explained, fixed or filed as an N-bug. Known offline limits (not bugs):
+   no HUD, shadows only if the save precedes the shadow pass (`docs/native_bugs.md` "Shadows missing offline").
+5. **Judge the method:** useful = the offline frame shows what live play shows (cross-check one capture by eye
+   against a `-GsOff` boot of the same save) and the scores separate real differences from noise. Not useful
+   (offline replay misses live-only paths that matter, or alignment fails) -> build the comparison mode early
+   (both renderers every frame, `docs/native_renderer.md` "Reference renderer toggle"; several days, estimate).
+Then step 5 (parked bugs with the GS off), then flip `play.ps1` to `-GsOff` by default (0.2 done).
