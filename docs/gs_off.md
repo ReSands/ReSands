@@ -295,6 +295,24 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    Open for step 5: that scene difference (shadows / fog at the bottom of the rewind frame). *Mist:* already drawn
    since 30 Oct (P5 GFX particles on by default offline, `docs/native_bugs.md`); every chain particle range is drawn in
    the vu1 build (202926, 184926, 115853), the empty two in 115853 are behind the camera and culled, as in the game.
+
+**Step 4c leftovers (1 Nov, 00ec530).** (a) *Lit static passes* (a held club in 134636_1) now take the object matrix (VU 0)
+the chain drew them with (`g_chainBones` with one matrix; live: null hook): 131 -> 133 posed from the chain, 8 fight
+saves slightly better. (b) *2D:* two saves draw 2D the offline frame lost: 174131 (HUD + tutorial text) and gate 134636
+(HUD). Their list +0xB8 count is 0 but last frame's entries are still behind it (as the shadow lists); offline the count
+is now the run of entries up to the first empty one (`POP_STATE_CHAIN=0` off; text still only as the chain sent it,
+rectangles not checked against the chain: a `shortcut:` in the code). The other empty-list saves (201540, 125052,
+162246, 162621) never reach the 2D pass and show no 2D in the game either. Found with it: `pop_native_view` ran its CPU
+post chain (ZoomSmooth, glow, FixBlend, haze) over the HUD; the 2D layer (`Draw::afterPost`) now goes on after it, as
+the GPU path and the game do (`renderOffscreen(..., under)`: draws only the 2D layer over a given picture). 174131 vu1
+7.08 -> 2.70, 134636 7.50 -> 6.11; every gate line with 2D dropped (re-based), the rest unchanged. (c) *Blob receivers,
+mirror projectors, CJIdxMesh entries:* none in any save; nothing to test against. (d) *185807 floor:* the native scene
+before the post chain is brighter than the game's (its ColorDiffusion level 1 in VRAM, a quartered copy of the frame
+before the glow): ~+8 / 70 everywhere, +20-27 on the lower-left floor and the near wall (ratio image: a soft dark patch
+with the floor's tile grid showing). All 4 projectors' shadow lists are recovered completely (receiver CALLs in the
+chain = the recovered counts) and the receiver cull is not it (off: same score). Same room, other saves (185650 /
+185943): no such patch. Parked for step 5: judge live (GS-off vs GS on this rewind), or a GS trace of the frame's shadow
+pass. Score now 7.01 (point 4: 9.40).
 7. **(Deferred, user 1 Nov: wait until the PS2 is in hand; how data gets on and the picture comes off decide the format.)**
    **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
    VRAM + registers before the frame (for (a): the GS packets come from running the chain through the VU1 interpreter in
