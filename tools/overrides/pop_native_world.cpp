@@ -27,7 +27,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <deque>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -345,15 +347,120 @@ namespace pop_native_world
             return other;
         }
 
+        // GS census (POP_NATIVE_GS_CENSUS=1; 0.2 step 1, docs/roadmap.md): every draw the GS still gets, whichever path
+        // sent it, counted per marker-to-marker interval and keyed by PRIM and FRAME fbp. An interval holds frame N's tail
+        // after its marker and frame N+1's start before its own (the clear lands there: a constant baseline).
+        struct Census
+        {
+            uint32_t prim = 0, seq = 0, kicksSince = 0;
+            uint64_t intervals = 0, withDraws = 0, images = 0;
+            std::map<uint64_t, uint64_t> bySig; // prim | fbp << 16 -> vertex kicks
+        } g_census;
+        const bool g_censusOn = std::getenv("POP_NATIVE_GS_CENSUS") != nullptr;
+
+        // one vertex kick (XYZ2 / XYZF2), filed under the PRIM in effect then
+        void censusKick(uint32_t fbp)
+        {
+            Census &c = g_census;
+            uint64_t &n = c.bySig[uint64_t(c.prim) | uint64_t(fbp) << 16];
+            static uint32_t logged = 0;
+            if (!n && logged++ < 64)
+                std::fprintf(stderr, "[pop:census] new: prim %03x fbp %x, %u kicks after marker %u\n", c.prim, fbp, c.kicksSince, c.seq);
+            ++n;
+            ++c.kicksSince;
+        }
+
+        // walks one GIF packet's tags; tracks PRIM across packets as the GS does
+        void censusPacket(const uint8_t *data, uint32_t sizeBytes, uint32_t fbp)
+        {
+            Census &c = g_census;
+            for (uint32_t at = 0; at + 16 <= sizeBytes;)
+            {
+                uint64_t tag[2];
+                std::memcpy(tag, data + at, 16);
+                at += 16;
+                const uint32_t nloop = tag[0] & 0x7FFF, flg = (tag[0] >> 58) & 3, nreg = (tag[0] >> 60) ? uint32_t(tag[0] >> 60) : 16u;
+                if (flg < 2 && (tag[0] >> 46) & 1) // PRE
+                    c.prim = (tag[0] >> 47) & 0x7FF;
+                if (flg == 0) // PACKED
+                    for (uint32_t i = 0; i < nloop * nreg && at + 16 <= sizeBytes; ++i, at += 16)
+                    {
+                        uint64_t q[2];
+                        std::memcpy(q, data + at, 16);
+                        uint32_t reg = (tag[1] >> (4 * (i % nreg))) & 0xF;
+                        if (reg == 0xE) // A+D: the address names the register (0x0C/0x0D XYZ3 draw nothing)
+                            reg = (q[1] & 0xFF) <= 0x05 ? uint32_t(q[1] & 0xFF) : 0xF;
+                        else if ((reg == 0x4 || reg == 0x5) && (q[1] >> 47) & 1) // ADC: no kick
+                            reg = 0xF;
+                        if (reg == 0x0)
+                            c.prim = q[0] & 0x7FF;
+                        else if (reg == 0x4 || reg == 0x5)
+                            censusKick(fbp);
+                    }
+                else if (flg == 1) // REGLIST: 64-bit words, padded to a qword
+                {
+                    const uint32_t words = nloop * nreg;
+                    for (uint32_t i = 0; i < words && at + 8 * i + 8 <= sizeBytes; ++i)
+                    {
+                        const uint32_t reg = (tag[1] >> (4 * (i % nreg))) & 0xF;
+                        uint64_t v;
+                        std::memcpy(&v, data + at + 8 * i, 8);
+                        if (reg == 0x0)
+                            c.prim = v & 0x7FF;
+                        else if (reg == 0x4 || reg == 0x5)
+                            censusKick(fbp);
+                    }
+                    at += ((words + 1) / 2) * 16;
+                }
+                else // IMAGE: a texture or CLUT transfer, nothing drawn
+                {
+                    c.images += nloop != 0;
+                    at += nloop * 16;
+                }
+            }
+        }
+
+        // at each marker: closes the interval; every 600 a summary (top 10 signatures by kicks)
+        void censusMarker(uint32_t seq)
+        {
+            Census &c = g_census;
+            if (c.seq)
+            {
+                ++c.intervals;
+                c.withDraws += c.kicksSince != 0;
+            }
+            c.seq = seq;
+            c.kicksSince = 0;
+            if (c.intervals == 0 || c.intervals % 600)
+                return;
+            std::vector<std::pair<uint64_t, uint64_t>> by;
+            for (const auto &[sig, n] : c.bySig)
+                by.emplace_back(n, sig);
+            std::sort(by.rbegin(), by.rend());
+            std::string top;
+            for (size_t i = 0; i < by.size() && i < 10; ++i)
+            {
+                char s[64];
+                std::snprintf(s, sizeof s, "%sprim %03x fbp %x %llu", i ? ", " : "", uint32_t(by[i].second & 0x7FF), uint32_t(by[i].second >> 16),
+                              (unsigned long long)by[i].first);
+                top += s;
+            }
+            std::fprintf(stderr, "[pop:census] intervals %llu, with GS draws %llu, image transfers %llu; kicks by prim/fbp: %s\n",
+                         (unsigned long long)c.intervals, (unsigned long long)c.withDraws, (unsigned long long)c.images, top.c_str());
+        }
+
         // The GS hook: the marker is a 2-qword PACKED GIF packet (NLOOP 1, EOP, NREG 1, A+D) writing
         // register 0x7F with "PNWD" and the frame number.
         bool hook(GS &gs, const uint8_t *data, uint32_t sizeBytes, const GSHostInject::Targets &t)
         {
-            if (sizeBytes != 32)
-                return false;
-            uint64_t q[4];
-            std::memcpy(q, data, sizeof q);
-            if (q[0] != 0x1000000000008001ull || (q[1] & 0xF) != 0xE || (q[3] & 0xFF) != 0x7F || (q[2] >> 32) != kMagic)
+            uint64_t q[4] = {};
+            if (sizeBytes == 32)
+                std::memcpy(q, data, sizeof q);
+            const bool marker = sizeBytes == 32 && q[0] == 0x1000000000008001ull && (q[1] & 0xF) == 0xE && (q[3] & 0xFF) == 0x7F &&
+                                (q[2] >> 32) == kMagic;
+            if (g_censusOn)
+                marker ? censusMarker(uint32_t(q[2])) : censusPacket(data, sizeBytes, t.fbp);
+            if (!marker)
                 return false;
             const uint32_t seq = uint32_t(q[2]);
             Picture pic;
