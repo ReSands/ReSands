@@ -501,7 +501,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   Fix: each halo first draws a save marker over its square (image -6, writes nothing; `Draw::saveFrame` copies into a
   second image `kFrameSaveImage`), the restore (-4) reads that save. Gate unchanged, blend test ok. Still for the
   **real-PS2 check:** the faint wall glow at 193136 popping in and out as the camera turns (GS and native alike now).
-- **N18 rubble seam (31 Oct session; NOT closed: a faint flicker is left).** The user's save
+- **N18 rubble seam (closed 1 Nov: native ~ GS; real-PS2 check wanted).** The user's save
   `play_20261031_112025` (+ `.glitch`; Mac copy `game/analysis/saves1031/`): a ruined courtyard with stone blocks, the
   Prince standing. **What the user sees:** along the foot of the big blocks (where block meets ground) a dark line that
   blinks out (flickers LIGHT) while the Prince or camera moves, and keeps going ~0.5 s after. **`gs` mode: no flicker, and
@@ -529,6 +529,11 @@ mapping is by time (the user's minutes vs save names); check each picture first.
      bias). Fix 527fca4: no bias for `clampUv` materials (= receivers only). **GS shows the same flicker once in a while**
      (user saw one): the original has the same mechanism at the GS's rounding scale; the bias widened it. Real-PS2 check
      wanted for that one. The thin diagonal light line in the native still is not visible in play (user): dropped.
+     A/B boots (user at the TV, same save, Prince running along the upper ledge): `-NoNativeShadows`: same rate as
+     native (so the receivers were not the main cause); `POP_NATIVE_DECAL_ZBIAS=0`: about the same, perhaps a bit rarer.
+  5. **`invariant gl_Position` in `mesh.vert` (e51a848; blend test 0 wrong):** user: "maybe a LITTLE bit more than GS
+     but hard to tell". **Closed 1 Nov (native ~ GS at that spot).** Left for the real-PS2 check: whether the original
+     flickers there too (our GS does, rarely). If it ever comes back: the decal bias (32) is the remaining suspect.
   **Next, with fresh eyes:** (a) ask what the faint flicker looks like now (the seam line, or something else at the same
   spot) and get the user's circle on a still (send `n18_native` / `n18_gs` shots to annotate on the Mac); (b) the
   lightmaps now draw at exactly their base's depth with GEQUAL: that is only stable if the base and lightmap vertices
