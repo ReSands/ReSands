@@ -39,51 +39,31 @@ for Xbox addresses and Hor+ hooks.
 - New native code stays portable: Vulkan within MoltenVK's base path, SDL-class libs, no Windows-only APIs, x86
   fast paths only with a portable fallback, AOT SPIR-V (`docs/reference.md` "Portability principle").
 
-## Current status (30 Oct 2026; start here)
+## Current status (1 Nov 2026; start here)
 
 Keep this short: finished work goes to the topic docs, replaced bullets to `docs/history.md` (last moved:
-"Moved from CLAUDE.md on 30 Oct 2026 (late night, 0.13 closed)").
+"Moved from CLAUDE.md on 1 Nov 2026 (N18-N22 closed)").
 
-- **Where we are: 0.13 closed (30 Oct night, user in-motion check passed).** Native renderer on by default in `play.ps1`
-  (static world, lit statics, characters, translucents, shadows, P5/P6/P9, and since 30 Oct night the late lists
-  +0x88/+0x98/+0xA8, halos, Pinch; `-NoNativeLate` sends the late part back to the GS). The native frame is "pure"
-  (no GS draw yet, so native draws keep the game's order) up to the 2D pass in nearly every frame: sun 162621, fountain
-  202926, sand 115853 all end only at the HUD (list +0xB8). User check (sun halo + torches, fountain column glow and
-  saving, dagger glow, rewind): all good. Last night's work: `docs/native_renderer.md` "Lists after the shadows" (30 Oct
-  night), the moon halo (offline-only artifact, closed) in "Native halos", dagger glow in `docs/renderer_audit.md` item 9.
-  Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, parked list), `docs/renderer_audit.md`.
-- **0.13 tail: native post chain live, built, not booted (30 Oct late).** Live, glow / SmartBlur / MotionSmooth /
-  FixBlend / ZoomSmooth were still the GS's over the injected picture (only Pinch was native: 478/488 in eve1030k).
-  `POP_NATIVE_POST=1` (with `-NativeLate`) sends them to the world frame's post chain while pure and skips the GS
-  originals; GPU in `renderOffscreen` = CPU exactly on 4 saves (`POP_VIEW_GPU_POST=1`). Live since a6feee4 (glow native
-  ~99% where pure to the HUD); user look 30 Oct evening fixed N24 / N25; **default on in `play.ps1`** (`-NoNativePost`).
-  **Before 0.14 (user, 30 Oct): close the open bugs first** (`docs/native_bugs.md` N18-N27). State at 31 Oct midday:
-  - **N22 (caustic hop): fixed 31 Oct (4a8c5bf, user check)**: the draw dedupe key left out the layer; entry in `docs/native_bugs.md`.
-  - **N20 (window rays 193136) + N21 (candle white square): fixed 31 Oct (fbf650f, user checks)**: halo restore read the wrong copy.
-  - **N18 (rubble seam flicker): closed 1 Nov (2fdf0fa, 527fca4, e51a848; user: native ~ GS, which flickers there rarely too; real-PS2 check wanted).**
-  - **N19 (orange band 192645): closed 1 Nov (afa2244, user TV check; boot: `ref +0x2c` gone, 2399/2400 frames pure to the HUD). Open bugs N18-N22 done; N23 / N26 / N27 parked: next is 0.14 step 1.**
-    N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
+- **Where we are (1 Nov): 0.13 closed and every open native bug before 0.14 cleared; next is 0.14 step 1.**
+  Native renderer on by default in `play.ps1` (world, lit statics, characters, translucents, shadows, P5/P6/P9, late
+  lists, halos, Pinch, post chain; `-NoNative*` switches send parts back to the GS). The frame is "pure" (no GS draw yet)
+  up to the 2D pass in ~2399/2400 frames (192645, 162621 boots 1 Nov): it ends at list +0xB8 (`list18`, `idx`), which is
+  0.14's job. Closed 31 Oct-1 Nov: N18, N19 (skinned instanced refs now posed natively, afa2244), N20, N21, N22 (entries
+  in `docs/native_bugs.md`). Parked: N23 / N26 (halo fps), N27 (needs a real-PS2 reference). Render gate (13 GS-only
+  saves, `game/analysis/gsref1027/states/`) unchanged by the N19 fix (pixel-identical). Docs: `docs/native_renderer.md`,
+  `docs/native_bugs.md`, `docs/renderer_audit.md`.
 - **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: 0.14 (native HUD, menus, loading screens, movie display; full-screen fades too). Plan: `docs/native_2d.md`
-  (30 Oct late, approved: engine-level hooks per 2D producer, no GS packets; survey done, 4 new hooks + 2 existing paths; next: step 1, the offline 2D layer).** Known facts to build on:
-  - **+0xB8 is the 2D pass:** PS2_After2D (0x4B4A00) -> FUN_004BBFC0 sets draw manager +0x28 = 1 and renders list +0xB8,
-    after the after-effects (glow, SmartBlur). The native renderer has **no layer after its post effects** (its picture
-    is injected at the 3D marker, the GS draws +0xB8 on top): that layer is the groundwork (`docs/native_bugs.md`
-    "Flashes survey").
-  - **HUD text and bars = FUN_00469C00 (list kind 0x18), the Jade STR text renderer:** per font page FUN_004B2000 sets
-    the state, then CNT + DIRECT + GIF tag (PRIM 0x5E sprite, textured, blended; ST RGBAQ XYZ2 ST XYZ2), screen
-    coordinates, Z 0; letters by FUN_0046A980 / FUN_0046AA80 (the hook points, not the packets; `docs/native_bugs.md`
-    "Light shafts"). `pop_state_frame` does not replay +0xB8 yet.
-  - **Fades = kind 11 entries in +0xB8** (FUN_004B4580 rectangles, table 0x6DF6E0): one blended screen quad each.
-  - Menus, loading screens (drawn once and left on screen: `docs/widescreen.md`), movie picture: not surveyed;
-    `docs/native_renderer.md` ~79 and ~623 have only one-liners. Survey other PS2 recomp projects first (`docs/ps2_projects.md`).
-  - Test saves: any save with the HUD (185602 shows life bar, sand tanks, tutorial text); fades 191358 (white-out),
-    192114 (half black). `POP_NATIVE_WORLD_WHY=1` prints `purity ended: list18 +0xb8` today, which should move on.
+- **Next: 0.14 step 1, the native 2D layer offline. Plan and survey: `docs/native_2d.md` (approved 30 Oct: engine-level
+  hooks per 2D producer, no GS packets).** Step 1 = a renderer pass after the post effects (no Z test) + hooks for STR
+  letters (FUN_0046A980 / FUN_0046AA80) and rectangles (FUN_004B4580, kind 11 fades) + CJIdxMesh / particles in +0xB8,
+  replayed by `pop_state_frame`; judge against GS-only saves 185602 (HUD), 191358 (white-out), 192114 (save menu),
+  090720 (pause menu), 191059 (letterbox). Then steps 2-5 (live HUD behind `POP_NATIVE_2D`, movie display, loading
+  screen, user TV check) need boots: ask the user first.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
-  audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
+  audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".
 
 ## Release roadmap (user; full text: `docs/roadmap.md`)

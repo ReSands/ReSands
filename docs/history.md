@@ -925,3 +925,40 @@ too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing t
   162621, torches, save point), the Pinch warp (rewind anywhere), light shafts / glow at the fountain (202926), the dagger
   glow (115837); then the user decides whether `-NativeLate` becomes the default (closes 0.13). After that: the HUD
   (list 0x18 +0xB8) ends purity in every frame, which is 0.14.
+
+## Moved from CLAUDE.md on 1 Nov 2026 (N18-N22 closed)
+
+- **Where we are: 0.13 closed (30 Oct night, user in-motion check passed).** Native renderer on by default in `play.ps1`
+  (static world, lit statics, characters, translucents, shadows, P5/P6/P9, and since 30 Oct night the late lists
+  +0x88/+0x98/+0xA8, halos, Pinch; `-NoNativeLate` sends the late part back to the GS). The native frame is "pure"
+  (no GS draw yet, so native draws keep the game's order) up to the 2D pass in nearly every frame: sun 162621, fountain
+  202926, sand 115853 all end only at the HUD (list +0xB8). User check (sun halo + torches, fountain column glow and
+  saving, dagger glow, rewind): all good. Last night's work: `docs/native_renderer.md` "Lists after the shadows" (30 Oct
+  night), the moon halo (offline-only artifact, closed) in "Native halos", dagger glow in `docs/renderer_audit.md` item 9.
+  Docs: `docs/native_renderer.md` (layers, VU1 inventory), `docs/native_bugs.md` (open bugs, parked list), `docs/renderer_audit.md`.
+- **0.13 tail: native post chain live, built, not booted (30 Oct late).** Live, glow / SmartBlur / MotionSmooth /
+  FixBlend / ZoomSmooth were still the GS's over the injected picture (only Pinch was native: 478/488 in eve1030k).
+  `POP_NATIVE_POST=1` (with `-NativeLate`) sends them to the world frame's post chain while pure and skips the GS
+  originals; GPU in `renderOffscreen` = CPU exactly on 4 saves (`POP_VIEW_GPU_POST=1`). Live since a6feee4 (glow native
+  ~99% where pure to the HUD); user look 30 Oct evening fixed N24 / N25; **default on in `play.ps1`** (`-NoNativePost`).
+  **Before 0.14 (user, 30 Oct): close the open bugs first** (`docs/native_bugs.md` N18-N27). State at 31 Oct midday:
+  - **N22 (caustic hop): fixed 31 Oct (4a8c5bf, user check)**: the draw dedupe key left out the layer; entry in `docs/native_bugs.md`.
+  - **N20 (window rays 193136) + N21 (candle white square): fixed 31 Oct (fbf650f, user checks)**: halo restore read the wrong copy.
+  - **N18 (rubble seam flicker): closed 1 Nov (2fdf0fa, 527fca4, e51a848; user: native ~ GS, which flickers there rarely too; real-PS2 check wanted).**
+  - **N19 (orange band 192645): closed 1 Nov (afa2244, user TV check; boot: `ref +0x2c` gone, 2399/2400 frames pure to the HUD). Open bugs N18-N22 done; N23 / N26 / N27 parked: next is 0.14 step 1.**
+    N23 / N26 (halo fps): parked unless the per-halo images are a plain mistake. N27 parked. `docs/native_bugs.md` "Native Pinch" (eve1030k), new bugs N18 / N19 there.
+- **Next: 0.14 (native HUD, menus, loading screens, movie display; full-screen fades too). Plan: `docs/native_2d.md`
+  (30 Oct late, approved: engine-level hooks per 2D producer, no GS packets; survey done, 4 new hooks + 2 existing paths; next: step 1, the offline 2D layer).** Known facts to build on:
+  - **+0xB8 is the 2D pass:** PS2_After2D (0x4B4A00) -> FUN_004BBFC0 sets draw manager +0x28 = 1 and renders list +0xB8,
+    after the after-effects (glow, SmartBlur). The native renderer has **no layer after its post effects** (its picture
+    is injected at the 3D marker, the GS draws +0xB8 on top): that layer is the groundwork (`docs/native_bugs.md`
+    "Flashes survey").
+  - **HUD text and bars = FUN_00469C00 (list kind 0x18), the Jade STR text renderer:** per font page FUN_004B2000 sets
+    the state, then CNT + DIRECT + GIF tag (PRIM 0x5E sprite, textured, blended; ST RGBAQ XYZ2 ST XYZ2), screen
+    coordinates, Z 0; letters by FUN_0046A980 / FUN_0046AA80 (the hook points, not the packets; `docs/native_bugs.md`
+    "Light shafts"). `pop_state_frame` does not replay +0xB8 yet.
+  - **Fades = kind 11 entries in +0xB8** (FUN_004B4580 rectangles, table 0x6DF6E0): one blended screen quad each.
+  - Menus, loading screens (drawn once and left on screen: `docs/widescreen.md`), movie picture: not surveyed;
+    `docs/native_renderer.md` ~79 and ~623 have only one-liners. Survey other PS2 recomp projects first (`docs/ps2_projects.md`).
+  - Test saves: any save with the HUD (185602 shows life bar, sand tanks, tutorial text); fades 191358 (white-out),
+    192114 (half black). `POP_NATIVE_WORLD_WHY=1` prints `purity ended: list18 +0xb8` today, which should move on.

@@ -556,6 +556,8 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   162621 both 2399/2400 frames pure at +0x88, `ref +0x2c` gone from "ended by" (was ~26% of frames), 0 skinned refs on
   the GS, 60 fps; the rest end at the HUD (+0xB8, 0.14). One-offs left (1-2 frames in 2400, not N19): `ref +0x88`
   (ref 01693bc0, 192645), `mesh +0x2c` / `mesh +0x88` / `gfx +0x88` (162621).
+  Render gate after the fix: the 13 GS-only saves in `gsref1027/states/` pixel-identical to the build before (the shared
+  `skinnedPacketBatches` changes nothing for elements).
   **What the user sees (native only; GS mode clean):** a soft orange scalloped band across the wall just above the
   grass, coming and going, and **the moss/grass below it brightens at the same moments** (user's annotation:
   `game/analysis/saves1101/desk_114347_8.png`, top box = band, ellipse = moss). Not the post chain: still there with
