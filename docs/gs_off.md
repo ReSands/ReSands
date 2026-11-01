@@ -71,7 +71,7 @@ native; water; single calls).
 session 1: `046` 684 kicks, `15e`/`14e` on fbp 0x118) were seen only as first sightings, not dumped. Next: a cold-boot
 dump (`POP_NATIVE_GS_CENSUS=50`, intro movie + title menu) and a why-line boot over the fallback saves.
 
-## Step 2: native presenter (1 Nov; built and booted, user check pending)
+## Step 2: native presenter (1 Nov; closed, user TV check passed)
 **Switch:** `POP_NATIVE_PRESENT=1` (off by default). Runtime patch 45 (`GSHostPresent`, `gs_host_inject.h`): at each
 presentation a hook gets the display registers and may return its own frame; the backend's Present is then skipped and
 the window loop does not take the GS's shared GPU texture. Override (`pop_native_world.cpp`): each native picture also goes
@@ -94,5 +94,6 @@ A = play.ps1 defaults, B = + POP_NATIVE_PRESENT=1): no crash, fps and native cou
   memory does not come back with a save state). Fixed (221548a): the GS's picture is shown when no native picture came for
   0.5 s; rerun: identical to A (0.00). The movie after it: the same movie frames in A and B (0.0 apart), shown a few
   fields apart (movie playback follows the clock; not a presenter error).
-**Next:** the user's check on the TV: `play.ps1 -Env 'POP_NATIVE_PRESENT=1'` (title menu, a movie, a loading screen, play,
-a quick-save load), then step 3.
+**User TV check 1 Nov (passed):** cold boot, `play.ps1 -Env 'POP_NATIVE_PRESENT=1'`: intro movie, title, loading,
+fights, platforming, rewind, time freeze, all right by eye. Log `play_20261101_160837.log`: 0 "no native picture",
+6600 frames injected, 0 missed, 0 unexpected; ~60 fps outside boot/load dips. **Next: step 3.**
