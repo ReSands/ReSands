@@ -49,6 +49,24 @@ TEMPLATED = {'sndCList', 'sndCNode'}
 STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength'),
                   ('SndManager', 'GetRendererRate')}  # 0x189180 never reads a0; its callers set none (31 Oct)
 # C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
+# called by DARE but with no DWARF in POP1 (the PS2 OS layer at 0x199xxx, libc): argument counts read from the retail
+# bodies (a char argument where the body masks it with andi 0xff); Sony kernel / sif calls are left to the prompt
+NO_DWARF = ['extern "C" {'] + [d + ';' for d in (
+    'void SND_fn_vFreeSnd(void *p)', 'void SND_fn_vFreeSndAligned(void *p)', 'void *SND_fn_pvMallocSnd(unsigned int size)',
+    'void *SND_fn_pvReAllocSnd(void *p, unsigned int size)', 'int SND_fn_bInitMallocSnd(void)',
+    'void SND_fn_vMemCopySnd(void *dest, const void *src, unsigned int size)',
+    'void SND_fn_vMemsetSnd(void *dest, unsigned char value, unsigned int size)',
+    'void SND_fn_vDisplayError(int error, char *text)', 'void SND_fn_vDisplayErrorEx(int error, char *text, int value)',
+    'void SND_fn_vInitErrorSnd(void)', 'int SND_fn_vDesInitErrorSnd(void)', 'char SND_fn_cGetDirectorySeparator(void)',
+    'void *SND_fn_hOpenFileReadSnd(char *name)', 'void SND_fn_vCloseFileSnd(void *file)',
+    'unsigned int SND_fn_ulReadFileSnd(void *file, void *buffer, unsigned int size)',
+    'unsigned int SND_fn_ulSeekFileSnd(void *file, int offset, unsigned char origin)',
+    'int SND_fn_bInitStreamAsyncSnd(void)', 'void SND_fn_vDestroyStreamAsyncSnd(void *stream)',
+    'void SND_fn_vAbortLastStreamAsyncSnd(void *stream)',
+    'void *memcpy(void *, const void *, unsigned int)', 'void *memset(void *, int, unsigned int)',
+    'int sprintf(char *, const char *, ...)', 'char *strcpy(char *, const char *)',
+    'char *strncpy(char *, const char *, unsigned int)', 'char *strcat(char *, const char *)',
+    'unsigned int strlen(const char *)', 'char *strchr(const char *, int)')] + ['}']
 C_PARAMS = {'MouchardThreadTool': 'char *file, int line', 'SND_fn_vMouchardThreadsnd': 'char *file, int line'}
 # retail-only overloads (retail PlayToolVoice 0x18a480 passes 3 arguments; 0x18a540 / 0x18a640 never read a 4th)
 EXTRA_METHODS = {'SndManager': ['int PlayLoopingVoice(_VOICE *, _tduRefRes, _SoundParam *);  // retail',
@@ -361,13 +379,15 @@ def main(elf_path, out_h, out_tsv=None):
 
     # methods by class
     methods = defaultdict(list)
-    cfuncs = []
+    cfuncs, cxxfuncs = [], []
     for m, (x, cu) in sorted(funcs.items()):
         cls, const = mangled_class(m)
         if cls:
             methods[cls].append((m, x, const))
         elif '__' not in m.strip('_') or m == x.attrs['name']:
             cfuncs.append((m, x))
+        elif split_mangled(m):  # a C++ free function (Create_Source__FPP7CSource...): left out until 1 Nov
+            cxxfuncs.append((m, x))
 
     def params(x, skip_this=True):
         ps = []
@@ -405,6 +425,10 @@ def main(elf_path, out_h, out_tsv=None):
             return '%s(%s);' % (in_class, ps)
         if name == '__dt' or m.startswith('__dt__'):
             return '%s~%s();' % ('virtual ' if virtual else '', in_class)
+        if m.startswith('__nw__') and in_class:  # the class's own operator new / delete (CTool::__nw = new CPath)
+            return 'void *operator new(%s);' % ps
+        if m.startswith('__dl__') and in_class:
+            return 'void operator delete(%s);' % ps
         if name.startswith('__') and name[2:4] in ('nw', 'dl', 'as', 'eq', 'ne', 'pl', 'mi', 'ml', 'dv', 'vc', 'cl', 'op'):
             return '/* %s: operator, not declared */' % m
         ret = g.render(x.attrs, name + '(%s)' % ps) if x is not None else 'void %s(%s) /* return type unknown */' % (name, ps)
@@ -576,10 +600,11 @@ def main(elf_path, out_h, out_tsv=None):
     for n, (x, cu) in sorted(globals_.items()):
         if n not in cplus and n not in static_members:
             L.append('extern %s;' % gdecl(n))
-    L += ['}'] + ['extern %s;' % gdecl(n) for n in sorted(cplus)] + ['', '#include "dare_fix.h"', '#endif']
+    L += ['}'] + ['extern %s;' % gdecl(n) for n in sorted(cplus)]
+    L += [decl(m, x) for m, x in cxxfuncs] + NO_DWARF + ['', '#include "dare_fix.h"', '#endif']
     open(out_h, 'w').write('\n'.join(L) + '\n')
     print('%d records, %d enums, %d typedefs, %d methods, %d C functions, %d globals, %d vtables -> %s' % (
-        len(records), len(enums), len(typedefs), sum(map(len, methods.values())), len(cfuncs), len(globals_),
+        len(records), len(enums), len(typedefs), sum(map(len, methods.values())), len(cfuncs) + len(cxxfuncs), len(globals_),
         len(vt), out_h))
     if conflicts:
         print('%d names with more than one layout (most common used):' % len(conflicts), *conflicts[:20], sep='\n  ')

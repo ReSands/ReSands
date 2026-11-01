@@ -1,9 +1,9 @@
 # match.py: compile one source file with CodeWarrior and compare one function with the retail bytes.
 #   python match.py <src.cpp> <mangled name> <retail addr hex> <size> [--cc <compiler dir>] [--elf <SLUS_207.43>]
-# Prints MATCH or a per-instruction diff (relocated fields masked on both sides, so call targets and
+# Prints MATCH or an aligned per-instruction diff (relocated fields masked on both sides, so call targets and
 # addresses of globals only need the right relocation, not the final address). Exit 0 = match.
 # Runs where mwccps2.exe runs (the PC); objdiff() alone also works on any machine with an object file.
-import os, re, struct, subprocess, sys
+import difflib, os, re, struct, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mipsdis import dis
 
@@ -57,24 +57,71 @@ def objdiff(obj, name, addr, size, elf=None):
     elf = elf or open(ELF, 'rb').read()
     want = elf[addr - 0x100000 + 0x100:][:size]
     mask = {k: (m, s) for k, m, s in rel}
-    nw = max(len(code), size) // 4
+    A = [struct.unpack_from('<I', want, 4 * k)[0] for k in range(size // 4)]
+    B = [struct.unpack_from('<I', code, 4 * k)[0] for k in range(len(code) // 4)]
+    # aligned diff (1 Nov; a positional one marked everything after one extra instruction as different):
+    # pair instructions with branch offsets and relocated fields masked, then a branch is the same only when both
+    # sides jump to paired instructions
+    mb = lambda k: mask.get(k, (0xffffffff, None))[0]
+    # alignment key: opcode and registers only (retail immediates are final addresses where yours are relocations)
+    key = lambda w: w & (0xffffffff if w >> 26 in (0, 0x1c, 0x10, 0x11, 0x12) and branch(w) is None else
+                         0xfc000000 if w >> 26 in (2, 3) else 0xffff0000)
+    ops = difflib.SequenceMatcher(None, [key(w) for w in A], [key(w) for w in B], autojunk=False).get_opcodes()
+    pair = {i1 + d: j1 + d for tag, i1, i2, j1, j2 in ops if tag == 'equal' for d in range(i2 - i1)}
+    pair[len(A)] = len(B)  # a branch to the end of the function
+    rows = []  # (retail index or None, yours index or None, same)
+    for tag, i1, i2, j1, j2 in ops:
+        for d in range(max(i2 - i1, j2 - j1)):
+            i, j = (i1 + d if i1 + d < i2 else None), (j1 + d if j1 + d < j2 else None)
+            same = tag == 'equal'
+            if same and branch(A[i]) is not None:
+                same = pair.get(i + 1 + branch(A[i])) == j + 1 + branch(B[j])
+            elif same:
+                same = (A[i] & mb(j)) == (B[j] & mb(j))
+            rows.append((i, j, same))
     lines, same = [], 0
-    for k in range(nw):
-        a = struct.unpack_from('<I', want, 4 * k)[0] if 4 * k < size else None
-        b = struct.unpack_from('<I', code, 4 * k)[0] if 4 * k < len(code) else None
-        m = mask.get(k, (0xffffffff, None))
-        ok = a is not None and b is not None and (a & m[0]) == (b & m[0])
+    for i, j, ok in rows:
         same += ok
-        ta = dis(a, addr + 4 * k) if a is not None else '-'
-        tb = dis(b, addr + 4 * k) if b is not None else '-'
-        if m[1] and b is not None:
-            tb += '   <%s>' % m[1]
-        lines.append('%s %3x  %-34s | %s' % ('  ' if ok else '>>', 4 * k, ta, tb))
-    matched = same == nw and len(code) == size
+        ta = dis(A[i], addr + 4 * i) if i is not None else '-'
+        tb = dis(B[j], addr + 4 * j) if j is not None else '-'
+        if j is not None and j in mask and mask[j][1]:
+            tb += '   <%s>' % mask[j][1]
+        lines.append('%s %3x  %-34s | %s' % ('  ' if ok else '>>', 4 * (i if i is not None else j), ta, tb))
+    matched = len(code) == size and all((a & mb(k)) == (b & mb(k)) for k, (a, b) in enumerate(zip(A, B)))
     head = 'MATCH' if matched else '%d of %d instructions differ (retail %d bytes, yours %d)' % (
-        nw - same, nw, size, len(code))
+        len(rows) - same, len(rows), size, len(code))
     return matched, head + (' [compiled as %s]' % cand[0] if cand[0] != name else '') + '\n' + \
         '     off  retail                             | yours\n' + '\n'.join(lines)
+
+
+def branch(w):
+    # PC-relative branch offset in instructions (target = index + 1 + offset), or None
+    op, rt = w >> 26, (w >> 16) & 31
+    if op in (4, 5, 6, 7, 0x14, 0x15, 0x16, 0x17) or op == 1 and rt in (0, 1, 2, 3, 16, 17, 18, 19) or \
+            op == 0x11 and (w >> 21) & 31 == 8:
+        o = w & 0xffff
+        return o - 0x10000 if o & 0x8000 else o
+    return None
+
+
+def selftest():
+    # an extra instruction in the middle: only that one row differs, and the branch over it still pairs
+    nop, ins = 0, 0x24420001  # addiu v0,v0,1
+    beq = lambda off: 0x10400000 | (off & 0xffff)  # beq v0,zero,off
+    # jal 0x16d180 and lui at,0x68 in retail are relocations (jal 0, lui at,0) in the object
+    retail = [beq(4), nop, 0x0c05b460, 0x3c010068, 0x8c820000, 0x03e00008, nop]
+    yours = [beq(5), nop, ins, 0x0c000000, 0x3c010000, 0x8c820000, 0x03e00008, nop]
+    sec = b''.join(struct.pack('<I', w) for w in yours)
+    elf = bytearray(0x100) + b''.join(struct.pack('<I', w) for w in retail)
+    global obj_funcs
+    keep, obj_funcs = obj_funcs, lambda _p: {'f': (sec, [(3, 0xfc000000, 'g'), (4, 0xffff0000, 'h')])}
+    try:
+        ok, text = objdiff(None, 'f', 0x100000, 28, bytes(elf))
+    finally:
+        obj_funcs = keep
+    assert not ok and text.startswith('1 of 8 instructions differ'), text
+    assert [l[:2] for l in text.splitlines()[2:]] == ['  ', '  ', '>>'] + ['  '] * 5, text
+    print('selftest ok')
 
 
 def compile_src(src, out_obj, cc=CC):
@@ -85,6 +132,8 @@ def compile_src(src, out_obj, cc=CC):
 
 
 def main(a):
+    if a[:1] == ['--selftest']:
+        return selftest()
     cc = a[a.index('--cc') + 1] if '--cc' in a else CC
     elf = open(a[a.index('--elf') + 1] if '--elf' in a else ELF, 'rb').read()
     src, name, addr, size = a[0], a[1], int(a[2], 16), int(a[3])

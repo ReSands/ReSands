@@ -49,7 +49,7 @@ Original local variable names: {locals}
 {header}
 ```
 
-## Rules
+{examples}## Rules
 - Your file starts with #include "dare.h" and defines only this function ({how}). dare.h already defines every
   class, struct, union, enum and template it uses: never write a type definition yourself. You may add extern
   declarations (functions, and globals that dare.h does not declare: extern <type of that size> <name>;). If the
@@ -298,6 +298,27 @@ def annotate(asm, ghidra, addr, size):
     return asm, ghidra, used
 
 
+EXAMPLES_BUDGET = 4000  # characters of matched code from the same source file
+
+
+def examples(file, addr):
+    # matched functions of the same source file (smallest first): the developer's style for this compiler
+    # (comparisons, loops, switches), which the hand-match lessons only describe (1 Nov, after fnvdecomp's agents.md)
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
+    out, size = [], 0
+    for r in sorted((r for r in rows if r[0] == file and r[3] != '-' and int(r[3], 16) != addr), key=lambda r: int(r[4])):
+        p = os.path.join(QWEN, 'dare_%08x' % int(r[3], 16))
+        if not os.path.exists(os.path.join(p, 'PASS')) or not os.path.exists(os.path.join(p, 'best.cpp')):
+            continue
+        code = open(os.path.join(p, 'best.cpp')).read().replace('#include "dare.h"', '').strip()
+        if size + len(code) > EXAMPLES_BUDGET:
+            break
+        out.append(code)
+        size += len(code)
+    return ('## Functions of the same source file that already match byte for byte (copy their style)\n```cpp\n' +
+            '\n\n'.join(out) + '\n```\n\n') if out else ''
+
+
 def prompt(mangled, addr, size, file):
     proto = next((l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'protos.tsv'))
                   if l.split('\t')[0] == mangled), [mangled, file, '?', '', ''])
@@ -313,7 +334,7 @@ def prompt(mangled, addr, size, file):
     how = 'as %s::<name>' % cls if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
-                       header=header, how=how, globals=globs)
+                       header=header, how=how, globals=globs, examples=examples(file, addr))
 
 
 def judge(path, mangled, addr, size, elf):
@@ -425,13 +446,16 @@ def main(argv):
         os.remove(os.path.join(out, 'RETRY'))
     say = lambda s: (print(s, flush=True), log.write(time.strftime('%H:%M:%S ') + s + '\n'), log.flush())
     done = sorted(f for f in os.listdir(att) if f.endswith('.cpp'))
-    prev = (open(os.path.join(att, done[-1])).read(), open(os.path.join(att, done[-1][:-4] + '.report.txt')).read()) \
-        if done else None
-    if prev and prev[1].startswith('MATCH'):  # an earlier run died between judging and writing PASS (28 Oct, over ssh)
-        open(os.path.join(out, 'PASS'), 'w').write(done[-1][:-4] + '\n')
-        say('PASS in %s (found on resume)' % done[-1][:-4])
+    tries = [(open(os.path.join(att, f)).read(), open(os.path.join(att, f[:-4] + '.report.txt')).read(), f[:-4])
+             for f in done]
+    if tries and tries[-1][1].startswith('MATCH'):  # an earlier run died between judging and writing PASS (28 Oct, over ssh)
+        open(os.path.join(out, 'PASS'), 'w').write(tries[-1][2] + '\n')
+        say('PASS in %s (found on resume)' % tries[-1][2])
         return 0
-    best = max((score(open(os.path.join(att, f[:-4] + '.report.txt')).read()) for f in done), default=-2)
+    # a resume starts from the best attempt, not the last one (1 Nov: the last was often a compile error)
+    best_try = max(tries, key=lambda t: score(t[1]), default=None)
+    best = score(best_try[1]) if best_try else -2
+    prev = best_try[:2] if best_try else None
     # --rounds = this many more rounds; rounds that wrote no code leave a .nocode.txt so a resume counts them
     last = max((int(f[5:7]) for f in os.listdir(att) if f.startswith('round')), default=0)
     n, end, extra = last, last + rounds, False
@@ -446,7 +470,8 @@ def main(argv):
         messages = [{'role': 'user', 'content': first}]
         if prev:
             messages += [{'role': 'assistant', 'content': '```cpp\n' + prev[0] + '```'},
-                         {'role': 'user', 'content': 'Judge report for that file (retail | yours, >> = differs):\n\n' +
+                         {'role': 'user', 'content': (prev[2] if len(prev) > 2 else '') +
+                          'Judge report for that file (retail | yours, >> = differs):\n\n' +
                           prev[1] + diff_hints(prev[1]) + '\n\nChange the source so the compiler produces the retail instructions, and '
                           'reply with the complete file in one ```cpp block. Keep your reasoning short.'}]
         try:
@@ -473,9 +498,14 @@ def main(argv):
         open(path[:-4] + '.report.txt', 'w').write(text)
         say('round%02d: %s; %.0f s, %s tokens' % (n, text.splitlines()[0][:100], secs, usage.get('completion_tokens')))
         if got > best:
-            best = got
+            best, best_try = got, (code, text)
             open(os.path.join(out, 'best.cpp'), 'w').write(code)
         prev = (code, text)
+        if got < best and best_try:  # worse than the best: go on from the best (fnvdecomp: "start from the best")
+            prev = best_try + ('Your last attempt was worse (%s). Here is your best attempt so far instead; '
+                               'improve this one.\n\n' % ('it did not compile: ' + ' '.join(text.split())[13:300]
+                                                            if got < 0 else
+                                                            '%d matching instructions, the best has %d' % (got, best)),)
         if ok:
             open(os.path.join(out, 'PASS'), 'w').write('round%02d\n' % n)
             say('PASS in round%02d' % n)
