@@ -579,6 +579,13 @@ mapping is by time (the user's minutes vs save names); check each picture first.
 - **N27 (parked, needs a reference): the halo nearest the Prince flickers a little** (193636, native post chain on).
   Not known whether the original does it; our GS emulation is not ground truth. Check against PCSX2 / a video / a real
   PS2 when available.
+- **N28 (parked, minor; user 1 Nov): objects pop back in at the end of the fade to black after Retry.** Step 5 boot
+  (`POP_NATIVE_2D=1`): on 1 of ~3 die / Retry fade-outs, at the last fade step some objects (enemies, torches) showed
+  while the rest was black. User saves just after: `play_20261101_135939` / `140020` (PC states). Capture
+  `game\analysis\retryfade1101` (`POP_NATIVE_WORLD_DUMP`, 3 frames before / 12 after each load): the 3 frames before
+  each retry load are black; after load 03 (frame 4171-4172) 2 injected pictures show a close-up wall from a stale
+  camera (the 23 Oct load-flash family, N3), the other retries black throughout. Not obviously what the user saw
+  (objects on black, before the load). Not known: GS-only (`-NoNative2D`) does the same? Next: a GS-only retry A/B.
 
 ## Storage of captures (agreed with the user 24 Oct)
 

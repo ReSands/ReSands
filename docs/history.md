@@ -962,3 +962,11 @@ too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing t
     `docs/native_renderer.md` ~79 and ~623 have only one-liners. Survey other PS2 recomp projects first (`docs/ps2_projects.md`).
   - Test saves: any save with the HUD (185602 shows life bar, sand tanks, tutorial text); fades 191358 (white-out),
     192114 (half black). `POP_NATIVE_WORLD_WHY=1` prints `purity ended: list18 +0xb8` today, which should move on.
+
+## Moved from CLAUDE.md on 1 Nov 2026 (0.14 closed)
+
+- **Next: 0.14 step 5 (user TV check, `docs/native_2d.md` "Steps").** With `play.ps1 -Env 'POP_NATIVE_2D=1'`: HUD in a fight, pause +
+  title menus, a loading screen, a movie, a fade, a cutscene. Steps 1-3 booted 1 Nov (movie: `PS2_DisplayVideo` hook, test
+  pattern exact, 0 missed frames). Step 4 (loading screen, `closeStream` / `loadingQuads`) is offline-checked only: no scripted
+  boot reaches one (save boots freeze it; new game skips it), so step 5 is its first live test (log `[pop:world] loading
+  screen: N frames native`). Then `play.ps1` default on and close 0.14.

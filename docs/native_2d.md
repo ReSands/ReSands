@@ -141,6 +141,10 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    screen (it draws before the marker), not a crash; if the GS hook misses the picture, "no native picture" in the log.
 5. **User check (TV):** HUD in a fight, pause menu, title menu, a loading screen, a movie, a fade, a cutscene. Then
    `play.ps1` default on and close 0.14.
+   **Done 1 Nov (user, TV):** title menu, movie (black bars), loading screen (log: 361 frames native, step 4 confirmed
+   live), cutscene letterbox, fight HUD, pause + save menus, fades: all right. Open, parked: N28 (objects pop in at the
+   end of the Retry fade-out, once in ~3), progressive scan from the title menu crashes (`docs/native_bugs.md` side
+   jobs; not yet known whether 2D-related). `play.ps1` default on (`-NoNative2D` turns it off). **0.14 closed.**
 
 Boots needed: steps 2, 3, 4 (one short stnative job each, user asked first) and 5. Step 1 is offline.
 
