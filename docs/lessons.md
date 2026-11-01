@@ -319,4 +319,6 @@ mode boots the game check for an active display first, so a mistake like this ca
 - **Before tuning a model's prompt, count why its rounds fail.** Run 5: 41% of rounds did not compile (count only that run's rounds: older runs' attempts share the folders); the header
   generator had silently dropped every mangled free function (214) and everything without DWARF. Check what the
   model is given against what the code it must write calls (callees.tsv vs dare.h), not only what it writes.
-
+- **A .cpp #included by an override is not a tracked dependency of the PC's unity build** (1 Nov): `assets.cpp` changed,
+  the runtime only relinked, a boot ran the old code. `rebuild.ps1` now touches `pop_native_live.cpp`; if a boot shows a
+  fix that worked offline as missing, check `runtime_build.log` compiled the unity file first.

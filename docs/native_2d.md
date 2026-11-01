@@ -106,6 +106,10 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    0b007b60 (32x32) is sent as PSMCT32 16x8 (TRXREG), not linear PSMT4; `assets.cpp` now routes it through the GS layout.
    Offline: 185602 HUD as the GS, 192114 save menu 11.0 -> 4.4 (panel even; text not replayed offline). Render gate: 6
    saves identical, the 7 with HUD all slightly better.
+   **Boot 1 Nov** (`twod1101c` / `e`, shots `shots1101c` / `e`): HUD rings, save-menu panel and pause menu as the GS; fps
+   unchanged. (The first boot missed the 4-bit fix: `assets.cpp` is #included by `pop_native_live.cpp` and the unity
+   build missed the dependency; `rebuild.ps1` now touches the synced file when a `tools/native/src` .cpp is newer.)
+   **Step 2 done.**
 3. **Movie display**: `PS2_DisplayVideo` hook, picture drawn natively full screen (a frame with no marker: the native
    frame is just the movie).
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).

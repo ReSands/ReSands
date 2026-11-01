@@ -211,6 +211,11 @@ if (-not $Fast) {
 Stage 'Sync game overrides'
 # Overrides must be in the executable's sources, not the runtime library (upstream #264).
 & $Python -I "$Root\tools\sync_generated.py" "$Root\tools\overrides" "$RT\ps2xRuntime\src\runner" '*.cpp'
+# pop_native_live.cpp #includes tools\native\src\*.cpp, which the unity build's dependencies miss (1 Nov): touch it when one is newer
+$live = Get-Item "$RT\ps2xRuntime\src\runner\pop_native_live.cpp" -ErrorAction SilentlyContinue
+if ($live -and (Get-ChildItem "$Root\tools\native\src\*.cpp" | Where-Object { $_.LastWriteTime -gt $live.LastWriteTime })) {
+    $live.LastWriteTime = Get-Date
+}
 
 # The in-game native world (tools/overrides/pop_native_world.cpp; needs runtime patch 38, the GS
 # host-inject hook) links the native renderer library and volk from game\native-build.
