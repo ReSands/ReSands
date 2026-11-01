@@ -49,6 +49,17 @@ over the 1 Nov sessions (~22,000 game frames; ~1 in 300):
 The other "on the GS" counts (halos 62, P5 157, P9 60, skinned 6, 2D strings 85) may be consequences of an ended
 frame rather than causes: to confirm with the why-lines.
 
-**Not yet covered:** non-game screens (title menu, movie, loading screen, load transitions such as marker 832 of
+**Follow-up boots (1 Nov, job `gsoff1101d`, logs in `game/analysis/gs_census1101/`):**
+- **Cold boot 150 s** (intro movie, title menu, no input; census every 50): colour on the GS only from the 640x448 clear
+  (`006`, FBMSK 0); otherwise `14e` alpha only and `05e` zero-area. Intro movie and title menu draw no colour on the GS.
+  Image transfers (movie frames) are many: they matter for step 3 (stop feeding the GS), not for colour.
+- **155110 / 162819, 45 s with why-lines:** pure 2098/2100 and 2398/2400; the two impure frames are the load itself
+  (`07c` / `076` / `07d` / `05c` and every "skinned call on the GS" line sit in the first frames after the load, counters
+  frozen after that). 155110's Pinch calls (3) also fall there, so the blended Pinch needs a live rewind check. No water
+  drawn in 162819's view.
+So the steady game, title and movie are covered; the open fallbacks are the ones only seen in play (blended Pinch, now
+native; water; single calls).
+
+**Not yet covered (older note):** non-game screens (title menu, movie, loading screen, load transitions such as marker 832 of
 session 1: `046` 684 kicks, `15e`/`14e` on fbp 0x118) were seen only as first sightings, not dumped. Next: a cold-boot
 dump (`POP_NATIVE_GS_CENSUS=50`, intro movie + title menu) and a why-line boot over the fallback saves.
