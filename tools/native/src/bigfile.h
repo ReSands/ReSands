@@ -179,5 +179,7 @@ namespace pop_bigfile
                 return false;
             p += csize;
         }
+        if (out.empty())
+            out = std::move(blob); // stored raw, no chunks (the loading screen's images 0xF402E7E7 / 8: start with zero texels)
         return true;
     }}

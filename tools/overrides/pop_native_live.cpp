@@ -4979,6 +4979,106 @@ namespace pop_native_live
             g_origVideo(rdram, ctx, runtime);
         }
 
+        // 0.14 step 4, the loading screen: FUN_004C9C80 (from the loader's wait loop) builds its own DMA list and kicks it itself, so
+        // its frame never reaches worldKick. With POP_NATIVE_2D its ClosePacketStream (0x4A1800; 0x6751F4 = 1 only inside the
+        // function) puts the marker before the list's end tag, after the game's two quads (the native picture covers them), draws
+        // the quads natively from the function's plain values and sends the frame. Images: bigfile entries 0xF402E7E7 (the ring,
+        // GS 0x3480, opaque) and 0xF402E7E8 (the disc, 0x3880, blended), 256 x 256 PSMCT32 stored raw.
+        constexpr uint32_t kLoadingKey[2] = {0xF402E7E7u, 0xF402E7E8u};
+        bool loadingImages()
+        {
+            static int state = 0; // 0 not tried, 1 ready, 2 failed
+            if (state)
+                return state == 1;
+            state = 2;
+            const char *env = std::getenv("POP_PS2_BIGFILE");
+            const std::string bf = env && *env ? env : "DATA/PRINCE.BF";
+            for (int k = 0; k < 2; ++k)
+            {
+                std::vector<uint8_t> e;
+                if (!pop_hdtex::readEntry(bf, kLoadingKey[k], e) || e.size() < 256u * 256u * 4u)
+                {
+                    std::fprintf(stderr, "[pop:world] loading screen image %08x not read: the loading screen stays on the GS\n", kLoadingKey[k]);
+                    return false;
+                }
+                pop_native::Image img;
+                img.width = img.height = 256;
+                img.rgba.assign(e.begin(), e.begin() + 256 * 256 * 4);
+                // the renderer's alpha: the GS's doubled, clamped. The disc's is the GS's As = texel alpha x the vertex alpha 0x40
+                // (MODULATE; texels 0xFF: 127/128), baked in, as the renderer would clamp the texel to 1.0 first and halve it
+                for (size_t i = 3; i < img.rgba.size(); i += 4)
+                    img.rgba[i] = uint8_t(std::min(255, 2 * (k ? (img.rgba[i] * 0x40) >> 7 : img.rgba[i])));
+                g_liveImages[kLoadingKey[k]] = std::move(img);
+            }
+            state = 1;
+            return true;
+        }
+        // the two quads as FUN_004C9C80 places them (row vectors, p * A * B; the base matrix 0x6D4800 is the identity; t1..t3 at
+        // 0x63FD70 / 80 / 90; R = rotation about Z): the ring p -> ((p + t1) R(0x6751EC) + t2) + c, the disc first through
+        // ((p + t1) R(0x6751F0) + t2) + t3; c centres the 256 x 256 square; then
+        // y * h / (0.75 w) - (h - 0.75 w) / 2. Colour: the fade (0x6751E8) x 128, clamped to 0..0x80.
+        void loadingQuads(uint8_t *rdram)
+        {
+            const int32_t w = int32_t(guestAny(rdram, 0x0066D03Cu)), h = int32_t(guestAny(rdram, 0x0066D040u));
+            const float a[2] = {guestF(rdram, 0x006751ECu), guestF(rdram, 0x006751F0u)}, fade = guestF(rdram, 0x006751E8u);
+            const float c[2] = {float((w - 256) / 2), float((h - 256) / 2)};
+            float t[3][2];
+            for (int k = 0; k < 3; ++k)
+                t[k][0] = guestF(rdram, 0x0063FD70u + 0x10u * k), t[k][1] = guestF(rdram, 0x0063FD74u + 0x10u * k);
+            const auto spin = [&](float &x, float &y, float angle) {
+                const float px = x + t[0][0], py = y + t[0][1], cs = std::cos(angle), sn = std::sin(angle);
+                x = px * cs - py * sn + t[1][0];
+                y = px * sn + py * cs + t[1][1];
+            };
+            const uint32_t v = fade > 1.0f ? 0x80u : fade < 0.0f ? 0u : uint32_t(fade * 128.0f);
+            const float scale = float(h) / (float(w) * 0.75f), shift = (float(h) - float(w) * 0.75f) / 2.0f;
+            for (int layer = 0; layer < 2; ++layer)
+            {
+                DrawMaterial &m = twoDQuad(rdram, 0, 0, 0, 0, 0, 0, 1, 1, v | v << 8 | v << 16 | 0x80u << 24, kLoadingKey[layer],
+                                           layer ? 0x10200u : 0x200u, 0, true, g_frameSeq++);
+                m.native = true;
+                auto &vs = g_frameRefs.back().first[0].vertices;
+                for (int k = 0; k < 4; ++k) // twoDQuad's corner k is (x bit k & 1, y bit k >> 1)
+                {
+                    float x = 256.0f * float(k & 1), y = 256.0f * float(k >> 1);
+                    if (layer)
+                    {
+                        spin(x, y, a[1]);
+                        x += t[2][0], y += t[2][1];
+                    }
+                    spin(x, y, a[0]);
+                    vs[k].pos[0] = x + c[0];
+                    vs[k].pos[1] = (y + c[1]) * scale - shift;
+                }
+            }
+        }
+        PS2Runtime::RecompiledFunction g_origClose = nullptr;
+        void closeStream(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_world2D && g_worldPost && g_worldLate && guestAny(rdram, 0x006751F4u) == 1u && !g_worldMarked && loadingImages())
+            {
+                const uint32_t gs = guestAny(rdram, 0x00675148u), end = guestAny(rdram, gs + 0xECu) - 16u; // the end tag, written last
+                uint8_t tag[16];
+                std::memcpy(tag, getConstMemPtr(rdram, end), 16);
+                std::memcpy(getMemPtr(rdram, gs + 0xECu), &end, 4);
+                worldDisplay3D(rdram); // the marker in the end tag's place
+                const uint32_t at = guestAny(rdram, gs + 0xECu), next = at + 16u;
+                std::memcpy(getMemPtr(rdram, at), tag, 16);
+                std::memcpy(getMemPtr(rdram, gs + 0xECu), &next, 4);
+                if (g_worldMarked)
+                {
+                    loadingQuads(rdram);
+                    std::vector<uint8_t> f;
+                    writeFrame(true, &f);
+                    pop_native_world::submitFrame(g_worldSeq, g_frameGeneration, std::move(f));
+                    resetFrameCapture();
+                    g_frameCapturing = false;
+                    g_worldMarked = g_worldOpen = false;
+                }
+            }
+            g_origClose(rdram, ctx, runtime);
+        }
+
         // glitch capture (pop_native_world dumpRecent): the frame's camera, fog zones 0-4 and purity, one line
         void noteGlitchFrame(uint8_t *rdram)
         {
@@ -5398,6 +5498,7 @@ namespace pop_native_live
                          {0x004A93C0u, smartBlur, &g_origHaze},
                          {0x004B4580u, rectangle, &g_origRect},
                          {0x004B4340u, displayVideo, &g_origVideo},
+                         {0x004A1800u, closeStream, &g_origClose},
                          {0x0046A980u, letter, &g_origLetter},
                          {0x0046AA80u, letterF, &g_origLetterF},
 #if POP_SPRITE_VU1

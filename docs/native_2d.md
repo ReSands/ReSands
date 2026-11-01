@@ -118,6 +118,17 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    drawn as a 2D-layer quad (opaque, clamped); a frame with no marker gets it from `worldDisplay3D` here. Native clear = black
    around a letterboxed movie. Boot: `POP_MOVIE_TEST=1` pattern for the placement, no "unexpected buffers" log line, sharpness.
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).
+   **Code 1 Nov (offline, boot pending):** FUN_004C9C80 builds its own DMA list (FUN_004A3D00: FRAME / ZBUF / scissor) and kicks
+   it itself (no PS2_Flip, so worldKick never sees it). Hook point: its ClosePacketStream (0x4A1800) while 0x6751F4 = 1 (set only
+   inside the function): `closeStream` puts the marker in place of the end tag (after the game's two quads, which the native
+   picture covers), records the quads and submits the frame there. Quads from plain values (`loadingQuads`): row-vector
+   matrices (FUN_00494500 = p * A * B, FUN_00494320 = p * M), RotZ rows (c, s), (-s, c); ring p -> ((p + t1) R(0x6751EC) + t2)
+   + c, disc first ((p + t1) R(0x6751F0) + t2) + t3; t1..t3 at 0x63FD70/80/90 (-128,-128 / 128,128 / 0,31), c = ((w-256)/2,
+   (h-256)/2); then y * h/(0.75 w) - (h - 0.75 w)/2. UV tables 0x63FD50/60 = the whole image (PRIM 0x114 / 0x154: strip,
+   textured, UV; second blended, ALPHA 0x44). Colour = fade x 128 (0..0x80), vertex alpha 0x40. Images: bigfile 0xF402E7E7 (ring)
+   / 0xF402E7E8 (disc), 256 x 256 PSMCT32 **stored raw** (no chunks: `pop_bigfile::readEntry` now returns such an entry as is),
+   alpha 0 / 0xFF; the disc's As = 0xFF x 0x40 >> 7 = 127/128 baked into its image (the renderer would clamp the texel first).
+   Offline check (Python model of the same maths, save 192103): mean abs diff 0.47 / 255 against its GS frame.
 5. **User check (TV):** HUD in a fight, pause menu, title menu, a loading screen, a movie, a fade, a cutscene. Then
    `play.ps1` default on and close 0.14.
 
