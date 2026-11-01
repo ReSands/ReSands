@@ -222,11 +222,11 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    keeps per CALL target the VU1 matrices in effect (VU 0, VU 0x388 + 4k) and sets `pop_native_live::g_chainBones`;
    `poseSkinned` (new `packet` argument from the element / skinned-ref call sites) hands it the pool's bones and takes
    the CALL of that packet whose bones lie nearest (instances metres apart, a frame of motion centimetres; over 0.5 m
-   mean keeps the pool). Palette draws and rigid no-palette parts (held clubs) both. `POP_CHAIN_POSES=0` = old
+   mean keeps the pool). Palette draws and rigid no-palette parts (held clubs) both. `POP_STATE_CHAIN=0` = old
    behaviour. Fight saves: 513 of 514 skinned draws posed from the chain (4 saves). Score against fbp 0 (pool -> chain):
    134636_1 10.81 -> 7.14, 155110_1 10.34 -> 9.52, 115837_2 13.79 -> 13.19, 185602_2 14.41 -> 13.99; characters line up,
    what is left is shadows, flashes and hint text (points 4-6). Open: one club in 134636_1 still ahead (an objectSpace
-   lit pass: drawn with `poolMatrix(index)`, which has no packet to match by). Render gate: with `POP_CHAIN_POSES=0` the
+   lit pass: drawn with `poolMatrix(index)`, which has no packet to match by). Render gate: with `POP_STATE_CHAIN=0` the
    13 gate saves are pixel-identical to the build before (live path unchanged: the hook is null in the game); with it
    on, every one scores the same or better even against the old (displayed) reference. Live runtime not rebuilt (the
    change there is a null hook + a default argument; compiled into the offline tools on the Mac).
@@ -245,6 +245,24 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    `game/analysis/gsoffcap/score/`, `score_vu1/`.
 4. **Shadows from the chain.** The shadow pass's packets are in the chain even when the count is 0: draw them from there
    (or recover the projector list via the chain's order). Done when 184926 / rewind saves show shadows offline.
+   **Done (1 Nov):** the list counts are recovered from the chain. The shadow pass sits in it per drawn projector: its
+   caster-buffer FRAME (fbw 4, FBMSK 0xFFFFFF), a setup packet, the casters, then the receivers (the FRAME back to the
+   frame); each list entry's packet (element +0x20 + 4 x pass / ref + 4 x pass) is a CALL target in list order, chained
+   elements add CALLs between. `state_frame.cpp` (`readLastChain`, the same walk as the poses) keeps one CALL sequence
+   per projector; `chainShadowCounts` matches a projector to the sequence holding its first caster and sets each count
+   to the longest list prefix found there in order (receivers after the casters); a projector the chain did not draw
+   gets 0. Checked on 192521 (lists still filled): all 6 drawn projectors' counts exact, the undrawn #6 (memory 6/4)
+   0, which the old replay drew. All 40 saves: every sequence matched except one in 115837_1 / _2 (2 of 3).
+   `score_saves.sh` now sets `POP_NATIVE_SHADOWS=1` (as `play.ps1` live). Scores (point 3 -> now, vu1 build): 184926_3
+   5.70 -> 4.71, 115837_3 6.26 -> 3.93, 202314_3 2.81 -> 2.00, gate 202314 3.59 -> 2.22, 115837 3.90 -> 2.74; 26 of 27
+   gsoffcap better in vu1 (185602_2 13.99 -> 14.07, the flash save). Plain build: 115853 worse (gate 10.66 -> 11.28; no
+   dust cloud there, so the game's shadows under the dust widen the gap). Rewind saves: only 185807 has the GS shadow pass
+   in its chain (the other two were taken with live native shadows): 10.19 -> 9.40; its vertical ramp half gone (64-row
+   bands native - game 8.6 / 11.7 -> 7.9 / 7.3), the bottom band still +12.8 (glow? point 6). Gate re-based
+   (`render_gate.txt`). Also fixed in the chain walk: DIRECT payloads are quadword aligned (point 2's walk skipped them
+   unaligned; no pose changed: gate frames identical). `POP_CHAIN_POSES` renamed `POP_STATE_CHAIN` (0 = poses and shadow
+   lists from the save's memory; gate pixel-identical to the build before step 4c). Not done: blob receivers (+0x20),
+   mirror projectors, CJIdxMesh entries (none seen in these saves).
 5. **Halos and text from the chain.** Halo draws (ALPHA 0x58 with FIX) and 2D text packets taken from the chain instead
    of the stale halo array / not at all; 145139's moon halo must disappear offline (the GS trace has none).
 6. **Glow and mist** (smaller): why the offline glow over-brightens (live does not; compare the post inputs), and draw or

@@ -15,7 +15,8 @@
 // decodes them from their pass packets. Textures: index -> key from the engine's texture list
 // (TEX_List: count 0x6CBC50, entries 0x6CBC58, 16 bytes: key, ..., +10 index), the packs holding them
 // from tools/packindex.py's index.
-// Not replayed yet: halo lens-flare ghosts; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1).
+// Not replayed yet: halo lens-flare ghosts; shadows only on the render-to-texture path (POP_NATIVE_SHADOWS=1; list counts
+// from the save's last chain, POP_STATE_CHAIN=0 = from memory).
 // Save-state layout: tools/popstate.py.
 
 #include "../../overrides/pop_native_live.cpp"
@@ -103,10 +104,27 @@ namespace
     };
     std::unordered_map<uint32_t, std::vector<ChainPose>> g_chainPoses;
     size_t g_chainPosed = 0, g_chainKept = 0;
-    void findChainPoses()
+    // The shadow pass in the same chain (step 4c point 4): per drawn projector, from its caster-buffer FRAME (fbw 4, alpha
+    // only) until the frame's FRAME comes back with colour writes, the CALL targets in order (casters, then receivers)
+    std::vector<std::vector<uint32_t>> g_shadowSeqs;
+    void readLastChain()
     {
         std::vector<std::array<float, 4>> vu(1024, std::array<float, 4>{});
         size_t calls = 0;
+        enum { None, Casters, Receivers } shadow = None;
+        const auto frame = [&](uint64_t v) {
+            const uint32_t fbw = uint32_t(v >> 16) & 0x3F, mask = uint32_t(v >> 32);
+            if (fbw == 4 && mask == 0xFFFFFFu)
+            {
+                if (shadow != Casters)
+                    g_shadowSeqs.emplace_back();
+                shadow = Casters;
+            }
+            else if (shadow == Casters)
+                shadow = Receivers;
+            else if (shadow == Receivers && mask)
+                shadow = None;
+        };
         walkLastChain([&](uint32_t tag, uint32_t id, uint32_t qwc, uint32_t data, uint32_t) {
             // VIF stream of the record: the tag's upper two words (TTE), then its data
             std::vector<uint32_t> w{rd32(tag + 8), rd32(tag + 12)};
@@ -128,7 +146,30 @@ namespace
                 else if (cmd == 0x4A)
                     i += 2 * size_t(num ? num : 256);
                 else if (cmd == 0x50 || cmd == 0x51)
-                    i += 4 * size_t(imm ? imm : 65536);
+                {
+                    // DIRECT: GIF data, quadword aligned (w[2] is the record's first data quadword); A+D packets set
+                    // FRAME_1/2 (0x4C/0x4D), as tools/texcmp.py gif_ad
+                    while ((i + 2) % 4)
+                        ++i;
+                    const size_t end = std::min(w.size(), i + 4 * size_t(imm ? imm : 65536));
+                    for (size_t q = i; q + 4 <= end;)
+                    {
+                        const uint64_t lo = w[q] | uint64_t(w[q + 1]) << 32, hi = w[q + 2] | uint64_t(w[q + 3]) << 32;
+                        const uint32_t nloop = lo & 0x7FFF, flg = (lo >> 58) & 3, nreg = (lo >> 60) & 0xF;
+                        q += 4;
+                        if (flg == 2)
+                        {
+                            q += 4 * size_t(nloop);
+                            continue;
+                        }
+                        if (flg != 0 || nreg != 1 || (hi & 0xF) != 0xE)
+                            break;
+                        for (uint32_t k = 0; k < nloop && q + 4 <= end; ++k, q += 4)
+                            if ((w[q + 2] & 0xFF) == 0x4C || (w[q + 2] & 0xFF) == 0x4D)
+                                frame(w[q] | uint64_t(w[q + 1]) << 32);
+                    }
+                    i = end;
+                }
                 else if (cmd == 0x20)
                     i += 1;
                 else if (cmd == 0x30 || cmd == 0x31)
@@ -136,6 +177,8 @@ namespace
             }
             if (id != 5)
                 return;
+            if (shadow != None)
+                g_shadowSeqs.back().push_back(rd32(tag + 4) & 0x01FFFFF0u);
             ++calls;
             ChainPose p;
             const auto mat = [&](uint32_t q) {
@@ -149,7 +192,7 @@ namespace
                 p.bones.push_back(mat(q));
             g_chainPoses[rd32(tag + 4) & 0x01FFFFF0u].push_back(std::move(p));
         });
-        std::fprintf(stderr, "[state] chain poses: %zu calls, %zu packets\n", calls, g_chainPoses.size());
+        std::fprintf(stderr, "[state] chain: %zu calls, %zu packets, %zu shadow projectors\n", calls, g_chainPoses.size(), g_shadowSeqs.size());
     }
     void chainBones(uint32_t packet, std::vector<std::array<float, 16>> &bones)
     {
@@ -390,8 +433,70 @@ namespace
     // clear (else a mask texture may replace the path) and both lists (counts +4, +0x14) are filled with
     // +0x111 set. FUN_004C2400 multiplies +0x45C for the call and restores it; so does this replay.
     uint64_t g_shadowProjectors = 0;
+    bool g_chainShadows = false;
+    // A list entry's packet (as entryGeometry: CJMeshElement +0x20 + 4 x pass, pass 4 -> 1; ref + 4 x pass, pass 4 -> 0);
+    // 0 for other kinds (CJIdxMesh: not matched, ends the list)
+    uint32_t entryPacket(uint32_t entry)
+    {
+        const uint32_t kind = (*getConstMemPtr(g_ram.data(), entry + 6) & 0x3F) >> 2, obj = rd32(entry) << 4;
+        const uint32_t pass = *getConstMemPtr(g_ram.data(), entry + 0xD) & 0xF;
+        if (kind == 9)
+            return rd32(obj + 0x20 + 4 * (pass == 4 ? 1 : pass)) & 0x01FFFFF0u;
+        return kind == 10 ? rd32(obj + 4 * (pass == 4 ? 0 : pass)) & 0x01FFFFF0u : 0u;
+    }
+    // Step 4c point 4: the save comes after the shadow pass, which zeroes both list counts (FUN_004B8080) and leaves stale
+    // entries of earlier frames behind the real ones. The chain still holds the pass: a projector's casters, then its
+    // receivers, each entry's packet a CALL target in list order (chained elements add CALLs in between). Counts = the
+    // longest list prefix found in order in a projector's sequence; a projector the chain did not draw gets 0 (192521,
+    // whose lists are still filled: all 6 drawn projectors' counts exact, the undrawn #6 0).
+    void chainShadowCounts()
+    {
+        const uint32_t n = rd32(0x70000600u), mask = rd32(0x70000610u);
+        std::vector<bool> used(g_shadowSeqs.size());
+        size_t matched = 0;
+        for (uint32_t i = 0; i < n && i < 32; ++i)
+        {
+            const uint32_t p = rd32(0x70000500u + 4 * i);
+            if (!(mask >> i & 1) || !p)
+                continue;
+            const auto prefix = [&](uint32_t list, const std::vector<uint32_t> &seq, size_t &pos) {
+                uint32_t k = 0;
+                for (; k < 4096; ++k)
+                {
+                    const uint32_t pk = entryPacket(list + 16 * k);
+                    const auto at = pk ? std::find(seq.begin() + pos, seq.end(), pk) : seq.end();
+                    if (at == seq.end())
+                        break;
+                    pos = size_t(at - seq.begin()) + 1;
+                }
+                return k;
+            };
+            const uint32_t first = entryPacket(rd32(p));
+            size_t j = 0;
+            for (; j < g_shadowSeqs.size(); ++j)
+            {
+                const auto &s = g_shadowSeqs[j]; // [0] = the caster setup packet, then the first caster
+                if (!used[j] && first && std::find(s.begin(), s.begin() + std::min<size_t>(2, s.size()), first) != s.begin() + std::min<size_t>(2, s.size()))
+                    break;
+            }
+            uint32_t casters = 0, receivers = 0;
+            if (j < g_shadowSeqs.size())
+            {
+                used[j] = true;
+                ++matched;
+                size_t pos = 0;
+                casters = prefix(rd32(p), g_shadowSeqs[j], pos);
+                receivers = prefix(rd32(p + 0x10), g_shadowSeqs[j], pos);
+            }
+            wr32(p + 4, casters);
+            wr32(p + 0x14, receivers);
+        }
+        std::fprintf(stderr, "[state] shadow lists from the chain: %zu of %zu projector sequences matched\n", matched, g_shadowSeqs.size());
+    }
     void displayShadows(R5900Context *ctx)
     {
+        if (g_chainShadows)
+            chainShadowCounts();
         const uint32_t n = rd32(0x70000600u), mask = rd32(0x70000610u);
         for (uint32_t i = 0; i < n && i < 32; ++i)
         {
@@ -668,10 +773,11 @@ int main(int argc, char **argv)
     alignas(PS2Runtime) static unsigned char storage[sizeof(PS2Runtime)];
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
     pop_native_live::install(runtime);
-    if (const char *e = std::getenv("POP_CHAIN_POSES"); !e || *e != '0') // step 4c: on by default offline
+    if (const char *e = std::getenv("POP_STATE_CHAIN"); !e || *e != '0') // step 4c: on by default offline; 0 = the save's pools / lists
     {
-        findChainPoses();
+        readLastChain();
         pop_native_live::g_chainBones = chainBones;
+        g_chainShadows = true;
     }
 #if POP_SPRITE_VU1
     if (const char *e = std::getenv("POP_NATIVE_P5"); !e || *e != '0') // on by default, as live

@@ -11,6 +11,8 @@ P=$(cd "$(dirname "$0")/../.." && pwd)
 IN=$(cd "$1" && pwd)
 mkdir -p "$2" && OUT=$(cd "$2" && pwd)
 B=$P/game/native-build
+# projected shadows as live (play.ps1 has them on); their lists come from the save's last chain (step 4c point 4)
+export POP_NATIVE_SHADOWS=${POP_NATIVE_SHADOWS:-1}
 echo 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 > "$OUT/identity.clip"
 : > "$OUT/scores.txt"
 cd "$P/game/ps2/disc"
