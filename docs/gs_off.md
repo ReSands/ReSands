@@ -98,7 +98,7 @@ A = play.ps1 defaults, B = + POP_NATIVE_PRESENT=1): no crash, fps and native cou
 fights, platforming, rewind, time freeze, all right by eye. Log `play_20261101_160837.log`: 0 "no native picture",
 6600 frames injected, 0 missed, 0 unexpected; ~60 fps outside boot/load dips. **Next: step 3.**
 
-## Step 3: stop feeding the GS (1 Nov; built, not booted yet)
+## Step 3: stop feeding the GS (1 Nov; closed, user TV check passed)
 **Switch:** `POP_GS_OFF=1` (`play.ps1 -GsOff`; off by default until step 4), implies `POP_NATIVE_PRESENT=1`. Runtime
 patch 46 (`GSHostInject::setDrawsOff`): the GS frontend still runs every register write, image transfer,
 FINISH/SIGNAL and its display bookkeeping, but no draw reaches the raster backend. Chosen over consuming whole GIF
@@ -110,4 +110,12 @@ work (in a pure frame that is only driver switches and the alpha-only glow mask:
 - Accepted for now: frames whose purity ended (~1 in 300, mostly load frames; rare single calls) lose what the GS
   drew; step 4 measures them.
 - Not checked: no known GS -> host readback in the game; a boot will show.
-**Next:** boot (fight save, 192103, cold boot) and a user TV check with `-GsOff`.
+Build note: the PC build compiles the runtime from its own clone `game\recomp-sotc\runtime-src`; after `git am` in
+`C:\tools\PS2Recomp-sotc` check its HEAD out there too (the first `-Fast` build missed patch 46 for that reason).
+**User TV check 1 Nov (passed):** cold boot, `play.ps1 -GsOff`: intro, title, loading, fights, rewind; log
+`play_20261101_165944.log` (copy in `game/analysis/gsoff1101h/`): "GS off" line present, 10,200 frames injected,
+0 missed, 0 unexpected; late lists 10,500 frames, GS calls 0; 2D on the GS 0. One report: the slowed enemy drawn white
+(N30, `docs/native_bugs.md`): not GS-off related (offline native and `-Mode gs` boots of the same save match it;
+census found no GS colour over the enemy); parked until the real-PS2 reference.
+**Next: step 4** (frame-by-frame judging, native vs GS). Default still GS fed: flip `play.ps1` to `-GsOff` by default
+when step 4 / step 5 are through (0.2's goal).
