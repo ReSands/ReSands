@@ -31,6 +31,7 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | LucasPicoli/god-hand-decomp (MIT) | God Hand matching decomp | names/boundaries for the recomp only; not our route (23 Oct) |
 | thiagordsfx/urban-reign-recomp | Urban Reign; root of the God Hand runtime | not read yet: runtime, VU1 compiler, sound, PCSX2 GS bridge, hang dump |
 | moesuito/gt4-staticrecomp (GT4Recomp, MIT) | Gran Turismo 4, release 1.2.3, ps2-web-recomp base | pacing + audio rate control, crash-safe memory card, SDL3 pad, ultrawide, FPU oracle (23 Oct; `docs/reference.md` "GT4Recomp") |
+| matt-pulsipher/GT3-revisited (MIT) | Gran Turismo 3, clean-room **reimplementation** (not a recomp), SDL3, all platforms | for 0.3: own MPEG-2 + IPU intra decoder (`src/video/`, ~1.5k lines, ±2 vs FFmpeg `-idct int`, IEEE 1180 IDCT test), SPU2 reverb with libsd presets + 4-point Gaussian voice mixer + ADSR (`src/audio/`, `docs/behaviour/sound.md`); rules: behaviour in prose, disc tests skip without `GT3R_DISC` (1 Nov) |
 
 ## From the surveys
 

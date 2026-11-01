@@ -152,3 +152,9 @@ on all 11 movies.
 
 Open question for 1.0: FFmpeg's IPU decoder is LGPL (fine to link, as we already link FFmpeg); a
 fully own decoder is not planned (thousands of lines, GPL-contamination risk if written from memory).
+**Revisit (1 Nov):** matt-pulsipher/GT3-revisited (MIT) has an own decoder small enough to adopt:
+`src/video/` (`mpeg2_decoder`, `mpeg2_tables`, `idct`, `ipu`, ~1.5k lines), IPU intra stills via
+`Mpeg2Decoder::decode_ipu_picture`, at most ±2 per sample vs FFmpeg `-idct int` and an IEEE 1180 IDCT test.
+It would drop the FFmpeg dependency and our escape-byte workaround. To adapt: it expects the `.ipu` flag
+byte + per-macroblock marker, our `.INT` frames are bare IDEC streams, so map the movie's CTRL settings
+(DCPR/AS/IVF/QST/MP1) onto its flags. Judge: FFmpeg + the ps2-web-recomp IPU model, as above. Keep its MIT notice.

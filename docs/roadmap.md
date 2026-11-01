@@ -51,7 +51,9 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **0.3 = native sound + native PS2 movie decoder:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2
   emulation); a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; replaces
   the 13 Oct plan to adapt ps2-web-recomp's IPU). Reference: GT4Recomp's frame pacing + audio rate control
-  (`docs/reference.md` "GT4Recomp").
+  (`docs/reference.md` "GT4Recomp"). GT3-revisited (MIT, read 1 Nov): an own MPEG-2/IPU decoder in ~1.5k lines
+  (`docs/movies.md` "Open question") and an SPU2 reverb + Gaussian/ADSR voice mixer as the native mixer's
+  reference (`docs/native_renderer.md` sound step 3).
 - **0.4 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer
   (cheap, could come earlier) and SDL3 pad layer (`docs/reference.md` "GT4Recomp").
   **Faithful rumble (user, 18 Oct; placed in 0.4 on 25 Oct):** the game's DualShock 2 motor commands (small on/off,

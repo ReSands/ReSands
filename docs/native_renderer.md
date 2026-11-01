@@ -623,7 +623,10 @@ Renderer, in order:
 4. **2D**: HUD, menus, text, loading screens, letterbox bars, the movie picture.
 5. **GS off by default** (reference renderer toggle).
 Sound: (1) sound in save-state boots (enables offline sound work from saves); (2) map the DARE/UbiSound calls;
-(3) native mixer (ADPCM, ADSR, pitch, volume/pan, streams, reverb; OpenGOAL ISC as reference); (4) dual render
+(3) native mixer (ADPCM, ADSR, pitch, volume/pan, streams, reverb; OpenGOAL ISC as reference; for reverb,
+4-point Gaussian interpolation and ADSR bits: GT3-revisited MIT `src/audio/spu_reverb.cpp` (the 10 libsd presets
+as register tables, 24 kHz half-band resampling), `voice_mixer.cpp`, prose in `docs/behaviour/sound.md`; check its
+presets against the libsd PoP ships, `SND_fn_eInitSpuReverb`); (4) dual render
 against the SPU2 emulation + glitch detectors + every-sound-alone overnight; the known audio bugs checked on both.
 Then: IOP (pad via SDL incl. rumble later, memory card as native files; the IOP goes once sound is native),
 native frame pacing (EeScheduler/vsync overhead ~15%), 1.0 at 30 fps.
