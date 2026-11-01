@@ -83,7 +83,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
     `docs/native_renderer.md` ~79 and ~623 have only one-liners. Survey other PS2 recomp projects first (`docs/ps2_projects.md`).
   - Test saves: any save with the HUD (185602 shows life bar, sand tanks, tutorial text); fades 191358 (white-out),
     192114 (half black). `POP_NATIVE_WORLD_WHY=1` prints `purity ended: list18 +0xb8` today, which should move on.
-- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 116/669 matched, Qwen queue via the "Qwen DARE
+- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 123/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, 12-function test run; Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".
 

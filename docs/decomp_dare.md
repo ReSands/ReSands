@@ -125,6 +125,36 @@ the compiler check: `docs/roadmap.md` "2.0".
   function first in the queue (removed when the runner picks it up). 115 of 116 passes still match the new header;
   0x189180 (`GetRendererRate`) no longer compiles since the 31 Oct static change (its best.cpp calls it on an object).
 
+- **Run 5 (1 Nov 00:54-10:09, stopped by me for the changes below): 7 of 59 matched (12%)**, 5 NEEDS HEADER CHANGE,
+  47 misses; ~9.5 min per function. Now **123 of 669**. **117 of its 244 rounds did not compile (48%)**; 11
+  functions never compiled. Folders copied to `game/analysis/qwen_pc/`.
+- **After run 5 (1 Nov; ideas partly from fnvdecomp.com's agents.md, the FNV byte-matching project's agent guide):**
+  - **`match.py` diffs aligned (difflib on opcode + registers; same = equal with the relocation mask, branches equal
+    when their targets pair).** The old diff compared instruction k with k: one extra instruction made the rest of
+    the function "differ" (165900: 24 of 35 shown, ~3 real), which also skewed `best.cpp` and the near-miss list.
+    Reports from earlier runs keep their positional scores (`--summary` mixes both until re-judged).
+  - **`dare.h` left out 214 C++ free functions** (`Create_Source`, `Destroy_*`, `KillAndDestroyAsso`: mangled, no
+    class, dropped by the generator), **the classes' own `operator new` / `delete`** (12 / 4), and everything
+    without POP1 DWARF: the PS2 OS layer at 0x199xxx (`SND_fn_vFreeSnd` 68 calls, `SND_fn_vDisplayError` 67,
+    `SND_fn_pvMallocSnd` 38, file and stream functions: `NO_DWARF` in `dare_header.py`, arguments read from the
+    retail bodies) and libc. 110 of 406 callees had no declaration; now only Sony kernel / sif calls (1-2 calls each,
+    left to the prompt: no Sony signatures from memory). Also `typedef struct X_ X` for the 17 `X_` tags (Qwen
+    writes `ASSOCIATION_DESCRIPTION`), `#define NULL 0`, `SndManager::Renderer` static (0x189cc0 never reads a0).
+    Re-judging run 5's compile errors with the new header: only 11 of 117 compile; the rest are Qwen's own member /
+    type guesses (`ulSwitchValue` for `hSwitchValue`, placement new, function-pointer casts), not header gaps.
+  - **Runner:** resumes from the best attempt (was the last, often a compile error); a round worse than the best
+    gets the best back as the base ("start from the best", with the compile error's first words); **matched
+    functions of the same source file** go into the prompt (up to 4 KB, smallest first) as style examples; lesson:
+    `Class::operator new` + constructor = `new Class`.
+  - All 123 passes re-judged: 123 match (0x15d840 and 0x1828c0 lost a hand `extern` that now clashes with dare.h:
+    removed, originals as `best.cpp.pre1101` on the PC; 0x189180 back with `Renderer` static).
+  - Not done: a permuter for the 1-2-instruction misses (decomp-permuter with `match.py` as the compile step), a
+    second compiler build for register-only misses (fnvdecomp's were VC++ 2008 RTM vs SP1), a plan/regions step for
+    big functions (the queue is at ~250 bytes).
+- **Test run (1 Nov from 10:18): the first 12 non-header functions of run 5 again, fresh** (run 5: 4 of 12 matched),
+  `oct28.ps1 -NoShutdown -Addrs ...`, 4 rounds each. Run 5's folders held in `game\analysis\qwen_run5_held\` on
+  the PC: put back afterwards (keep a new PASS). Result: (pending)
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669
