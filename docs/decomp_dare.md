@@ -4,7 +4,20 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (29 Oct afternoon; start here)
+## State (1 Nov evening; start here)
+
+- **124 of 669 matched** (after run 5 and the 1 Nov test run; "Runs" below). **Next: run 6**, prepared 1 Nov
+  (compile-fix calls + second first draft; "Prepared for run 6" under "Runs"), started from the PC shortcut below.
+- **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
+  (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
+  or `no match after 4 more rounds`); for run 6 also the two checks at the end of "Prepared for run 6". For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
+  (retail | yours, `>>` = differs) and `best.cpp`; copy the folders to the Mac with
+  `ssh 10.0.0.202 "cd /d C:\dev\PoP_Decomp\game\analysis\qwen && tar czf - dare_*" | tar xzf - -C game/analysis/qwen_pc`.
+  Resume: the "Qwen DARE audio decomp" desktop shortcut (continues the queue). Shut the PC down when done.
+- **Shortcuts on the PC desktop:** "Qwen DARE audio decomp" (`oct28.ps1`) and "Stop Qwen" (`qwen-stop.ps1`, ends a
+  DARE or VU1 job and llama-server); both are remade by `oct28.ps1 -Shortcut`.
+
+## 29 Oct: run 2 header requests and hand fixes (historical)
 
 - **29 Oct afternoon (Mac + PC compiler, no game boot): 79 of 669 matched**, none waiting on a header change.
   - **Run 2's 9 header requests checked against the retail assembly:** 3 were Qwen misreadings (172380 and 16f500
@@ -42,16 +55,6 @@ the compiler check: `docs/roadmap.md` "2.0".
   (`SND_fn_bIsResourceStreamedSnd`, and after the fixes `SND_fn_vResetStack`, `SND_fn_pvGetStackHead`,
   `SND_fn_vDesInitTheme`, all three run-1 misses). The 18 Qwen passes and every hand match were re-judged under
   the new flag on 28 Oct: all still MATCH.
-- **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
-  (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
-  or `no match after 4 more rounds`). **The first ~10 lines are the run-1 misses retried: compare them with run 1
-  (below) to see whether fixes 1-6 helped.** For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
-  (retail | yours, `>>` = differs) and `best.cpp`; copy the folders to the Mac with
-  `ssh 10.0.0.202 "cd /d C:\dev\PoP_Decomp\game\analysis\qwen && tar czf - dare_*" | tar xzf - -C game/analysis/qwen_pc`.
-  Resume: the "Qwen DARE audio decomp" desktop shortcut (continues the queue). Shut the PC down when done.
-- **Shortcuts on the PC desktop:** "Qwen DARE audio decomp" (`oct28.ps1`) and "Stop Qwen" (`qwen-stop.ps1`, ends a
-  DARE or VU1 job and llama-server); both are remade by `oct28.ps1 -Shortcut`.
-
 ## Runs
 
 - **Smoke test (28 Oct morning):** Qwen matched `GetPos` in round 5 of 8 (~6 min).
@@ -285,10 +288,11 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## Next steps (in order)
 
-1. **Done 29 Oct** (State above): header requests, near misses, Ghidra names.
+1. **Done 29 Oct** ("29 Oct" section above): header requests, near misses, Ghidra names.
 2. **Done 29 Oct evening:** the 16 one-vote callee names the prototype contradicts are dropped from the prompt
    (`WRONG_NAMES` in `qwen_match.py`; the function then shows as `FUN_<addr>`).
-3. Keep the queue running on later nights (41% pass on new functions); run 1's old misses need more than prompt fixes.
+3. Keep the queue running on later nights (pass rate fell from 41% in run 2 to 12% in run 5 as functions grow; run 6
+   tests the compile-fix and second-draft changes); run 1's old misses need more than prompt fixes.
 4. Later: a whole-unit build and link check, splitting the rest of the ELF, decomp-permuter for near-misses.
 
 Built and done (28 Oct): three hand matches; `qwen_match.py` runner; smoke test; queue (`--queue`, `--summary`);

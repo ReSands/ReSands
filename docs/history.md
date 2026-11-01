@@ -970,3 +970,26 @@ too clean a look); rePOP replays Xbox NV2A pushbuffers (GPU emulation, nothing t
   pattern exact, 0 missed frames). Step 4 (loading screen, `closeStream` / `loadingQuads`) is offline-checked only: no scripted
   boot reaches one (save boots freeze it; new game skips it), so step 5 is its first live test (log `[pop:world] loading
   screen: N frames native`). Then `play.ps1` default on and close 0.14.
+
+## Moved from CLAUDE.md on 1 Nov 2026 (evening tidy; verbatim)
+
+- **Where we are (1 Nov): 0.14 closed (user TV check passed, 1 Nov); native 2D layer on by default in `play.ps1` (`-NoNative2D`).**
+  Native renderer on by default in `play.ps1` (world, lit statics, characters, translucents, shadows, P5/P6/P9, late
+  lists, halos, Pinch, post chain; `-NoNative*` switches send parts back to the GS). The frame is "pure" (no GS draw yet)
+  up to the 2D pass in ~2399/2400 frames (192645, 162621 boots 1 Nov): it ends at list +0xB8 (`list18`, `idx`), which is
+  0.14's job. Closed 31 Oct-1 Nov: N18, N19 (skinned instanced refs now posed natively, afa2244), N20, N21, N22 (entries
+  in `docs/native_bugs.md`). Parked: N23 / N26 (halo fps), N27 (needs a real-PS2 reference). Render gate (13 GS-only
+  saves, `game/analysis/gsref1027/states/`) unchanged by the N19 fix (pixel-identical). Docs: `docs/native_renderer.md`,
+  `docs/native_bugs.md`, `docs/renderer_audit.md`.
+- **0.1:** crash 1 closed 30 Oct (fix 3b80b66; ~20 min fight session clean, `docs/saves_1021.md`). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
+- **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
+  until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
+  ground truth. Render-gate reference saves must be GS-only.
+- **Next: 0.2** (GS off by default; plan + progress `docs/gs_off.md`). Step 1 (GS census, `POP_NATIVE_GS_CENSUS`) 1 Nov:
+  pure game frames draw only alpha on the GS; title menu and intro movie draw no colour either. Fallbacks fixed and
+  user-checked 1 Nov: blended Pinch native (6054f84), all-clipped water skipped natively (4e7a046); left: rare single
+  calls (~1 per session, judge in step 4). Step 2 (native presenter, `POP_NATIVE_PRESENT=1`, patch 45) closed 1 Nov. Step 3 (GS off, `POP_GS_OFF=1` / `play.ps1 -GsOff`, patch 46) closed 1 Nov. **Step 4 (native vs GS): first run 1 Nov (fa8f097: scenery, menus, movies match; moon blob gone; fights not comparable across two boots). Step 4b first run 1 Nov (8cf4778, `docs/gs_off.md` "Step 4b, first run"): effects/scenery match on the same frame; fights not same-frame offline (character poses ahead of the saved picture). Step 4c (offline frame = the save's last chain; plan + results `docs/gs_off.md` "Step 4c plan"): points 1-5 done 1 Nov (poses, reference = the buffer the chain drew via `popstate --drawn`, shadow lists, halos, text all from the chain offline; switch `POP_STATE_CHAIN=0`; gate pixel-identical with it off, re-based with it on). Review of points 2-5 done (2c54aaf); point 6 done (glow model = the game's blits; mist drawn since 30 Oct); leftovers done (00ec530: 2D after the CPU post, emptied 2D list from stale entries, lit passes from the chain). PC play build (rebuilt 1 Nov evening) has points 2-6 and the lit-pass hook (00ec530); booted 6 saves for the camera check, no visual problems reported.** **Decision (user, 1 Nov): step 5 and the default flip wait for the real-PS2 pipeline (point 7, when the PS2 is in hand); list of hardware questions in `docs/gs_off.md` step 5. Progressive-scan crash closed 1 Nov (patch 48: PS2Recomp's `sceGsResetGraph` stand-in wrote its GParam over a live draw list at scratchpad + 0x100; `docs/native_bugs.md`). Camera X in fixed views closed 1 Nov (21ab2c7, zone type; `docs/saves_1021.md` bug 1). 00ec530 reviewed 1 Nov (ship; its live hook only acts offline, `g_chainBones` is null in the game). **Next (user, 1 Nov): set up the real PS2 and the pipeline to test on it (step 5 point 7, `docs/gs_off.md`); meanwhile the DARE decomp runs overnight (byte-matched functions for 0.3).** Parked (`docs/native_bugs.md`):
+  N28 (Retry fade pop-in), N30 (slowed enemy white vs sandy): both for the real PS2.
+- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); run 6 prepared: compile-fix calls + second first draft (team-solve ideas); Qwen queue via the "Qwen DARE
+  audio decomp" shortcut). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
+  on the Mac): `docs/native_bugs.md` "Side jobs".

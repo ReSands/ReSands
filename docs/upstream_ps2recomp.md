@@ -6,6 +6,8 @@ up Prince of Persia: The Sands of Time (SLUS-20743); "upstream" = ran-j/PS2Recom
 instructions, by running our instruction tests (`tools/mmitest/run.sh <checkout>`) against a build of
 it. Our fixes are in `tools/patches/` (upstream-based `pop` branch) and `tools/patches/pop-sotc/`
 (TaylorNAlbarnaz `sotc-port` based branch); patch numbers below refer to those.
+Older drafts (13 Oct, against 2c5fbb9) in `docs/upstream/`: the first issue list (its items 8 HLE gaps and 9
+`sceSdRemote*` are not in this table) and the MMI issue text with the per-instruction table.
 
 ## Translation (recompiler)
 
