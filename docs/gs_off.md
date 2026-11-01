@@ -265,6 +265,19 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    mirror projectors, CJIdxMesh entries (none seen in these saves).
 5. **Halos and text from the chain.** Halo draws (ALPHA 0x58 with FIX) and 2D text packets taken from the chain instead
    of the stale halo array / not at all; 145139's moon halo must disappear offline (the GS trace has none).
+   **Done (1 Nov):** both from the chain, offline only (live hooks null). *Halos:* a drawn halo's texture pass is
+   ALPHA 0x58 with FIX 0x80, a sprite in 32-pixel strips; `readLastChain` (now a full GIF register parse: A+D, PACKED
+   XYZ2 / XYZF2, REGLIST) keeps each one's bounding box, and `haloRecord` asks `g_haloFilter` with its halo square
+   (`ox0..oy1`): kept only if a chain square lies within 2 px, else dropped (stale entry or culled by the game). 145139:
+   the moon halo gone (gate vu1 7.02 -> 4.33); 162621: the sun kept, 11 stale entries dropped; 184926 one kept. *Text:*
+   each text slot goes out as a CNT record holding one GIF tag (PACKED, ST RGBA XYZ2 ST XYZ2 = 0x52512, nloop = letters)
+   and the letters (0x50 bytes each). Offline `textBegin` works out the slots although the string is marked drawn, and
+   each slot takes the next chain record with its letter count (`g_chainTextSlot`); the letters go through
+   `letterRecord` (now takes the four ST floats; the live callers read them as before). The save's own slot cursors
+   are no use: in 185602_2 they point into the next frame's buffer. 185602_1/2/3: the tutorial text back, in place
+   (vu1 6.66 -> 5.41, 14.07 -> 12.56, 5.20 -> 3.98). Gate with `POP_STATE_CHAIN=0` (shadows off): pixel-identical to the
+   build before step 4c. Open: 174131 has its HUD and text in the chain but list +0xB8 is empty in the save, so
+   offline draws no 2D at all (the whole list would have to come from the chain); text inside 3D lists stays as before.
 6. **Glow and mist** (smaller): why the offline glow over-brightens (live does not; compare the post inputs), and draw or
    rule out the +0x88 GFX particles.
 7. **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
