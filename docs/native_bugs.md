@@ -591,6 +591,14 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   (user A/B, same save), so it is the game's own effect, not ours. The four user saves (`play_20261101_155605` ..
   `155619`, copies in `game/analysis/saves1101/`) are mid-rewind, flash not caught, Pinch +0x74 0xFF in all. Re-check on a
   real PS2 / video with N15 / N17 / N27.
+- **N30 (open; user 1 Nov, GS off): enemy slowed by the dagger drawn bone white, "no skin".** Save 170233 (user circled
+  the knife enemy right of centre; `game/analysis/gsoff1101h/`, also 170118), `play.ps1 -GsOff`, log
+  `play_20261101_165944.log` (all draws native, 0 missed). Offline `pop_state_frame` shows the same white, so it is in
+  the native path, not the GS-off switch. The 25 Oct save 134636 (GS still running) already differs: GS picture keeps
+  the orange sash / dark trousers, native all pale (`gsoff1101h/refout/crop_*.png`). The RAM palette (N1 recolour) is
+  bright tan (mean 174/145/113 vs disc 98/79/64) and the GS's VRAM holds that same palette, so the colours match on both
+  sides; open: an extra GS pass over the enemy in hybrid frames, or the GS's CLUT buffer not reloading. Next: user boot
+  `play.ps1 -Save play_20261101_170233 -Env 'POP_NATIVE_GS_CENSUS=1'` (GS on: does it look right? any colour draws?).
 
 ## Storage of captures (agreed with the user 24 Oct)
 
