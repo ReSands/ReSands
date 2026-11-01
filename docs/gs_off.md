@@ -213,6 +213,18 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    256-wide alpha-only scratch passes (fbw 4, mask 0xFFFFFF). The displayed 0x8c is the frame before: 0x0 vs 0x8c in
    134636_1 differ only in the characters (scenery and HUD identical; mean 6.0, 155110_1 2.2). So the reference
    picture for point 3 is `--fbp 0`, and `score_saves.sh`'s `--prev` (displayed = previous frame) stays right.
+   **Done (1 Nov):** `state_frame.cpp` walks the last chain once (`walkLastChain`, shared with the particle finder),
+   keeps per CALL target the VU1 matrices in effect (VU 0, VU 0x388 + 4k) and sets `pop_native_live::g_chainBones`;
+   `poseSkinned` (new `packet` argument from the element / skinned-ref call sites) hands it the pool's bones and takes
+   the CALL of that packet whose bones lie nearest (instances metres apart, a frame of motion centimetres; over 0.5 m
+   mean keeps the pool). Palette draws and rigid no-palette parts (held clubs) both. `POP_CHAIN_POSES=0` = old
+   behaviour. Fight saves: 513 of 514 skinned draws posed from the chain (4 saves). Score against fbp 0 (pool -> chain):
+   134636_1 10.81 -> 7.14, 155110_1 10.34 -> 9.52, 115837_2 13.79 -> 13.19, 185602_2 14.41 -> 13.99; characters line up,
+   what is left is shadows, flashes and hint text (points 4-6). Open: one club in 134636_1 still ahead (an objectSpace
+   lit pass: drawn with `poolMatrix(index)`, which has no packet to match by). Render gate: with `POP_CHAIN_POSES=0` the
+   13 gate saves are pixel-identical to the build before (live path unchanged: the hook is null in the game); with it
+   on, every one scores the same or better even against the old (displayed) reference. Live runtime not rebuilt (the
+   change there is a null hook + a default argument; compiled into the offline tools on the Mac).
 2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
    skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
    (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if

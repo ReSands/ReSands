@@ -62,6 +62,128 @@ namespace
     void noop(uint8_t *, R5900Context *, PS2Runtime *) {}
     void gfxEntry(uint8_t *, R5900Context *ctx, PS2Runtime *);
 
+    // The save's last kicked VIF1 chain (as tools/statechain.py): +0xF4 of the graphics object is the buffer being built,
+    // the other one was kicked. f(tag address, tag id, qwc, data address, address after the record) per record.
+    template <class F> void walkLastChain(F f)
+    {
+        const uint32_t g = 0x70000620u;
+        uint32_t addr = rd32(g + 0xE4 + 4 * (rd32(g + 0xF4) ^ 1));
+        std::vector<uint32_t> stack;
+        for (int rec = 0; rec < 200000; ++rec)
+        {
+            const uint32_t t0 = rd32(addr), qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7, ta = rd32(addr + 4) & 0x7FFFFFF0u;
+            const bool refType = id == 0 || id == 3 || id == 4;
+            const uint32_t after = addr + 16 + (refType ? 0 : qwc * 16);
+            f(addr, id, qwc, refType ? ta : addr + 16, after);
+            if (id == 0 || id == 7)
+                break;
+            if (id == 2)
+                addr = ta;
+            else if (id == 5)
+                stack.push_back(after), addr = ta;
+            else if (id == 6)
+            {
+                if (stack.empty())
+                    break;
+                addr = stack.back();
+                stack.pop_back();
+            }
+            else
+                addr = after;
+        }
+    }
+
+    // Step 4c (docs/gs_off.md): the save's matrix pools run a frame ahead of its last chain, so characters are posed with
+    // the bones that chain uploaded (VU1 data: VU 0 the single-bone / object matrix, VU 0x388 + 4k bone k). Per CALL
+    // target (the draw's packet) the VU1 matrices in effect at the CALL; a draw takes the CALL whose bones lie nearest to
+    // the pool's (instances of one packet are metres apart, a frame of motion centimetres).
+    struct ChainPose
+    {
+        std::vector<std::array<float, 16>> bones; // [0] = VU 0, [1 + k] = VU 0x388 + 4k
+    };
+    std::unordered_map<uint32_t, std::vector<ChainPose>> g_chainPoses;
+    size_t g_chainPosed = 0, g_chainKept = 0;
+    void findChainPoses()
+    {
+        std::vector<std::array<float, 4>> vu(1024, std::array<float, 4>{});
+        size_t calls = 0;
+        walkLastChain([&](uint32_t tag, uint32_t id, uint32_t qwc, uint32_t data, uint32_t) {
+            // VIF stream of the record: the tag's upper two words (TTE), then its data
+            std::vector<uint32_t> w{rd32(tag + 8), rd32(tag + 12)};
+            for (uint32_t k = 0; k < qwc * 4; ++k)
+                w.push_back(rd32(data + 4 * k));
+            for (size_t i = 0; i < w.size();)
+            {
+                const uint32_t c = w[i++], cmd = (c >> 24) & 0x7F, num = (c >> 16) & 0xFF, imm = c & 0xFFFF;
+                if (cmd >= 0x60)
+                {
+                    const uint32_t n = num ? num : 256, vl = cmd & 3, vn = (cmd >> 2) & 3;
+                    const uint32_t bits = vl == 3 ? 16 : (32u >> vl) * (vn + 1);
+                    const size_t words = (size_t(n) * bits + 31) / 32;
+                    if ((cmd & 0xF) == 0xC && !(imm & 0x8000)) // V4-32, not relative to TOPS: matrices, constants
+                        for (uint32_t q = 0; q < n && i + 4 * q + 3 < w.size(); ++q)
+                            std::memcpy(vu[(imm + q) & 0x3FF].data(), &w[i + 4 * q], 16);
+                    i += words;
+                }
+                else if (cmd == 0x4A)
+                    i += 2 * size_t(num ? num : 256);
+                else if (cmd == 0x50 || cmd == 0x51)
+                    i += 4 * size_t(imm ? imm : 65536);
+                else if (cmd == 0x20)
+                    i += 1;
+                else if (cmd == 0x30 || cmd == 0x31)
+                    i += 4;
+            }
+            if (id != 5)
+                return;
+            ++calls;
+            ChainPose p;
+            const auto mat = [&](uint32_t q) {
+                std::array<float, 16> m;
+                for (int r = 0; r < 4; ++r)
+                    std::memcpy(&m[4 * r], vu[q + r].data(), 16);
+                return m;
+            };
+            p.bones.push_back(mat(0));
+            for (uint32_t q = 0x388; q + 3 < 1024; q += 4)
+                p.bones.push_back(mat(q));
+            g_chainPoses[rd32(tag + 4) & 0x01FFFFF0u].push_back(std::move(p));
+        });
+        std::fprintf(stderr, "[state] chain poses: %zu calls, %zu packets\n", calls, g_chainPoses.size());
+    }
+    void chainBones(uint32_t packet, std::vector<std::array<float, 16>> &bones)
+    {
+        const auto it = g_chainPoses.find(packet);
+        const size_t n = bones.size();
+        if (it == g_chainPoses.end() || n > 30) // 30 bones fill VU 0x388..0x3FF
+        {
+            ++g_chainKept;
+            return;
+        }
+        const ChainPose *best = nullptr;
+        float bestD = 0;
+        for (const ChainPose &p : it->second)
+        {
+            float d = 0;
+            for (size_t k = 0; k < n; ++k)
+            {
+                const auto &c = p.bones[n < 2 ? 0 : 1 + k];
+                d += std::hypot(c[12] - bones[k][12], c[13] - bones[k][13], c[14] - bones[k][14]);
+            }
+            if (!best || d < bestD)
+                best = &p, bestD = d;
+        }
+        // shortcut: 0.5 m mean bone distance tells another instance from this one's last frame; tune if fast moves miss
+        if (!best || bestD / float(n) > 0.5f)
+        {
+            ++g_chainKept;
+            return;
+        }
+        for (size_t k = 0; k < n; ++k)
+            bones[k] = best->bones[n < 2 ? 0 : 1 + k];
+        ++g_chainPosed;
+    }
+
 #if POP_SPRITE_VU1
     // GFX particle packets in the save's last VIF1 chain (as tools/statechain.py walks it): each run of SetParticleEnv
     // records (CNT, UNPACK V4-32 0x17 qw at 0) and CGraphicParticle batches (CNT, STCYCL 4/4, FLUSHA, ..., positions at
@@ -71,14 +193,9 @@ namespace
     size_t g_particleNext = 0;
     void findParticlePackets()
     {
-        const uint32_t g = 0x70000620u;
-        uint32_t addr = rd32(g + 0xE4 + 4 * (rd32(g + 0xF4) ^ 1)), start = 0, end = 0, lastCount = 0;
-        std::vector<uint32_t> stack;
-        for (int rec = 0; rec < 200000; ++rec)
-        {
-            const uint32_t t0 = rd32(addr), qwc = t0 & 0xFFFF, id = (t0 >> 28) & 7, ta = rd32(addr + 4) & 0x7FFFFFF0u;
-            const bool refType = id == 0 || id == 3 || id == 4, cnt = id == 1;
-            const uint32_t after = addr + 16 + (refType ? 0 : qwc * 16);
+        uint32_t start = 0, end = 0, lastCount = 0;
+        walkLastChain([&](uint32_t addr, uint32_t id, uint32_t, uint32_t, uint32_t after) {
+            const bool cnt = id == 1;
             const bool env = cnt && rd32(addr + 12) == 0x6C170000u;
             const bool batch = cnt && rd32(addr + 8) == 0x01000404u && rd32(addr + 16) == 0x13000000u && (rd32(addr + 32) & 0xFB00FFFFu) == 0x68008000u;
             if (env && start && lastCount != 200 && lastCount != 150)
@@ -99,22 +216,7 @@ namespace
                 g_particleRanges.emplace_back(start, end);
                 start = 0;
             }
-            if (id == 0 || id == 7)
-                break;
-            if (id == 2)
-                addr = ta;
-            else if (id == 5)
-                stack.push_back(after), addr = ta;
-            else if (id == 6)
-            {
-                if (stack.empty())
-                    break;
-                addr = stack.back();
-                stack.pop_back();
-            }
-            else
-                addr = after;
-        }
+        });
         if (start)
             g_particleRanges.emplace_back(start, end);
         std::fprintf(stderr, "[state] particle packets in the last chain: %zu draws\n", g_particleRanges.size());
@@ -566,6 +668,11 @@ int main(int argc, char **argv)
     alignas(PS2Runtime) static unsigned char storage[sizeof(PS2Runtime)];
     PS2Runtime &runtime = *reinterpret_cast<PS2Runtime *>(storage);
     pop_native_live::install(runtime);
+    if (const char *e = std::getenv("POP_CHAIN_POSES"); !e || *e != '0') // step 4c: on by default offline
+    {
+        findChainPoses();
+        pop_native_live::g_chainBones = chainBones;
+    }
 #if POP_SPRITE_VU1
     if (const char *e = std::getenv("POP_NATIVE_P5"); !e || *e != '0') // on by default, as live
     {
@@ -752,6 +859,7 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "[state] lightmap draws %llu, from packets %llu, instanced lightmaps %llu\n",
                  (unsigned long long)pop_native_live::g_stats.drawsLightmap, (unsigned long long)pop_native_live::g_stats.drawsFromPacket,
                  (unsigned long long)g_lightmapRefs);
+    std::fprintf(stderr, "[state] skinned draws posed from the chain: %zu, kept on the pool: %zu\n", g_chainPosed, g_chainKept);
     std::fprintf(stderr, "[state] lit static passes native: lit %llu, env %llu\n", (unsigned long long)pop_native_live::g_worldStats.litNative,
                  (unsigned long long)pop_native_live::g_worldStats.envNative);
     return 0;

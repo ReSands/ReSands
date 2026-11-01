@@ -120,6 +120,9 @@ namespace pop_hdtex
 
 namespace pop_native_live
 {
+    // offline only (pop_state_frame, step 4c): replaces a skinned draw's bones (palette order; one bone = the single-bone
+    // matrix) by those the save's last chain drew the packet with, which run a frame behind the pool. Null in the game.
+    void (*g_chainBones)(uint32_t packet, std::vector<std::array<float, 16>> &bones) = nullptr;
     void onBigfileLookup(uint32_t key); // below: load a world pack once
 
     namespace
@@ -796,7 +799,7 @@ namespace pop_native_live
         // a draw with the object's model matrix, as the base pass is drawn: the same transform gives the second layer the
         // base's exact depth (pre-transformed on the CPU it z-fought with it: mirrors flickering, user 22 Oct)
         bool poseSkinned(uint8_t *rdram, uint32_t element, uint32_t index, const std::vector<pop_assets::SkinnedBatch> &bind,
-                         std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr, bool objectSpace = false)
+                         std::vector<pop_assets::Batch> &out, const LightEnv *light = nullptr, bool objectSpace = false, uint32_t packet = 0)
         {
             const uint32_t pal = guestAny(rdram, element + 0x48);
             const uint32_t n = pal ? guest8(rdram, pal) : 0;
@@ -827,6 +830,8 @@ namespace pop_native_live
                     }
                 }
             }
+            if (g_chainBones && packet && (pal || !objectSpace)) // objectSpace draws take poolMatrix (not posed here)
+                g_chainBones(packet & 0x01FFFFF0u, bones);
             for (const auto &b : bind)
             {
                 const size_t nv = b.positions.size() / 3;
@@ -1446,7 +1451,7 @@ namespace pop_native_live
                                 bind->second.clear();
                             std::vector<pop_assets::Batch> posed;
                             const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
-                            if (!bind->second.empty() && poseSkinned(rdram, el, index, bind->second, posed, &light))
+                            if (!bind->second.empty() && poseSkinned(rdram, el, index, bind->second, posed, &light, false, packet))
                             {
                                 DrawMaterial dm = currentMaterial(rdram);
                                 dm.hasUvm = false; // the skin driver has no UV matrix
@@ -3663,7 +3668,8 @@ namespace pop_native_live
                 {
                     std::vector<pop_assets::Batch> posed;
                     const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
-                    if (poseSkinned(rdram, element, index, sk->second, posed, &light))
+                    if (poseSkinned(rdram, element, index, sk->second, posed, &light, false,
+                                    guest32(rdram, element + 0x20 + 4 * (pass == 4 ? 1 : pass))))
                     {
                         static const bool skinLog = std::getenv("POP_NATIVE_SKINLOG") != nullptr;
                         if (skinLog)
