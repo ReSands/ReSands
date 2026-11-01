@@ -3119,15 +3119,49 @@ namespace pop_native_live
             m.native = twoDNative();
             return m.native;
         }
+        // the queuing call draws too (boot 1 Nov: its GS sprite landed over the whole native picture, the save menu at half
+        // brightness): natively it queues as the original does (FUN_004B79C0: the table entry; FUN_004BC800: a kind 11 entry
+        // in the state's list) and draws the rectangle now
+        void rectQueue(uint8_t *rdram, const float f[4], uint32_t colour, uint32_t mode)
+        {
+            const uint32_t table = 0x006DF6E0u, n = guestAny(rdram, table + 0x180u), e = table + n * 0x18u;
+            std::memcpy(getMemPtr(rdram, e), f, 16);
+            std::memcpy(getMemPtr(rdram, e + 0x10u), &colour, 4);
+            std::memcpy(getMemPtr(rdram, e + 0x14u), &mode, 4);
+            const uint32_t next = n + 1;
+            std::memcpy(getMemPtr(rdram, table + 0x180u), &next, 4);
+            const uint32_t list = guestAny(rdram, 0x700000C0u + 0xD8u + 4u * guestAny(rdram, 0x700000D8u));
+            const uint32_t count = guestAny(rdram, list + 4);
+            if (count + 1 > guestAny(rdram, list + 8))
+                return;
+            const uint32_t entry = guestAny(rdram, list) + 16u * count;
+            uint64_t word;
+            std::memcpy(&word, getConstMemPtr(rdram, entry), 8);
+            word = (word & 0xFFFFFFFFF0000000ull) | (n & 0xFFFFu);
+            std::memcpy(getMemPtr(rdram, entry), &word, 8);
+            *getMemPtr(rdram, entry + 6) = uint8_t((guest8(rdram, entry + 6) & 0xC3u) | 0x2Cu);
+            const uint32_t more = count + 1;
+            std::memcpy(getMemPtr(rdram, list + 4), &more, 4);
+        }
         void rectangle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const bool queue = guestAny(rdram, 0x700000D8u) == 10u && guest8(rdram, 0x700000E8u) == 0;
-            if (!queue && g_frameCapturing)
+            if (g_frameCapturing)
             {
                 float f[4];
                 std::memcpy(f, &ctx->f[12], sizeof f);
-                if (rectRecord(rdram, f[0], f[1], f[2], f[3], getRegU32(ctx, 4), getRegU32(ctx, 5)))
+                const uint32_t colour = getRegU32(ctx, 4), mode = getRegU32(ctx, 5);
+                if (queue && !twoDNative())
+                {
+                    worldOnGs(rdram, "rect");
+                    return g_origRect(rdram, ctx, runtime);
+                }
+                if (rectRecord(rdram, f[0], f[1], f[2], f[3], colour, mode))
+                {
+                    if (queue)
+                        rectQueue(rdram, f, colour, mode);
                     return;
+                }
                 worldOnGs(rdram, "rect");
             }
             g_origRect(rdram, ctx, runtime);
