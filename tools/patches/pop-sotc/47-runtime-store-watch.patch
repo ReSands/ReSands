@@ -1,0 +1,108 @@
+From 9206c124c4595ee42bc6d39d5e17a118d0a83ce9 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 1 Nov 2026 20:11:03 +0000
+Subject: [PATCH] runtime: POP_WATCH_STORE / POP_WATCH_RAM (+ POP_WATCH_MIN)
+ log writes to one guest word
+
+---
+ ps2xRuntime/src/lib/ps2_runtime.cpp | 49 +++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 1ddfffa..0fbbfec 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1540,6 +1540,34 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+     }
+ }
+ 
++// POP_WATCH_RAM=<hex addr>: at every guest call/jump between functions, compare that word (main RAM or scratchpad
++// 0x70000000+) with its last
++// value and log the branch where it first became >= POP_WATCH_MIN (the write lies in the code since the previous
++// branch, or is a DMA); first 20 hits.
++static void popWatchRam(const uint8_t *rdram, uint32_t targetPc, uint32_t sourcePc, const R5900Context *ctx)
++{
++    static const uint32_t watch = [] { const char *e = std::getenv("POP_WATCH_RAM"); return e ? (uint32_t)std::strtoul(e, nullptr, 16) & ~3u : 0u; }();
++    static const uint32_t minValue = [] { const char *e = std::getenv("POP_WATCH_MIN"); return e ? (uint32_t)std::strtoul(e, nullptr, 16) : 0u; }();
++    static std::atomic<uint32_t> last{0};
++    static std::atomic<uint32_t> lastSource{0};
++    static std::atomic<int> hits{0};
++    if (!watch)
++        return;
++    uint32_t value;
++    const bool scratch = (watch & 0xFFFFC000u) == 0x70000000u;
++    const uint8_t *base = scratch ? ps2GetScratchpadHostPtr() : rdram;
++    if (!base)
++        return;
++    std::memcpy(&value, base + (scratch ? watch & 0x3FFFu : watch & PS2_RAM_MASK), 4);
++    const uint32_t old = last.exchange(value);
++    const uint32_t previousSource = lastSource.exchange(sourcePc);
++    if (value == old || value < minValue || hits.fetch_add(1) >= 20)
++        return;
++    std::cerr << std::hex << "[pop:watch] ram " << watch << " " << old << " -> " << value << " seen at branch " << sourcePc
++              << " -> " << targetPc << " (previous branch " << previousSource << ") ra=" << (uint32_t)_mm_cvtsi128_si32(ctx->r[31])
++              << std::dec << std::endl;
++}
++
+ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+                                      R5900Context *ctx,
+                                      uint32_t targetPc,
+@@ -1548,6 +1576,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+                                      GuestBranchKind kind,
+                                      const char *debugName)
+ {
++    popWatchRam(rdram, targetPc, sourcePc, ctx);
+     ctx->pc = targetPc;
+     const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
+ 
+@@ -2289,6 +2318,23 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+     }
+ }
+ 
++// POP_WATCH_STORE=<hex addr>: log guest stores (sw/sd/sq through Store32/64/128, i.e. scratchpad and I/O, not
++// main RAM) whose 32-bit word at that address becomes >= POP_WATCH_MIN (hex, default 0); first 20 hits.
++static void popWatchStore(const R5900Context *ctx, uint32_t vaddr, uint32_t size, uint64_t lo, uint64_t hi)
++{
++    static const uint32_t watch = [] { const char *e = std::getenv("POP_WATCH_STORE"); return e ? (uint32_t)std::strtoul(e, nullptr, 16) : 0u; }();
++    static const uint32_t minValue = [] { const char *e = std::getenv("POP_WATCH_MIN"); return e ? (uint32_t)std::strtoul(e, nullptr, 16) : 0u; }();
++    static std::atomic<int> hits{0};
++    if (!watch || watch < vaddr || watch + 4 > vaddr + size)
++        return;
++    const uint32_t at = watch - vaddr;
++    const uint32_t value = (uint32_t)(at < 8 ? lo >> (at * 8) : hi >> ((at - 8) * 8));
++    if (value < minValue || hits.fetch_add(1) >= 20)
++        return;
++    std::cerr << std::hex << "[pop:watch] store" << std::dec << size * 8 << std::hex << " " << vaddr << " = " << value
++              << " pc=" << ctx->pc << " ra=" << (uint32_t)_mm_cvtsi128_si32(ctx->r[31]) << std::dec << std::endl;
++}
++
+ void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8_t value)
+ {
+     ps2TraceGuestWrite(rdram, vaddr, 1u, value, 0u, "WRITE8", ctx);
+@@ -2318,6 +2364,7 @@ void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint32_t value)
+ {
+     ps2TraceGuestWrite(rdram, vaddr, 4u, value, 0u, "WRITE32", ctx);
++    popWatchStore(ctx, vaddr, 4u, value, 0u);
+     try
+     {
+         m_memory.write32(vaddr, value);
+@@ -2332,6 +2379,7 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint64_t value)
+ {
+     ps2TraceGuestWrite(rdram, vaddr, 8u, value, 0u, "WRITE64", ctx);
++    popWatchStore(ctx, vaddr, 8u, value, 0u);
+     try
+     {
+         m_memory.write64(vaddr, value);
+@@ -2347,6 +2395,7 @@ void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m
+     alignas(16) uint64_t _parts[2];
+     _mm_storeu_si128(reinterpret_cast<__m128i *>(_parts), value);
+     ps2TraceGuestWrite(rdram, vaddr & ~0xFu, 16u, _parts[0], _parts[1], "WRITE128", ctx);
++    popWatchStore(ctx, vaddr & ~0xFu, 16u, _parts[0], _parts[1]);
+     try
+     {
+         m_memory.write128(vaddr & ~0xFu, value);
+-- 
+2.55.0.windows.5
+

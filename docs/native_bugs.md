@@ -807,8 +807,24 @@ MotionSmooth, FixBlend, Spiral, SmartBlur). FUN_004AF940's floats: f12..f15 = th
   **no GS reference yet**: needs a GS-only save while the power of haste runs (the live ramp's range of p is not known).
 
 
-- **Progressive scan crash (1 Nov; next job, user 1 Nov: before the next PC rebuild):** choosing progressive scan in the title menu (step 5 boot,
+- **Progressive scan crash (1 Nov): CLOSED 1 Nov (patch 48; user check passed, GS-only, 202833).** choosing progressive scan in the title menu (step 5 boot,
   `POP_NATIVE_2D=1`) -> black screen + looping garbage audio. Log `play_20261101_134251.log` ends with
   `guest-branch:missing-target` JALR from 0x16AA0C to 0x3F091440 (a float, not code; a0 = 0xC22DA2F1 also a float):
   a corrupt function pointer, game-side. Not yet known whether it happens on the GS-only build (`-Mode gs`) or on a
   real PS2; check that first.
+  **GS-only too (1 Nov 20:06, `play_20261101_200605_gs.log`, save `game/analysis/pscan1101/pscan_200605.state`):**
+  black screen, menu music keeps playing, no frames after the switch. Not our native code. The save: main thread
+  in the 128-bit quicksort 0x4B78C0 (via `CElementList::Render` 0x4B9440 -> vtable sort 0x4BA640) on the list
+  header at scratchpad 0x700000FC {array 0x7308C0, **count 0x03015000**, cap 0x80, vtbl 0x654A00}; normal saves
+  have count ~0xE. One word corrupted (neighbours normal), so the game sorts ~50M qwords from 0x7308C0, and its
+  swaps wrap through all RAM: that is what overwrote the sound object at 0x6A1D38 with floats in the native run.
+  **Cause:** PS2Recomp's C++ stand-in for `sceGsResetGraph` (`Kernel/Stubs/GS.cpp`) copied its GParam block
+  `{u8 interlace, omode, ffmode, version}` to scratchpad + 0x100 (`writeGsGParamToScratch`): 480p `{0,0x50,1,3}` =
+  0x03015000, 480i `{1,2,0,3}` = 0x03000201 (harmless at boot, the lists are set up after). Found with patch 47
+  (`POP_WATCH_RAM=<addr>` checks one word at every guest branch, RAM or scratchpad; `POP_WATCH_STORE=<addr>` logs
+  guest sw/sd/sq through Store32/64/128; both + `POP_WATCH_MIN`): the word turned bad across the ResetGraph call in
+  the video-mode function `FUN_004A4880` (0x4A48F0). Nothing reads that copy: the game's own `sceGsGetGParam`
+  (0x106710, block at 0x4D6CE0, u16 fields) is only called from inside the stubbed ResetGraph, and the stand-ins
+  share `g_gparam`. **Fix: patch 48** drops the copy from the ResetGraph stand-in. Upstream (e563698) still has it.
+  Check run `play_20261101_202833_gs.log`: no watch hits, fps ~60, the user's menu/game check clean. The native
+  build gets it with the next PC rebuild.

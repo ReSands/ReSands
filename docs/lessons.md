@@ -326,3 +326,8 @@ mode boots the game check for an active display first, so a mistake like this ca
   offline for days; once the offline frame came from the save's last chain, the chain's GIF blits (`tools/chaingif.py`) and
   the intermediate levels still in VRAM showed the model was right and the inputs (stale halos, a frame-behind
   reference) were wrong. Compare levels from the game's own previous level, so input differences drop out.
+- **A corrupt value with no guest store behind it: watch the word at every guest branch.** The progressive-scan crash
+  (1 Nov) was a draw-list count in scratchpad overwritten by host C++ (a PS2Recomp stand-in), which a store hook never
+  sees. `POP_WATCH_RAM=<addr>` (patch 47) compares one word at every `dispatchGuestBranch` and names the call where it
+  changed: three boots from symptom to cause. PS2Recomp stand-ins that write guest memory at fixed addresses are a
+  suspect class of their own (`sceGsResetGraph` -> scratchpad + 0x100).

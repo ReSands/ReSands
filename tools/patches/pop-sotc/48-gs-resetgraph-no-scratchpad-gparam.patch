@@ -1,0 +1,27 @@
+From b9e3db329ace2f419c3f47ad0b7dca6e72f70cd5 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 1 Nov 2026 20:25:14 +0000
+Subject: [PATCH] stubs: sceGsResetGraph no longer copies GParam to scratchpad
+ + 0x100 (overwrote a live PoP draw-list count on a progressive-scan switch)
+
+---
+ ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index 789fc95..c88a3e1 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -801,7 +801,8 @@ namespace ps2_stubs
+             g_gparam.interlace = static_cast<uint8_t>(interlace & 0x1);
+             g_gparam.omode = static_cast<uint8_t>(omode & 0xFF);
+             g_gparam.ffmode = static_cast<uint8_t>(ffmode & 0x1);
+-            writeGsGParamToScratch(runtime);
++            // No copy to scratchpad + 0x100 here: games keep live data there (PoP: a draw-list count, which a mode
++            // switch overwrote); the stand-ins read g_gparam directly and sceGsGetGParam still publishes it on request.
+             uint64_t pmode = makePmode(1, 0, 0, 0, 0, 0x80);
+             uint64_t smode2 = (interlace & 0x1) | ((ffmode & 0x1) << 1);
+             uint64_t dispfb = makeDispFb(0, 10, 0, 0, 0);
+-- 
+2.55.0.windows.5
+
