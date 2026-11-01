@@ -322,3 +322,7 @@ mode boots the game check for an active display first, so a mistake like this ca
 - **A .cpp #included by an override is not a tracked dependency of the PC's unity build** (1 Nov): `assets.cpp` changed,
   the runtime only relinked, a boot ran the old code. `rebuild.ps1` now touches `pop_native_live.cpp`; if a boot shows a
   fix that worked offline as missing, check `runtime_build.log` compiled the unity file first.
+- **Check a post effect against the game's own buffers from the same chain before changing it.** The glow "over-brightened"
+  offline for days; once the offline frame came from the save's last chain, the chain's GIF blits (`tools/chaingif.py`) and
+  the intermediate levels still in VRAM showed the model was right and the inputs (stale halos, a frame-behind
+  reference) were wrong. Compare levels from the game's own previous level, so input differences drop out.

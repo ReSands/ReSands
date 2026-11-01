@@ -72,6 +72,8 @@ N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps)
    (~0.06) yet the glow adds +36 to the region: each convolution level gains ~9 x 19/128 = 1.34 and the levels
    compound. If the GS did the same the moon would blow out there too, so suspect a missing factor in the
    reference (the ALPHA FIX of the tap adds?); check against a GS trace of ApplyConvolution's blits before 0.2.
+   **Checked 1 Nov (`docs/gs_off.md` step 4c point 6): no missing factor**; the game's blits (from the chain) are the
+   model's, and with the chain frame the glow matches the game. The blow-outs came from the stale halos / inputs.
    Sand haze (115853): the cloud and sparkles are 3 GFX draws in +0x88 (FUN_00458FC0: a 37-quad billboard with a
    64x64 texture, two oriented emitters) that the offline frame does not draw natively; SmartBlur ran with fade 0.
    Tools added for this: `POP_STATE_SKIP_LIST=<hex offset>` (pop_state_frame leaves out one list),

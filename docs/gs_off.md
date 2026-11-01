@@ -280,6 +280,21 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    offline draws no 2D at all (the whole list would have to come from the chain); text inside 3D lists stays as before.
 6. **Glow and mist** (smaller): why the offline glow over-brightens (live does not; compare the post inputs), and draw or
    rule out the +0x88 GFX particles.
+   **Done (1 Nov), no code change: neither is a renderer fault any more.** *Glow:* with the frame from the chain (points
+   2-5), the CPU ColorDiffusion (`postfx.h`) improves or keeps the score on all 28 saves (27 gsoffcap + 185807, vu1
+   build; worst 202314_1 +0.01), and the light it adds is within 10-30 % of the game's either way (more on 185602_2,
+   155110_2/3, less on 184926). The old over-brightening came from the stale halos and the frame-behind reference. GS
+   check (the "tap FIX" question of 29 Oct): `tools/chaingif.py` dumps the game's ColorDiffusion blits from 185807's
+   chain: level 0 a 2x2 box into buffer 0x118 (640x448 -> 320x224), levels 1-5 halved into its lower left and convolved
+   (centre copy 0x0F, eight 1-px-shifted taps added with ALPHA 0x68 FIX 0x80), then levels 5..1 added onto the frame
+   (bilinear, ALPHA 0x68, FIX = the call's 36): the model's geometry and weights exactly. From the game's own level k-1
+   in VRAM the model gives levels 3-5 within 0.5-0.6 / 255 (level 1's top 32 rows are overwritten after the glow by a
+   halo pass into 0x118). GS-exact upsampling (texels beside a level bleed in) adds ~1 more at the top / bottom bands
+   than the model's clamp: the model is, if anything, slightly dim. 185807's bottom band (+12.8 in point 4) is the
+   input: the native scene before the glow is ~10 % brighter there, and the glow (gain ~2 in that frame) doubles it.
+   Open for step 5: that scene difference (shadows / fog at the bottom of the rewind frame). *Mist:* already drawn
+   since 30 Oct (P5 GFX particles on by default offline, `docs/native_bugs.md`); every chain particle range is drawn in
+   the vu1 build (202926, 184926, 115853), the empty two in 115853 are behind the camera and culled, as in the game.
 7. **(Deferred, user 1 Nov: wait until the PS2 is in hand; how data gets on and the picture comes off decide the format.)**
    **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
    VRAM + registers before the frame (for (a): the GS packets come from running the chain through the VU1 interpreter in
