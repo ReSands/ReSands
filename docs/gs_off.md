@@ -178,3 +178,48 @@ equal everywhere). GS traces not taken (one timed trace per boot; can be taken f
   others +-1). So no same-frame verdict on character rendering or on fight-only effects (hit flashes).
 - **Next (plan point 5):** the comparison mode (both renderers on the same live frame) as the fallback, or first a
   cheaper check: pose the offline characters from the chain's matrices instead of memory (unestimated). User decides.
+
+## Step 4c plan: the offline frame = the save's last chain (user 1 Nov: next step; groundwork for the real-PS2 reference)
+**Why.** A real PS2 can only judge single frames from saved data (`docs/roadmap.md` "Hardware reference": (a) GS
+replay, (b) DMA chain replay). For that, every offline native frame must be **exactly the frame of one chain**, so
+native, our GS and the real GS all draw the same input. Today the offline tool mixes sources: draw lists and pools from
+memory, some packets from the chain, and fills gaps by guessing (stale halo entries). Rule for this step: **where the
+save's memory and its last chain disagree, the chain wins**, and the reference picture is the buffer that chain drew.
+Goal: as much of the renderer as possible scoreable on the same frame, offline now and against a real PS2 later.
+
+Known gaps, in order of work (from step 4b and `docs/native_bugs.md`): (1) character poses ahead of the picture;
+(2) projected shadows missing (count zeroed after the shadow pass); (3) menu / hint text not replayed; (4) halos
+replayed from stale array entries (145139's offline-only moon halo); (5) offline glow over-brightens (`--noglow`);
+(6) GFX particles of +0x88 (water mist) listed, never drawn (unproven). Live-only paths (GS hand-over) are out of scope.
+
+**Starting points.** `tools/native/src/state_frame.cpp` already walks the save's last chain for particle packets
+(`findParticlePackets`: chain start = `0x70000620` +0xE4 / +0xE8, the one +0xF4 is not building). `tools/chainskin.py`
+already poses skinned draws from a chain: layout A bone palette at VU 0x388 (4 qw per bone, slot k -> bone k-1),
+layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tools/overrides/pop_native_live.cpp`
+(bones from the pool at `*(0x700001D0)`, object matrices at `*(0x70000260)`). Saves: `game/analysis/gsoffcap/`
+(27 GS-only, fights + effects; scores in `score/`, `score_vu1/`), gate `game/analysis/gsref1027/states/` (13).
+
+1. **Measure first (Mac, offline; ~1 h).** For 3-4 fight saves (134636_1, 115837_2, 185602_2, 155110_1): dump the bone
+   matrices each skinned CALL gets in the last chain (a `statechain.py` / `chainskin.py` mode) and the pool's matrices
+   for the same draw. Questions: (a) do they differ (pool ahead) while the object matrices / camera agree (scenery
+   lined up in 4b)? (b) which buffer did the chain draw: render `chainskin.py`'s posed glTF or just compare silhouettes
+   against the displayed (fbp 0x8c) and the other (0x0) buffer. Write the answer down before changing code.
+2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
+   skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
+   (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if
+   step 1 shows them ahead too. No change to live behaviour: build the live tool and run the
+   render gate (13 GS-only saves must stay pixel-identical, as for N19).
+3. **Reference picture = the chain's buffer.** `score_saves.sh` gets the buffer step 1 found (a `popstate.py --frame`
+   option for the other buffer if needed; the scratch test was `fbp 0x8c` displayed / `0x0` other). Re-score gsoffcap +
+   gate. Done when fight saves score like scenery (target: 134636_1 well under its 13.6; character edges only).
+4. **Shadows from the chain.** The shadow pass's packets are in the chain even when the count is 0: draw them from there
+   (or recover the projector list via the chain's order). Done when 184926 / rewind saves show shadows offline.
+5. **Halos and text from the chain.** Halo draws (ALPHA 0x58 with FIX) and 2D text packets taken from the chain instead
+   of the stale halo array / not at all; 145139's moon halo must disappear offline (the GS trace has none).
+6. **Glow and mist** (smaller): why the offline glow over-brightens (live does not; compare the post inputs), and draw or
+   rule out the +0x88 GFX particles.
+7. **Hand-over to the hardware reference.** Per save, one bundle: the chain (+ VU1 microcode / memory for (b)), the GS
+   VRAM + registers before the frame (for (a): the GS packets come from running the chain through the VU1 interpreter in
+   `pop_state_frame_vu1`, or a GS trace), the native frame, our GS frame. Write the bundle format into
+   `docs/roadmap.md` "Hardware reference"; the PS2 player itself is a later job.
+After each step: re-score, update this section, commit. Then back to step 5 of 0.2 (parked bugs with the GS off).
