@@ -497,12 +497,15 @@ namespace pop_native_world
         // Native presenter (POP_NATIVE_PRESENT=1; 0.2 step 2, docs/gs_off.md): a GS memory of our own holding only the
         // native pictures, each in the buffer its frame draws into; at each presentation the runtime's own CPU display
         // merge (PMODE, DISPFB1/2, DISPLAY1/2: the game's line blend) runs on it instead of on the GS's memory (runtime
-        // patch 45). Until the first picture the GS's picture stays on screen.
+        // patch 45). The GS's picture stays on screen until the first native picture and whenever none came for 0.5 s:
+        // after a save-state load the saved screen is only in the GS's memory (192103: the loading screen, not redrawn
+        // until the movie; ours showed the title's last box). shortcut: needs the GS running; step 3 (GS off) must seed
+        // this memory from the loaded GS memory instead.
         const bool g_presentOn = [] {
             const char *e = std::getenv("POP_NATIVE_PRESENT");
             return e && *e && *e != '0';
         }();
-        std::atomic<bool> g_presentReady{false};
+        std::atomic<int64_t> g_presentAt{0}; // steady_clock ticks of the latest native picture, 0 = none yet
         GSCpuBackend &presentGs()
         {
             static std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE);
@@ -522,11 +525,13 @@ namespace pop_native_world
             c.direction = 0; // host -> local
             presentGs().BeginTransfer(c);
             presentGs().UploadImage(rgba.data(), uint32_t(rgba.size()));
-            g_presentReady.store(true, std::memory_order_release);
+            g_presentAt.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
         }
         bool presentHook(const GSPresentationRequest &request, PresentationFrame &frame)
         {
-            if (!g_presentReady.load(std::memory_order_acquire))
+            const int64_t at = g_presentAt.load(std::memory_order_acquire);
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            if (!at || now - std::chrono::steady_clock::duration(at) > std::chrono::milliseconds(500))
                 return false;
             frame = presentGs().Present(request);
             return bool(frame);
