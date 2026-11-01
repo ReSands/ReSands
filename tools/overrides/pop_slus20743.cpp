@@ -1595,6 +1595,10 @@ namespace
     // AI_EvalKeyword_Ultra_C1 takes: actor->0x18->0x4->0x44. Same address as the cache in all 111 saves
     // that have it. PS2X_INVERT_RIGHT_STICK, if set, still wins; POP_CAMERA_CLASSIC=1 keeps the game's
     // own directions.
+    // Fixed survey views (1 Nov): the camera's current zone type (camera data +0x410 = zone object, zone
+    // data +0x1B4; Mdl0000263C) is 4 for the orbiting free-cam zone and 2 in fixed views (all 3 reported
+    // saves 2, 244 of 292 saves 4). Camera = world view 0's object (world gp-0x1B0 = 0x674840, +0x30 view
+    // array, +0xA0; AI_EvalFunc_VIEWGetObject_C). X is inverted only in free-cam zones.
     void updateCameraInvert(uint8_t *rdram)
     {
 #if POP_HAVE_INPUT_OPTIONS
@@ -1607,7 +1611,17 @@ namespace
         p = ptr(p) ? guestU32(rdram, p + 0x4u) : 0u;
         p = ptr(p) ? guestU32(rdram, p + 0x44u) : 0u;
         const bool firstPerson = ptr(p) && guestU32(rdram, p + 0x5E4u + 0x90u) == 0u;
-        ps2_host_input::setRightStickInvertDefault(firstPerson ? 0u : ps2_host_input::kInvertRightX);
+        auto data = [&](uint32_t o) { // game object -> its AI data (+0x18 -> +0x4 -> +0x44)
+            o = ptr(o) ? guestU32(rdram, o + 0x18u) : 0u;
+            o = ptr(o) ? guestU32(rdram, o + 0x4u) : 0u;
+            return ptr(o) ? guestU32(rdram, o + 0x44u) : 0u;
+        };
+        uint32_t z = guestU32(rdram, 0x00674840u);
+        z = ptr(z) ? guestU32(rdram, z + 0x30u) : 0u;
+        z = ptr(z) ? data(guestU32(rdram, z + 0xA0u)) : 0u;
+        z = ptr(z) ? data(guestU32(rdram, z + 0x410u)) : 0u;
+        const bool fixedView = ptr(z) && guestU32(rdram, z + 0x1B4u) != 4u; // unreadable: keep inverting
+        ps2_host_input::setRightStickInvertDefault(firstPerson || fixedView ? 0u : ps2_host_input::kInvertRightX);
 #else
         (void)rdram;
 #endif

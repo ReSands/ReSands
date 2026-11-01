@@ -55,6 +55,14 @@ seen from high above; copy `game/analysis/saves1031/`):** +0x90 = 1, +0x94 / +0x
 candidate signal (zero = fixed camera) is refuted. Same session's `play_20261031_111155`: +0x90 = 0, again not known to be first
 person. So +0x90 / +0x94 are not the camera mode; the real fix is still to find the mode the game switches on.
 
+**Fix (1 Nov, override `updateCameraInvert`, not built yet):** the mode is the camera's current zone type. Camera
+object = world view 0's object (`*(*(*0x674840 + 0x30) + 0xA0)`, as `AI_EvalFunc_VIEWGetObject_C`); its data
+(+0x18 -> +0x4 -> +0x44) + 0x410 = current zone object; zone data + 0x1B4 = type (`FUN_002ebd00`; read by
+`Mdl00005261_fn_GetZoneBehavior`, and `Mdl0000263C_fnf_GetFreeCamSightOffset` acts only on type 4). Saves: 204309,
+204628 and 112025 (all reported fixed) = **2**; 204133, 204457, 204516, 204813, 111155 = 4; over all 292 saves:
+244 x 4, 43 x 2, 5 unreadable (type 3 never seen). X is now inverted only in type-4 zones (and not in first
+person); unreadable keeps inverting. To check: the user's play test in a fixed view and in the normal camera.
+
 ## Bug 2: door flickering with a black web over it (20:50, 21 Oct)
 Save `play_20261021_205013`. The game's own picture from the save (`frames/play_20261021_205013.png`) shows
 a large wooden door with a dark, cross-shaped web pattern over its texture, so the emulated GS output has it
