@@ -837,7 +837,7 @@ namespace pop_native_live
                     }
                 }
             }
-            if (g_chainBones && packet && (pal || !objectSpace)) // objectSpace draws take poolMatrix (not posed here)
+            if (g_chainBones && packet)
                 g_chainBones(packet & 0x01FFFFF0u, bones);
             for (const auto &b : bind)
             {
@@ -3319,6 +3319,7 @@ namespace pop_native_live
                 ++g_twoDStats.strings;
                 if (g_chainTextSlot) // offline: the letters from the chain's slot packets (GS coordinates: (offset + pixel) x 16)
                 {
+                    g_textNative = true;
                     const float ox = float(int32_t(guestAny(rdram, 0x00675170u))), oy = float(int32_t(guestAny(rdram, 0x00675174u)));
                     for (uint32_t slot = 0; slot < g_textSlots.size(); ++slot)
                     {

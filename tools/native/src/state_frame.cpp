@@ -107,6 +107,7 @@ namespace
     // The shadow pass in the same chain (step 4c point 4): per drawn projector, from its caster-buffer FRAME (fbw 4, alpha
     // only) until the frame's FRAME comes back with colour writes, the CALL targets in order (casters, then receivers)
     std::vector<std::vector<uint32_t>> g_shadowSeqs;
+    std::vector<size_t> g_shadowSplit; // per sequence: where the receivers start (its size if none)
     // The halos the chain drew (point 5): each halo's texture pass (ALPHA 0x58 with FIX 0x80, Cs * Ad + Cd) is a sprite in
     // 32-pixel strips; their bounding box = the halo square haloRecord builds (GS primitive coordinates, 1/16 px)
     struct HaloSquare
@@ -184,11 +185,11 @@ namespace
             if (fbw == 4 && mask == 0xFFFFFFu)
             {
                 if (shadow != Casters)
-                    g_shadowSeqs.emplace_back();
+                    g_shadowSeqs.emplace_back(), g_shadowSplit.push_back(SIZE_MAX);
                 shadow = Casters;
             }
             else if (shadow == Casters)
-                shadow = Receivers;
+                shadow = Receivers, g_shadowSplit.back() = g_shadowSeqs.back().size();
             else if (shadow == Receivers && mask)
                 shadow = None;
         };
@@ -547,13 +548,14 @@ namespace
             const uint32_t p = rd32(0x70000500u + 4 * i);
             if (!(mask >> i & 1) || !p)
                 continue;
-            const auto prefix = [&](uint32_t list, const std::vector<uint32_t> &seq, size_t &pos) {
+            // the entries found in order in seq[pos, end): casters only among the casters, receivers among the receivers
+            const auto prefix = [&](uint32_t list, const std::vector<uint32_t> &seq, size_t pos, size_t end) {
                 uint32_t k = 0;
                 for (; k < 4096; ++k)
                 {
                     const uint32_t pk = entryPacket(list + 16 * k);
-                    const auto at = pk ? std::find(seq.begin() + pos, seq.end(), pk) : seq.end();
-                    if (at == seq.end())
+                    const auto at = pk ? std::find(seq.begin() + pos, seq.begin() + end, pk) : seq.begin() + end;
+                    if (at == seq.begin() + end)
                         break;
                     pos = size_t(at - seq.begin()) + 1;
                 }
@@ -564,7 +566,8 @@ namespace
             for (; j < g_shadowSeqs.size(); ++j)
             {
                 const auto &s = g_shadowSeqs[j]; // [0] = the caster setup packet, then the first caster
-                if (!used[j] && first && std::find(s.begin(), s.begin() + std::min<size_t>(2, s.size()), first) != s.begin() + std::min<size_t>(2, s.size()))
+                const size_t m = std::min<size_t>(2, s.size());
+                if (!used[j] && first && std::find(s.begin(), s.begin() + m, first) != s.begin() + m)
                     break;
             }
             uint32_t casters = 0, receivers = 0;
@@ -572,9 +575,10 @@ namespace
             {
                 used[j] = true;
                 ++matched;
-                size_t pos = 0;
-                casters = prefix(rd32(p), g_shadowSeqs[j], pos);
-                receivers = prefix(rd32(p + 0x10), g_shadowSeqs[j], pos);
+                const auto &s = g_shadowSeqs[j];
+                const size_t split = std::min(g_shadowSplit[j], s.size());
+                casters = prefix(rd32(p), s, 0, split);
+                receivers = prefix(rd32(p + 0x10), s, split, s.size());
             }
             wr32(p + 4, casters);
             wr32(p + 0x14, receivers);
