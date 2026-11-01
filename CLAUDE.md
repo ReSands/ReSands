@@ -44,7 +44,7 @@ for Xbox addresses and Hor+ hooks.
 Keep this short: finished work goes to the topic docs, replaced bullets to `docs/history.md` (last moved:
 "Moved from CLAUDE.md on 1 Nov 2026 (N18-N22 closed)").
 
-- **Where we are (1 Nov): 0.13 closed and every open native bug before 0.14 cleared; next is 0.14 step 1.**
+- **Where we are (1 Nov): 0.13 closed and every open native bug before 0.14 cleared; 0.14 steps 1-2 closed 1 Nov; next is step 3 (movie display).**
   Native renderer on by default in `play.ps1` (world, lit statics, characters, translucents, shadows, P5/P6/P9, late
   lists, halos, Pinch, post chain; `-NoNative*` switches send parts back to the GS). The frame is "pure" (no GS draw yet)
   up to the 2D pass in ~2399/2400 frames (192645, 162621 boots 1 Nov): it ends at list +0xB8 (`list18`, `idx`), which is
@@ -56,7 +56,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: 0.14 step 2 open bugs.** Steps 1 + 2 in code and booted 1 Nov (`docs/native_2d.md` "Steps"): `POP_NATIVE_2D=1`
+- **Next: 0.14 step 3 (movie display, `docs/native_2d.md` "Steps").** Steps 1 + 2 in code and booted 1 Nov (`docs/native_2d.md` "Steps"): `POP_NATIVE_2D=1`
   keeps the frame pure through the 2D pass, text right, fades / menus right after 39f6c78. HUD rings + save-menu panel
   fixed 1 Nov (CLAMP_1 from flags, 4-bit CT32 texture; boot checked). Next: steps 3-5 (movie display, loading screen, user TV check).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
