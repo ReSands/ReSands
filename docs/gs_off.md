@@ -97,3 +97,17 @@ A = play.ps1 defaults, B = + POP_NATIVE_PRESENT=1): no crash, fps and native cou
 **User TV check 1 Nov (passed):** cold boot, `play.ps1 -Env 'POP_NATIVE_PRESENT=1'`: intro movie, title, loading,
 fights, platforming, rewind, time freeze, all right by eye. Log `play_20261101_160837.log`: 0 "no native picture",
 6600 frames injected, 0 missed, 0 unexpected; ~60 fps outside boot/load dips. **Next: step 3.**
+
+## Step 3: stop feeding the GS (1 Nov; built, not booted yet)
+**Switch:** `POP_GS_OFF=1` (`play.ps1 -GsOff`; off by default until step 4), implies `POP_NATIVE_PRESENT=1`. Runtime
+patch 46 (`GSHostInject::setDrawsOff`): the GS frontend still runs every register write, image transfer,
+FINISH/SIGNAL and its display bookkeeping, but no draw reaches the raster backend. Chosen over consuming whole GIF
+packets in the hook (that would drop FINISH/SIGNAL the game syncs on, and transfers) and over skipping the VU1/VIF1
+work (in a pure frame that is only driver switches and the alpha-only glow mask: performance, which waits).
+- The presenter's fallback (no native picture for 0.5 s: cold boot before the first marker, save-state loads) shows
+  the GS's memory, which still gets transfers and loaded states but no draws. 192103's kept loading screen should
+  still show (it is in the loaded memory).
+- Accepted for now: frames whose purity ended (~1 in 300, mostly load frames; rare single calls) lose what the GS
+  drew; step 4 measures them.
+- Not checked: no known GS -> host readback in the game; a boot will show.
+**Next:** boot (fight save, 192103, cold boot) and a user TV check with `-GsOff`.

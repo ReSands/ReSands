@@ -1,0 +1,59 @@
+From 794c4ed8b1d032932939a7ea389bbb74eccda3f1 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Sun, 1 Nov 2026 16:52:50 +0000
+Subject: [PATCH] gs: draws off switch for game overrides (GS off, the host
+ draws the picture)
+
+---
+ ps2xRuntime/include/runtime/gs/gs_host_inject.h | 5 +++++
+ ps2xRuntime/src/lib/gs/gs_frontend.cpp          | 9 ++++++++-
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xRuntime/include/runtime/gs/gs_host_inject.h b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+index 74977f9..ddad9b0 100644
+--- a/ps2xRuntime/include/runtime/gs/gs_host_inject.h
++++ b/ps2xRuntime/include/runtime/gs/gs_host_inject.h
+@@ -26,8 +26,13 @@ namespace GSHostInject
+     // traced field), from a game override at run time, e.g. on an event whose field is not known in advance.
+     // False while another trace is open or when the file cannot be created.
+     bool startTrace(uint64_t firstField, uint64_t fieldCount, const char *path);
++
++    // GS off (the host draws and presents the picture): the frontend still runs every register write, transfer,
++    // FINISH/SIGNAL and the display bookkeeping, but no draw reaches the raster backend.
++    void setDrawsOff(bool off);
+ }
+ #define GS_HOST_INJECT_START_TRACE 1
++#define GS_HOST_DRAWS_OFF 1
+ 
+ // The picture on screen from the host instead of the GS (for game overrides with their own renderer). At each
+ // presentation the hook gets the display registers; returning true with a frame shows that frame (the window
+diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+index 7727cf9..e1343bf 100644
+--- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
++++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
+@@ -791,6 +791,12 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+ namespace
+ {
+     std::atomic<GSHostInject::Hook> s_hostInjectHook{nullptr};
++    std::atomic<bool> s_hostDrawsOff{false};
++}
++
++void GSHostInject::setDrawsOff(bool off)
++{
++    s_hostDrawsOff.store(off);
+ }
+ 
+ bool GSHostInject::startTrace(uint64_t firstField, uint64_t fieldCount, const char *path)
+@@ -1800,7 +1806,8 @@ void GS::vertexKick(bool drawing)
+     {
+         GSPrimitiveBatch batch = buildDrawBatch(needed);
+         updatePreferredDisplaySourceForDraw(batch);
+-        m_backend->Submit(batch);
++        if (!s_hostDrawsOff.load(std::memory_order_relaxed))
++            m_backend->Submit(batch);
+         // VRAM is read back for the trace's .vram dump at the first draw inside the window only
+         // (this synced the backend on every draw before the window opened)
+         if (gsTrace().file && gsTrace().lastTick == UINT64_MAX && m_privRegs &&
+-- 
+2.55.0.windows.5
+

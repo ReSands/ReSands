@@ -499,12 +499,17 @@ namespace pop_native_world
         // merge (PMODE, DISPFB1/2, DISPLAY1/2: the game's line blend) runs on it instead of on the GS's memory (runtime
         // patch 45). The GS's picture stays on screen until the first native picture and whenever none came for 0.5 s:
         // after a save-state load the saved screen is only in the GS's memory (192103: the loading screen, not redrawn
-        // until the movie; ours showed the title's last box). shortcut: needs the GS running; step 3 (GS off) must seed
-        // this memory from the loaded GS memory instead.
-        const bool g_presentOn = [] {
-            const char *e = std::getenv("POP_NATIVE_PRESENT");
+        // until the movie; ours showed the title's last box).
+        bool envOn(const char *name)
+        {
+            const char *e = std::getenv(name);
             return e && *e && *e != '0';
-        }();
+        }
+        // GS off (POP_GS_OFF=1; 0.2 step 3): the GS gets no draws (runtime patch 46), so the native presenter shows the
+        // picture. While no native picture comes (cold boot, save-state loads) the GS's memory is shown: transfers and
+        // loaded states still reach it, its draws do not.
+        const bool g_gsOff = envOn("POP_GS_OFF");
+        const bool g_presentOn = g_gsOff || envOn("POP_NATIVE_PRESENT");
         std::atomic<int64_t> g_presentAt{0}; // steady_clock ticks of the latest native picture, 0 = none yet
         GSCpuBackend &presentGs()
         {
@@ -675,6 +680,13 @@ namespace pop_native_world
 #ifdef GS_HOST_PRESENT
         if (g_presentOn)
             GSHostPresent::setHook(presentHook);
+#ifdef GS_HOST_DRAWS_OFF
+        if (g_gsOff)
+        {
+            GSHostInject::setDrawsOff(true);
+            std::fprintf(stderr, "[pop:world] GS off: no draws reach the GS, the native presenter shows the picture\n");
+        }
+#endif
 #endif
         return true;
     }
