@@ -746,7 +746,7 @@ the bottom of the frame. `POP_NATIVE_SHADOWS=1` changes nothing (8.43: no filled
 Not a renderer bug; judge it live or on a save caught before the shadow pass. Not checked live (the glow runs natively only with
 `-NativeLate` purity). Unrelated, seen in the same run: 1029 190506 48.57 and 195158 56.73 (not rewind saves): **empty draw lists in the save** (0 draws offline, saved after the game cleared them), cannot be judged offline; nothing broken (30 Oct). The warp is smooth,
 content pulled towards the centre. Gate: `20261025_115837.gs 8.59 vu1` (8.49 with, 9.26 without). Live counter:
-`[pop:world] pinch: calls, native`. Shortcut: a blended Pinch (+0x74 != 0xFF) stays on the GS (none in the saves).
+`[pop:world] pinch: calls, native`. Blended Pinch (+0x74 != 0xFF) native since 1 Nov (ALPHA 1 with TCC 0 = InvBlend, As = +0x74 >> 1; material `rgbTexture`, shader bit 1024); no save has one, not yet live-checked.
 
 ## Native MotionSmooth and FixBlend (30 Oct, Mac, offline)
 

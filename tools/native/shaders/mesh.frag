@@ -66,6 +66,8 @@ void main()
     }
     // bit 128: the water's colour pass, baseTex = the frame copy read through the refraction buffer
     vec4 t = (flags & 128) != 0 ? refraction(vUv) : texture(baseTex, vUv);
+    if ((flags & 1024) != 0)
+        t.a = 1.0; // TCC 0: As = Av
     // GS MODULATE with TCC: As = texel alpha * vertex alpha (both 0x80 = 1.0); the blend state
     // (pipeline) uses it as the GS ALPHA C term, and it is the alpha written where FBMSK allows.
     float a = t.a * vColour.a;

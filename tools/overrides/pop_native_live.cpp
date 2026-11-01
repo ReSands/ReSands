@@ -2930,7 +2930,8 @@ namespace pop_native_live
         // same grid with the points inside radius +0x68 * N of the centre ((+0x58/+0x5C + 0.5) * N) pulled towards it by
         // pow(sin(d * pi/2 / radius), +0x60). RGBAQ 0x808080 + (+0x74 >> 1); ALPHA 0x29 with FIX 0 = Cs (opaque) when +0x74 is
         // 0xFF, else ALPHA 1; Z always; RGB only (FBMSK 0xFF000000: the glow mask stays). Natively the same strips through
-        // gifToBatch, reading a fresh frame copy (image -5). shortcut: +0x74 != 0xFF (blended) stays on the GS; none in the saves.
+        // gifToBatch, reading a fresh frame copy (image -5). Blended (+0x74 != 0xFF, the rewind's start / end): ALPHA 1 =
+        // (Cd - Cs) * As + Cs with TCC 0 (FUN_004AFFC0 t1), so As = +0x74 >> 1 = the unwarped frame's share (InvBlend).
         uint64_t g_pinchCalls = 0, g_pinchNative = 0, g_pinchOutside = 0;
         bool pinchRecord(uint8_t *rdram)
         {
@@ -2939,11 +2940,12 @@ namespace pop_native_live
                 return false;
             constexpr uint32_t ae = 0x006DF170u;
             const uint32_t n = guestAny(rdram, ae + 0x4C);
-            if (guestAny(rdram, ae + 0x74) != 0xFFu || n > 64)
+            const uint32_t blend = guestAny(rdram, ae + 0x74);
+            if (blend > 0xFFu || n > 64) // above 0xFF the game's alpha would spill into Q
             {
                 static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
                 if (whyLog)
-                    std::fprintf(stderr, "[pop:world] pinch on the GS: +0x74 %08x grid %u\n", guestAny(rdram, ae + 0x74), n);
+                    std::fprintf(stderr, "[pop:world] pinch on the GS: +0x74 %08x grid %u\n", blend, n);
                 return false;
             }
             const float e = guestF(rdram, ae + 0x60), s = guestF(rdram, ae + 0x64), nf = float(n);
@@ -2974,7 +2976,7 @@ namespace pop_native_live
                             const float f = float(std::pow(double(std::sin(t)), double(e)));
                             gx = cx + f * dx, gy = cy + f * dy;
                         }
-                        const uint32_t rgbaq[4] = {0x80, 0x80, 0x80, 0x7F};
+                        const uint32_t rgbaq[4] = {0x80, 0x80, 0x80, blend >> 1};
                         const float st[4] = {ox + float(i) * s / nf, oy + row * s / nf, 1.0f, 0.0f}; // frame UV (the copy's 0..1)
                         const uint32_t xyz[4] = {uint32_t(int((x0 + ox * w) * 16.0f + gx / nf * s * w * 16.0f)) & 0xFFFF,
                                                  uint32_t(int((y0 + oy * h) * 16.0f + gy / nf * s * h * 16.0f)) & 0xFFFF, z, 0};
@@ -2994,7 +2996,7 @@ namespace pop_native_live
                 m.frameOnly = true;
                 m.seq = g_frameSeq++;
                 m.textureKey = kPinchKey;
-                m.flags = 0x200; // no depth write, not blended
+                m.flags = blend == 0xFFu ? 0x200u : 0x10280u; // no depth write; blended: kind 1 inverse (ALPHA 1)
                 m.zTest = 0;
                 m.fbmsk = 0xFF000000u;
                 m.list = g_currentList;

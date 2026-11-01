@@ -71,6 +71,7 @@ namespace pop_native
         bool fogAlpha = false;   // the fog factor F is the vertex alpha (0x80 = 1.0), no fog colour (lightmap pass, P1 mode 3)
         bool refraction = false; // the water's colour pass: baseImage (the frame copy) read through its 256x256 refraction buffer (mesh.frag)
         bool haloAlpha = false;  // a halo's visibility: alpha = the frame copy's mean alpha over the core square (uv .. uv2) * vertex alpha (mesh.frag)
+        bool rgbTexture = false; // GS TEX0 TCC 0: As = vertex alpha, the texel alpha unused (the pinch grid over the frame copy)
     };
 
     inline bool isBlended(AlphaMode m) { return m != AlphaMode::Opaque && m != AlphaMode::Mask; }

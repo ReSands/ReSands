@@ -158,6 +158,7 @@ namespace pop_native
                                                                            : -1;
                         mat.refraction = refraction;
                         mat.haloAlpha = haloAlpha;
+                        mat.rgbTexture = pinch;
                         if (v3)
                         {
                             materialFromGsFlags(mode, word, mat);
