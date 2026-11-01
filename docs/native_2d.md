@@ -99,6 +99,13 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    HUD ring above the life bar has 4 gaps and the small ring under the sand tanks shows glyph-like garbage instead of a
    circle; (b) the save menu's 9-piece panel shows its overlaps (edges darker, corners lighter; GS: even). Both are
    +0xB8 drawing, not text.
+   **Both fixed offline 1 Nov (boot pending):** (a)+(b) one cause: FUN_004B2000 sets CLAMP_1 from flags 0x1 / 0x2 (U / V
+   repeat; neither = 5, clamp both); the HUD / menu meshes (flags ...04) clamp, we repeated (ring = 4 mirrored quarters:
+   the far edge bled in at the seams; the panel's 9 pieces the same). `frame_loader.cpp`: `clampUv` for 2D-layer draws
+   with (flags & 3) == 0 (3D draws left alone: render gate, decal bias). (a) small ring also: its 4-bit texture
+   0b007b60 (32x32) is sent as PSMCT32 16x8 (TRXREG), not linear PSMT4; `assets.cpp` now routes it through the GS layout.
+   Offline: 185602 HUD as the GS, 192114 save menu 11.0 -> 4.4 (panel even; text not replayed offline). Render gate: 6
+   saves identical, the 7 with HUD all slightly better.
 3. **Movie display**: `PS2_DisplayVideo` hook, picture drawn natively full screen (a frame with no marker: the native
    frame is just the movie).
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).

@@ -57,8 +57,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
 - **Next: 0.14 step 2 open bugs.** Steps 1 + 2 in code and booted 1 Nov (`docs/native_2d.md` "Steps"): `POP_NATIVE_2D=1`
-  keeps the frame pure through the 2D pass, text right, fades / menus right after 39f6c78. Open: HUD rings (gaps,
-  garbage small ring), save-menu panel overlaps. Then steps 3-5 (movie display, loading screen, user TV check).
+  keeps the frame pure through the 2D pass, text right, fades / menus right after 39f6c78. HUD rings + save-menu panel
+  fixed offline 1 Nov (CLAMP_1 from flags, 4-bit CT32 texture), needs a boot. Then steps 3-5 (movie display, loading screen, user TV check).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".

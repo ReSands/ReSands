@@ -148,7 +148,7 @@ namespace pop_native
                 if (hasImage || v3)
                 {
                     const auto key = std::make_tuple(hasImage || refraction || haloAlpha || pinch ? image : -1, mode, word,
-                                                     (zTest & 3u) | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
+                                                     (zTest & 3u) | ((zTest & 4u) << 1) | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
@@ -167,7 +167,9 @@ namespace pop_native
                             // Z test word: bit 0 = the render state's Z test (0x70000038); bit 1 = ours, the
                             // texture clamped to its edge (shadow receivers, GS CLAMP_1 5); bits 2, 3: Draw::afterPost, screen
                             mat.depthTest = (zTest & 1) != 0;
-                            mat.clampUv = (zTest & 2) != 0;
+                            // FUN_004B2000: flags 0x1 / 0x2 = U / V repeat, neither = CLAMP_1 5 (the HUD rings: mirrored quarters).
+                            // shortcut: 2D layer only and both axes at once; the 3D draws' clamp would move the render gate and the decal bias
+                            mat.clampUv = (zTest & 2) != 0 || ((zTest & 4) && (mode & 3) == 0);
                             mat.writeRgb = (fbmsk & 0xFFFFFFu) != 0xFFFFFFu;
                             mat.writeAlpha = (fbmsk & 0xFF000000u) == 0;
                         }

@@ -92,9 +92,25 @@ namespace pop_assets
                 if (!imageData(p, pal->second.first, pal->second.first + pal->second.second, 64, pp) ||
                     !imageData(p, off, off + 0x200, size_t(w) * h / 2, dp))
                     return false;
+                // TRXREG width != w: sent as PSMCT32 (the HUD's small ring 0b007b60: 32x32 as 16x8), read back as PSMT4
+                uint32_t cw = w;
+                for (size_t q = off; q + 16 <= dp; q += 4)
+                {
+                    uint64_t v, a;
+                    if (u64(p, q, v) && u64(p, q + 8, a) && a == 0x52)
+                        cw = uint32_t(v & 0xFFF);
+                }
+                std::vector<uint8_t> vram;
+                if (cw && cw != w)
+                {
+                    vram.assign(4u << 20, 0);
+                    for (size_t i = 0; i < size_t(w) * h / 8; ++i)
+                        std::memcpy(&vram[addr32(0, std::max(1u, cw / 64), uint32_t(i % cw), uint32_t(i / cw))], p.d + dp + 4 * i, 4);
+                }
                 for (size_t i = 0; i < size_t(w) * h; ++i)
                 {
-                    const uint32_t c = (p.d[dp + i / 2] >> (4 * (i & 1))) & 0xF;
+                    const uint32_t n = vram.empty() ? uint32_t(i) : addr4(0, std::max(1, w / 64), uint32_t(i % w), uint32_t(i / w));
+                    const uint32_t c = ((vram.empty() ? p.d[dp + n / 2] : vram[n >> 1]) >> (4 * (n & 1))) & 0xF;
                     uint8_t *o = &out.rgba[i * 4];
                     const uint8_t *e = p.d + pp + c * 4;
                     o[0] = e[0], o[1] = e[1], o[2] = e[2];
