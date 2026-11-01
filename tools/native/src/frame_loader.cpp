@@ -126,6 +126,9 @@ namespace pop_native
                     if (v5)
                         f.read(reinterpret_cast<char *>(&fbmsk), 4);
                     d.ownFog = d.ownFogColour = true;
+                    // Z test word bits 2 / 3 (0.14, ours): the 2D layer (after the post effects); model = screen pixels -> clip
+                    d.afterPost = (zTest & 4) != 0;
+                    d.screen = (zTest & 8) != 0;
                     for (int k = 0; k < 3; ++k)
                         d.fogColour[k] = float((fogColour >> (8 * k)) & 0xFF) / 255.0f;
                 }
@@ -145,7 +148,7 @@ namespace pop_native
                 if (hasImage || v3)
                 {
                     const auto key = std::make_tuple(hasImage || refraction || haloAlpha || pinch ? image : -1, mode, word,
-                                                     zTest | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
+                                                     (zTest & 3u) | (fbmsk & 0xFF000000u) | ((fbmsk & 0xFFFFFF) ? 4u : 0u));
                     if (!materials.count(key))
                     {
                         Material mat;
@@ -162,7 +165,7 @@ namespace pop_native
                             if (noTest)
                                 mat.alphaTest = false;
                             // Z test word: bit 0 = the render state's Z test (0x70000038); bit 1 = ours, the
-                            // texture clamped to its edge (shadow receivers, GS CLAMP_1 5)
+                            // texture clamped to its edge (shadow receivers, GS CLAMP_1 5); bits 2, 3: Draw::afterPost, screen
                             mat.depthTest = (zTest & 1) != 0;
                             mat.clampUv = (zTest & 2) != 0;
                             mat.writeRgb = (fbmsk & 0xFFFFFFu) != 0xFFFFFFu;

@@ -68,8 +68,30 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    support). Hooks for letters and rectangles; CJIdxMesh / particles in +0xB8 into that pass. `pop_state_frame`
    replays the letterbox, +0xB8 and kind 11. Judge against GS-only saves: 185602 (life bar, sand tanks, tutorial text),
    191358 (white-out), 192114 (save menu, half black), 090720 (pause menu), a letterbox cutscene (e.g. 191059).
+   **Done 1 Nov (offline, with step 2's live code).** Renderer: `Draw::afterPost` (the 2D layer, a resumed pass after
+   `recordPost`, in `renderOffscreen` and `present`) and `Draw::screen` (model = the whole transform); frame format: Z test
+   word bit 2 = after post, bit 3 = screen-space model. Hooks: FUN_004B4580 rectangles (`rectangle`; queued calls
+   left alone), letters FUN_0046A980 / FUN_0046AA80 (`letter` / `letterF`; registers from the disassembly: x0 a1, y0
+   a2, x1 a3, y1 t0 with y up, RGBA t1, ST t2, slot t3; the float one f12..f15, RGBA a1, ST a2, slot a3), slots ->
+   font page / texture / flags worked out at FUN_00469C00's entry (`textBegin`, as its first loop counts), GS order kept
+   through seq blocks per slot. A native letter's 0x50 bytes in its slot are written as a zero-area sprite (the
+   packet's GIF tag counts them). **The 2D pass has its own camera:** GFX_Render(+0x478) runs under camera matrix
+   0x6D4800 (identity; FUN_003E2380), so list +0xB8's meshes (HUD bars, Gao, menu panels) sit near the origin. Their
+   clip = S x inverse(view gfx +0x420) x (world -> clip gs +0x240) with S: (x, y, z) -> (-x, -z, -y) (fitted: the
+   life bar top left; (x, -z, -y) is a reflection and mirrored it), the same from the 3D or the 2D pair (`twoDClip`,
+   read at listRender(+0xB8)). GFX particles in +0xB8 stay in display pixels (`gifToBatch`). +0xB8's sort is a no-op
+   (FUN_004B7A80): list order is draw order. `pop_state_frame` replays the letterbox, +0xB8 (Z test off) and kind 11;
+   **letters can't be replayed offline** (FUN_00469C00 is game code), so text is judged at the boot.
+   Scores (score_saves, `POP_VIEW_GPU_POST=1` = the in-game post path; the file viewer's default CPU post runs after
+   the 2D layer): 191358 white-out 164.6 -> 0.64 (max 1), 192114 save menu 47.0 -> 11.0 (text missing), 090720 pause
+   28.0 -> 5.9, 185602 HUD 7.85 -> 6.77 (text missing), 191059 letterbox bands black on the right rows. Render gate
+   (gsref1027, default viewer): the 6 saves without HUD pixel-identical, the 7 with HUD all better.
+   Open for the boot: the slot table (`text slot mismatch` log line), any 2D drawn straight to the GS by an unhooked
+   path (would land over the native 2D), the HUD under live play.
 2. **Live, in-game HUD and letterbox**, switch `POP_NATIVE_2D` (off until the user's check): the hooks record while
-   the frame is pure and skip the originals. Why-line when the 2D pass is left to the GS.
+   the frame is pure and skip the originals. Why-line when the 2D pass is left to the GS. **Code done 1 Nov** (needs
+   POP_NATIVE_POST and LATE; `play.ps1 -Env 'POP_NATIVE_2D=1'`; stats line `[pop:world] 2D:` every 300 frames,
+   `POP_NATIVE_WORLD_WHY=1` names what ended purity); boot pending.
 3. **Movie display**: `PS2_DisplayVideo` hook, picture drawn natively full screen (a frame with no marker: the native
    frame is just the movie).
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).

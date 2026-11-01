@@ -133,8 +133,8 @@ namespace
     {
         const uint32_t list = getRegU32(ctx, 4), entries = rd32(list), count = rd32(list + 4);
         const uint32_t base = pop_native_live::g_drawManager;
-        // Z test off only for list +0x78; the alpha-only pass (render state 0x44) is list +0x98
-        wr8(0x70000038u, list == base + 0x78 ? 0 : 1);
+        // Z test off for list +0x78 and the 2D pass (+0xB8, after Before2D's SetZTest 0); the alpha-only pass (render state 0x44) is list +0x98
+        wr8(0x70000038u, list == base + 0x78 || list == base + 0xB8 ? 0 : 1);
         wr32(0x70000044u, list == base + 0x98 ? 0xFF000000u : 0xFFFFFFFFu);
         for (uint32_t i = 0; i < count && i < 4096; ++i)
         {
@@ -206,8 +206,14 @@ namespace
                 setArgs(*ctx, uint32_t(word) * 16, matrix, pass);
                 call(0x004C7B40u, ctx);
                 break;
-            case 11:
+            case 11: // FUN_004B4580(x, y, width, height, colour, mode) from the table 0x6DF6E0 (0x18 bytes per rectangle)
+            {
+                const uint32_t t = 0x006DF6E0u + uint32_t(word & 0xFFFF) * 0x18;
+                std::memcpy(&ctx->f[12], getConstMemPtr(g_ram.data(), t), 16);
+                setArgs(*ctx, rd32(t + 0x10), rd32(t + 0x14));
+                call(0x004B4580u, ctx);
                 break;
+            }
             default: // GFX (FUN_00458FC0, entry pointer; the world mode does not hook it: replayed directly)
                 setArgs(*ctx, e);
                 if (g_hooks.count(0x00458FC0u))
@@ -388,6 +394,21 @@ namespace
             setArgs(h, ae);
             call(0x004A93C0u, &h);
         }
+        // the 2D pass: Before2D's (FUN_004B4A80) letterbox bands, FUN_004B4580(0, 0, 1, band) and (0, 1 - band, 1, band) in
+        // black, then PS2_After2D's list +0xB8 (FUN_004BBFC0, with draw manager +0x28 set: rectangles draw, not queue)
+        wr8(dm + 0x28, 1);
+        const float band = pop_native_live::guestF(g_ram.data(), rd32(0x00674B00u) + 0xEA0u);
+        for (int k = 0; band > 0.0f && k < 2; ++k)
+        {
+            R5900Context r{};
+            const float f[4] = {0.0f, k ? 1.0f - band : 0.0f, 1.0f, band};
+            std::memcpy(&r.f[12], f, sizeof f);
+            setArgs(r, 0, 0);
+            call(0x004B4580u, &r);
+        }
+        setArgs(sub, dm + 0xB8);
+        call(0x004B9440u, &sub);
+        wr8(dm + 0x28, 0);
     }
 
     bool loadState(const char *path)
@@ -714,6 +735,9 @@ int main(int argc, char **argv)
         std::string by;
         for (const auto &[why, n] : ls.closedBy)
             by += " " + why + " " + std::to_string(n) + ";";
+        const auto &td = pop_native_live::g_twoDStats;
+        std::fprintf(stderr, "[state] 2D: rectangles %llu, letters %llu, strings %llu (not native %llu)\n", (unsigned long long)td.rects,
+                     (unsigned long long)td.letters, (unsigned long long)td.strings, (unsigned long long)td.stringsGs);
         std::fprintf(stderr, "[state] late lists: pure at +0x88 %llu, ended within %llu, calls native %llu, GS %llu, particles native %llu; ended by:%s\n",
                      (unsigned long long)ls.pureAtLate, (unsigned long long)ls.closedInLate, (unsigned long long)ls.native,
                      (unsigned long long)ls.gs, (unsigned long long)ws.particles, by.empty() ? " -" : by.c_str());

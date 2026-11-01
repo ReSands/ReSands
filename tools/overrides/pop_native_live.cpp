@@ -347,6 +347,12 @@ namespace pop_native_live
             std::memcpy(&f, &b, 4);
             return f;
         }
+        // the 2D layer's model for geometry in display pixels (y down): pixels of the 640 x 448 display -> clip, depth 0.5
+        std::array<float, 16> twoDOrtho(uint8_t *rdram)
+        {
+            const float w = float(guestAny(rdram, 0x0066D03Cu)), h = float(guestAny(rdram, 0x0066D040u));
+            return {2 / w, 0, 0, 0, 0, 2 / h, 0, 0, 0, 0, 0, 0, -1, -1, 0.5f, 1};
+        }
 
         // Palettes changed in memory (N1, 25 Oct): effects recolour a texture by rewriting its palette and
         // re-uploading it (GAO_ModifierSfx_UpdateMaterialPalette 0x421100: the dagger's slow blends an enemy's
@@ -491,6 +497,7 @@ namespace pop_native_live
             g_frameClosedBy = why;
         }
 
+        bool twoDNative(); // the 2D layer may be native now (POP_NATIVE_2D, below)
         // POP_NATIVE_TRANSLUCENT=1 (23 Oct): every draw of the lists Display3DElements draws before
         // the shadows (200, +0x2C, +0x3C, +0x68, +0x78, +0x4C; the lightmaps +0x5C are native already), any blend.
         // The picture is an upload that replaces pixels, so only a prefix of the game's order can be native:
@@ -506,7 +513,7 @@ namespace pop_native_live
                 return false;
             const bool opaqueList = g_currentList == 200u || g_currentList == 0x2Cu || g_currentList == 0x3Cu;
             const bool prefixList = opaqueList || g_currentList == 0x68u || g_currentList == 0x78u || g_currentList == 0x4Cu;
-            const bool late = translucent && g_worldLate && g_worldPure && lateList(g_currentList);
+            const bool late = translucent && g_worldLate && g_worldPure && (lateList(g_currentList) || (g_currentList == 0xB8u && twoDNative()));
             if (!(translucent ? prefixList || late : opaqueList))
                 return false;
             const uint32_t sub = guestAny(rdram, 0x70000034u);
@@ -2278,10 +2285,15 @@ namespace pop_native_live
         // XGKICK packets (PACKED ST / RGBAQ / XYZF2) -> world-space geometry: each GS screen point unprojected through the
         // graphics object's +0x200 (world -> GS screen); sprites (two corners) as quads, triangle strips / fans as triangles.
         // false: a primitive these programs do not send (the call then goes to the GS). fog: each triangle vertex's XYZF2 F
+        // in list +0xB8 (the 2D pass, its own camera) the points stay in display pixels: draw them with twoDOrtho
         bool gifToBatch(uint8_t *rdram, const std::vector<std::vector<uint8_t>> &packets, pop_assets::Batch &b, uint64_t &prims,
                         std::vector<float> *fog = nullptr)
         {
             const uint32_t gso = guestAny(rdram, 0x00675148u);
+            // shortcut: only particleRecord marks its +0xB8 records as screen-space (Z test word bit 3); a sprite or water in
+            // +0xB8 (none in the 237-save census) would need the same two lines
+            const bool screen = g_currentList == 0xB8u;
+            const float halfW = float(guestAny(rdram, 0x0066D03Cu)) / 2, halfH = float(guestAny(rdram, 0x0066D040u)) / 2;
             bool ok = true;
             // world <- GS screen: solve M p = s for the screen point (x, y, z) (M = +0x200, PS2 layout: rows of memory are
             // the columns: s_c = sum_k M[k][c] p_k + M[3][c], divided by the same with c = 3)
@@ -2289,7 +2301,12 @@ namespace pop_native_live
             for (int k = 0; k < 4; ++k)
                 for (int c = 0; c < 4; ++c)
                     M[k][c] = guestF(rdram, gso + 0x200u + 16 * k + 4 * c);
-            const auto unproject = [&M](double x, double y, double z, float out[3]) {
+            const auto unproject = [&](double x, double y, double z, float out[3]) {
+                if (screen) // the viewport's centre is GS 2048, 2048 (+0x280)
+                {
+                    out[0] = float(x - 2048.0) + halfW, out[1] = float(y - 2048.0) + halfH, out[2] = 0;
+                    return true;
+                }
                 const double sc[3] = {x, y, z};
                 double A[3][4];
                 for (int c = 0; c < 3; ++c)
@@ -2610,7 +2627,9 @@ namespace pop_native_live
                 dm.constColour = dm.constAlpha = -1; // P5 writes RGBAQ itself
                 dm.frameOnly = true;
                 const std::array<float, 16> identity = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-                g_frameRefs.emplace_back(std::move(bs), std::make_pair(identity, dm));
+                if (g_currentList == 0xB8u) // gifToBatch left the points in display pixels
+                    dm.zTest |= 12u;
+                g_frameRefs.emplace_back(std::move(bs), std::make_pair(g_currentList == 0xB8u ? twoDOrtho(rdram) : identity, dm));
                 std::vector<WorldRecord> recs{{2, g_frameRefs.size() - 1}};
                 if (!(g_world && g_worldLate && worldStateOk(rdram) && worldFinish(recs, {})))
                     return false;
@@ -3011,9 +3030,241 @@ namespace pop_native_live
             return (uint64_t(1) << 60) | (uint64_t(mesh) << 16) | (index & 0xFFFF);
         }
 
+        // 0.14: the 2D layer (docs/native_2d.md). Each 2D producer is hooked at its source and its quads go to the frame as
+        // screen-space draws (Z test word bit 3; model = pixels of the 640 x 448 display -> clip) of the layer drawn after
+        // the post effects (bit 2; list +0xB8's meshes get it in writeFrame). POP_NATIVE_2D=1 (live, with POP_NATIVE_POST):
+        // drawn natively and the original skipped while the frame is pure, so every GS draw still lands on top in order.
+        const bool g_world2D = [] {
+            const char *e = std::getenv("POP_NATIVE_2D");
+            return e && *e == '1';
+        }();
+        // the 2D camera's world -> clip (row vectors, as +0x240): the HUD's GFX objects are placed under the camera matrix
+        // 0x6D4800 (identity, FUN_003E2380 around GFX_Render(+0x478)), whose view is the fixed rotation S: (x, y, z) ->
+        // (-x, -z, -y) (fitted to the GS: the life bar top left, the save menu's panel). So clip = S * inverse(view) * (world -> clip) with the view at gfx +0x420 and the clip at gs +0x240,
+        // the same from the 3D camera's pair (offline: the save's) or the 2D one's (live, at list +0xB8: still set).
+        float g_twoDClip[16] = {};
+        void twoDClip(uint8_t *rdram)
+        {
+            const uint32_t gfx = guestAny(rdram, 0x00674B00u), gso = guestAny(rdram, 0x00675148u);
+            float v[16], c[16], vi[16] = {}, p[16] = {};
+            for (int k = 0; k < 16; ++k)
+                v[k] = guestF(rdram, gfx + 0x420u + 4u * k), c[k] = guestF(rdram, gso + 0x240u + 4u * k);
+            for (int r = 0; r < 3; ++r) // rigid: [R 0; t 1] -> [R^T 0; -t R^T 1]
+                for (int k = 0; k < 3; ++k)
+                {
+                    vi[4 * r + k] = v[4 * k + r];
+                    vi[12 + k] -= v[12 + r] * v[4 * k + r];
+                }
+            vi[15] = 1;
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 4; ++k)
+                    for (int j = 0; j < 4; ++j)
+                        p[4 * r + k] += vi[4 * r + j] * c[4 * j + k];
+            for (int k = 0; k < 4; ++k) // rows of S * p: -x, -z, -y
+                g_twoDClip[k] = -p[k], g_twoDClip[4 + k] = -p[8 + k], g_twoDClip[8 + k] = -p[4 + k], g_twoDClip[12 + k] = p[12 + k];
+        }
+        bool twoDNative()
+        {
+            return g_world && g_world2D && g_worldPost && g_worldLate && g_worldOpen && g_worldPure && g_frameCapturing;
+        }
+        struct TwoDStats
+        {
+            uint64_t rects = 0, letters = 0, strings = 0, stringsGs = 0;
+        } g_twoDStats;
+        // one screen quad between two corners (display pixels, y down; UVs 0..1 at the corners; RGBA, alpha 0x80 = 1.0)
+        DrawMaterial &twoDQuad(uint8_t *rdram, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1, uint32_t rgba,
+                               uint32_t key, uint32_t flags, uint32_t ref, bool afterPost, uint32_t seq)
+        {
+            pop_assets::Batch b;
+            const float xs[2] = {x0, x1}, ys[2] = {y0, y1}, us[2] = {u0, u1}, vs[2] = {v0, v1};
+            for (int k = 0; k < 4; ++k)
+            {
+                pop_native::Vertex v{};
+                v.pos[0] = xs[k & 1], v.pos[1] = ys[k >> 1];
+                v.uv[0] = us[k & 1], v.uv[1] = vs[k >> 1];
+                for (int c = 0; c < 4; ++c)
+                    v.colour[c] = float((rgba >> (8 * c)) & 0xFF) / 128.0f;
+                b.vertices.push_back(v);
+            }
+            b.indices = {0, 1, 2, 1, 3, 2};
+            const std::array<float, 16> ortho = twoDOrtho(rdram);
+            DrawMaterial m;
+            m.seq = seq;
+            m.textureKey = key;
+            m.flags = flags;
+            m.ref = ref;
+            m.zTest = 8u | (afterPost ? 4u : 0u); // no Z test (the 2D pass's SetZTest 0)
+            m.list = g_currentList;
+            m.frameOnly = true;
+            std::vector<pop_assets::Batch> bs;
+            bs.push_back(std::move(b));
+            g_frameRefs.emplace_back(std::move(bs), std::make_pair(ortho, m));
+            return g_frameRefs.back().second.second;
+        }
+
+        // FUN_004B4580(x, y, width, height as fractions of the display in f12..f15, colour a0, mode a1): an untextured
+        // sprite, ALPHA 0x29 (Cs) for mode 0, 0x44 (blend with As) otherwise, Z always, no Z write (ZMSK). The letterbox bands (from Before2D,
+        // FUN_004B4A80) and list +0xB8's kind 11 entries (fades, menu dimming). In draw manager state 10 (0x700000D8) with
+        // +0x28 clear it only queues the kind 11 entry (table 0x6DF6E0): left to the original.
+        PS2Runtime::RecompiledFunction g_origRect = nullptr;
+        bool rectRecord(uint8_t *rdram, float x, float y, float w, float h, uint32_t colour, uint32_t mode)
+        {
+            const int32_t dw = int32_t(guestAny(rdram, 0x0066D03Cu)), dh = int32_t(guestAny(rdram, 0x0066D040u));
+            // as the original rounds: each product truncated, the height one pixel more
+            const int32_t x0 = int32_t(x * float(dw)), y0 = int32_t(y * float(dh));
+            const int32_t x1 = x0 + int32_t(w * float(dw)), y1 = y0 + int32_t(h * float(dh)) + 1;
+            ++g_twoDStats.rects;
+            DrawMaterial &m = twoDQuad(rdram, float(x0), float(y0), float(x1), float(y1), 0, 0, 0, 0, colour, 0, mode ? 0x10200u : 0x200u, 0, true,
+                                       g_frameSeq++);
+            m.native = twoDNative();
+            return m.native;
+        }
+        void rectangle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const bool queue = guestAny(rdram, 0x700000D8u) == 10u && guest8(rdram, 0x700000E8u) == 0;
+            if (!queue && g_frameCapturing)
+            {
+                float f[4];
+                std::memcpy(f, &ctx->f[12], sizeof f);
+                if (rectRecord(rdram, f[0], f[1], f[2], f[3], getRegU32(ctx, 4), getRegU32(ctx, 5)))
+                    return;
+                worldOnGs(rdram, "rect");
+            }
+            g_origRect(rdram, ctx, runtime);
+        }
+
+        // STR text (list +0xB8 kind 6, FUN_00469C00 = the `list18` path of otherDisplay): the letters come out of
+        // FUN_0046A980 (integer coordinates) / FUN_0046AA80 (floats x the display scale, a line's frame), each one GS sprite
+        // appended to its font page's packet (slot buffers at 0x6CC430 + 4 x slot, in page order). textBegin works out the
+        // slots as the function does at entry (pages holding letters, in page order) and each page's texture and render
+        // state flags; the letters keep the GS order (slot by slot) through their seq.
+        struct TextSlot
+        {
+            uint32_t key = 0, flags = 0, ref = 0;
+        };
+        std::vector<TextSlot> g_textSlots;
+        bool g_textActive = false, g_textNative = false;
+        uint32_t g_textSeq = 0, g_textCount[64] = {}, g_textExpected[64] = {}; // letters per slot: recorded, counted by textBegin
+        PS2Runtime::RecompiledFunction g_origLetter = nullptr, g_origLetterF = nullptr;
+        bool textBegin(uint8_t *rdram, uint32_t entry)
+        {
+            g_textSlots.clear();
+            g_textActive = false;
+            const uint32_t x = guestAny(rdram, guestAny(rdram, (guestAny(rdram, entry) << 4) + 0x14u));
+            const uint32_t str = x ? guestAny(rdram, x) : 0, font = x ? guestAny(rdram, x + 4) : 0, gfx = guestAny(rdram, 0x00674B00u);
+            if (!str || !font || guestAny(rdram, str + 0x14u) == guestAny(rdram, gfx + 0xEB8u))
+                return false; // drawn already this frame: the function does nothing
+            const bool multi = guestAny(rdram, guestAny(rdram, font)) == 4u;
+            const uint32_t pages = multi ? std::min<uint32_t>(guestAny(rdram, font + 8), 64) : 1;
+            if (!pages)
+                return false;
+            uint32_t count[64] = {};
+            const uint32_t lines = guestAny(rdram, str + 0x20u), letters = guestAny(rdram, str + 0x1Cu);
+            for (uint32_t l = 0; l < guest8(rdram, str + 0xCu); ++l)
+            {
+                const uint32_t line = lines + 0x40u * l, flags = guest16(rdram, line), n = guest16(rdram, line + 10);
+                if ((flags & 0x400) || !n)
+                    continue;
+                if (flags & 0x100)
+                    ++count[((guestAny(rdram, line + 0x18) >> 8) & 0xFF) % pages];
+                const uint32_t first = letters + 16u * (guest16(rdram, line + 4) + guest16(rdram, line + 8));
+                for (uint32_t k = 0; k < n; ++k)
+                    ++count[((guestAny(rdram, first + 16 * k) >> 8) & 0xFF) % pages];
+            }
+            for (uint32_t p = 0; p < pages; ++p)
+            {
+                if (!count[p])
+                    continue;
+                // the page's material (a multi-material's entry p, of type 5) and its sub-material, as the function sets them
+                const uint32_t mat = !multi ? font : guestAny(rdram, guestAny(rdram, font + 0xC) + 4 * p);
+                const uint32_t sub = mat && (!multi || guestAny(rdram, guestAny(rdram, mat)) == 5u) ? guestAny(rdram, mat + 0x10) : 0;
+                TextSlot s;
+                if (sub)
+                {
+                    const uint32_t index = guest16(rdram, sub);
+                    s.key = textureKey(rdram, index);
+                    if (s.key)
+                        s.key = recolouredKey(rdram, index, s.key);
+                    s.flags = guestAny(rdram, sub + 4);
+                    s.ref = guestAny(rdram, sub + 0x10);
+                }
+                g_textExpected[g_textSlots.size()] = count[p];
+                g_textSlots.push_back(s);
+            }
+            g_textActive = true;
+            g_textSeq = g_frameSeq;
+            g_frameSeq += 64u << 12; // per slot a block of seqs: slot order first, then call order
+            std::memset(g_textCount, 0, sizeof g_textCount);
+            return true;
+        }
+        // one letter: false when it goes to the GS (unknown slot)
+        bool letterRecord(uint8_t *rdram, uint32_t slot, float x0, float y0, float x1, float y1, uint32_t rgba, uint32_t uv)
+        {
+            if (!g_textActive || !g_frameCapturing || slot >= g_textSlots.size() || g_textCount[slot] >= 4096)
+                return false;
+            const TextSlot &s = g_textSlots[slot];
+            if (g_textCount[slot] == g_textExpected[slot]) // textBegin's slot table does not match the game's (wrong page, wrong font)
+            {
+                static int logged = 0;
+                if (logged++ < 8)
+                    std::fprintf(stderr, "[pop:world] text slot mismatch: slot %u gets letter %u, %u counted (%zu slots)\n", slot,
+                                 g_textCount[slot] + 1, g_textExpected[slot], g_textSlots.size());
+            }
+            // ST of the two corners: (+0, +0xC) and (+4, +8)
+            DrawMaterial &m = twoDQuad(rdram, x0, y0, x1, y1, guestF(rdram, uv), guestF(rdram, uv + 0xC), guestF(rdram, uv + 4),
+                                       guestF(rdram, uv + 8), rgba, s.key, s.flags, s.ref, g_currentList == 0xB8u,
+                                       g_textSeq + (slot << 12) + g_textCount[slot]++);
+            ++g_twoDStats.letters;
+            m.native = g_textNative;
+            return true;
+        }
+        // the letter's 0x50 bytes in its slot written as a sprite with no area (XYZ2 both 0): the packet's GIF tag counts it
+        void letterSkip(uint8_t *rdram, uint32_t slot)
+        {
+            const uint32_t at = 0x006CC430u + 4 * slot, p = guestAny(rdram, at), next = p + 0x50u;
+            std::memset(getMemPtr(rdram, p), 0, 0x50);
+            std::memcpy(getMemPtr(rdram, at), &next, 4);
+        }
+        // FUN_0046A980(?, x0 a1, y0 a2, x1 a3, y1 t0 (y up: the display height minus the row), RGBA t1, ST t2, slot t3)
+        void letter(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t slot = getRegU32(ctx, 11), h = guestAny(rdram, 0x0066D040u);
+            const auto s16 = [&](int r) { return float(int16_t(getRegU32(ctx, r) & 0xFFFF)); };
+            if (letterRecord(rdram, slot, s16(5), float(h) - s16(6), s16(7), float(h) - s16(8), getRegU32(ctx, 9), getRegU32(ctx, 10)) &&
+                g_textNative)
+                return letterSkip(rdram, slot);
+            g_origLetter(rdram, ctx, runtime);
+        }
+        // FUN_0046AA80(x0 f12, y0 f13, x1 f14, y1 f15 (y up, x the display scale +0xF4 / +0xF8), RGBA a1, ST a2, slot a3);
+        // rounded as the original: (int)(offset + coordinate), the offset (0x675170 / 0x675174) taken off again
+        void letterF(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t gfx = guestAny(rdram, 0x00674B00u);
+            const float sx = guestF(rdram, gfx + 0xF4u), sy = guestF(rdram, gfx + 0xF8u), h = float(guestAny(rdram, 0x0066D040u));
+            const float ox = float(int32_t(guestAny(rdram, 0x00675170u))), oy = float(int32_t(guestAny(rdram, 0x00675174u)));
+            float f[4];
+            std::memcpy(f, &ctx->f[12], sizeof f);
+            const auto px = [](float o, float v) { return float(int32_t(o + v)) - o; };
+            if (letterRecord(rdram, getRegU32(ctx, 7), px(ox, f[0] * sx), px(oy, h - f[1] * sy), px(ox, f[2] * sx), px(oy, h - f[3] * sy),
+                             getRegU32(ctx, 5), getRegU32(ctx, 6)) &&
+                g_textNative)
+                return letterSkip(rdram, getRegU32(ctx, 7));
+            g_origLetterF(rdram, ctx, runtime);
+        }
+
         template <int N>
         void otherDisplay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
+            if (N == 3 && g_frameCapturing && textBegin(rdram, getRegU32(ctx, 4)))
+            {
+                ++g_twoDStats.strings;
+                // native: list +0xB8 only (text in the 3D lists stays on the GS), every page's texture at hand
+                g_textNative = twoDNative() && g_currentList == 0xB8u &&
+                               std::all_of(g_textSlots.begin(), g_textSlots.end(), [](const TextSlot &s) { return s.key && worldTextureReady(s.key); });
+                if (g_textNative)
+                    return g_other[3].original(rdram, ctx, runtime); // its letters come to letter / letterF
+                ++g_twoDStats.stringsGs;
+            }
             if (g_frameCapturing)
             {
                 const uint32_t sub = guestAny(rdram, 0x70000034u);
@@ -4326,6 +4577,21 @@ namespace pop_native_live
                 const int32_t image = mat.textureKey == kRefractionKey ? -2 : mat.textureKey == kHaloAlphaKey ? -3 : mat.textureKey == kHaloRestoreKey ? -4 : mat.textureKey == kPinchKey ? -5 : mat.textureKey == kHaloSaveKey ? -6 : mat.textureKey && imageOf.count(mat.textureKey) ? imageOf[mat.textureKey] : -1;
                 textured += image >= 0;
                 const uint32_t nb = uint32_t(batches->size());
+                // list +0xB8 (the 2D pass) under the 2D camera: drawn through its clip, whole, in the layer after the post effects
+                float twoDModel[16];
+                const bool twoDMesh = mat.list == 0xB8u && !(mat.zTest & 8u);
+                if (twoDMesh)
+                {
+                    // the clip read as a column-major array is the matrix for column vectors (native_renderer recordScene)
+                    for (int c = 0; c < 4; ++c)
+                        for (int r = 0; r < 4; ++r)
+                        {
+                            twoDModel[4 * c + r] = 0;
+                            for (int k = 0; k < 4; ++k)
+                                twoDModel[4 * c + r] += g_twoDClip[4 * k + r] * model[4 * c + k];
+                        }
+                    model = twoDModel;
+                }
                 putBytes(f, model, size_t(4) * size_t(16));
                 putBytes(f, &image, size_t(4) * size_t(1));
                 putBytes(f, &mat.flags, size_t(4) * size_t(1));
@@ -4335,7 +4601,8 @@ namespace pop_native_live
                 putBytes(f, &mat.fogMin, size_t(4) * size_t(1));
                 putBytes(f, &mat.fogMax, size_t(4) * size_t(1));
                 putBytes(f, &mat.fogColour, size_t(4) * size_t(1));
-                putBytes(f, &mat.zTest, size_t(4) * size_t(1));
+                const uint32_t zTest = mat.zTest | (twoDMesh ? 12u : 0u);
+                putBytes(f, &zTest, size_t(4) * size_t(1));
                 putBytes(f, &mat.fbmsk, size_t(4) * size_t(1));
                 putBytes(f, &nb, size_t(4) * size_t(1));
                 const uint64_t variant = worldOut ? vertexVariant(mat) : 0;
@@ -4528,6 +4795,8 @@ namespace pop_native_live
         void listRender(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_currentList = getRegU32(ctx, 4) - g_drawManager;
+            if (g_currentList == 0xB8u)
+                twoDClip(rdram);
             if (g_world && g_worldOpen && g_currentList == 0x88u && g_worldPure)
                 ++g_lateStats.pureAtLate;
             g_origListRender(rdram, ctx, runtime);
@@ -4587,6 +4856,7 @@ namespace pop_native_live
             g_zoom = 0.0f;
             g_postNative = 0;
             g_haloAddsInWindow = 0;
+            g_textActive = false;
         }
 
         void logClipChange(uint8_t *rdram, const char *when)
@@ -4704,6 +4974,10 @@ namespace pop_native_live
                                  (unsigned long long)g_worldStats.skinGs[0], (unsigned long long)g_worldStats.skinGs[1],
                                  (unsigned long long)g_worldStats.skinGs[2], (unsigned long long)g_worldStats.litStatic,
                                  (unsigned long long)g_worldStats.litNative, (unsigned long long)g_worldStats.envNative);
+                if (g_world2D && g_worldStats.frames % 300 == 0)
+                    std::fprintf(stderr, "[pop:world] 2D: rectangles %llu, letters %llu, strings %llu (on the GS %llu)\n",
+                                 (unsigned long long)g_twoDStats.rects, (unsigned long long)g_twoDStats.letters,
+                                 (unsigned long long)g_twoDStats.strings, (unsigned long long)g_twoDStats.stringsGs);
                 ++g_lateStats.frames;
                 if (g_worldLate && g_worldStats.frames % 300 == 0)
                 {
@@ -5056,6 +5330,9 @@ namespace pop_native_live
                          {0x004AD900u, zoomSmooth, &g_origZoom},
                          {0x004ADD80u, motionSmooth, &g_origMotion},
                          {0x004A93C0u, smartBlur, &g_origHaze},
+                         {0x004B4580u, rectangle, &g_origRect},
+                         {0x0046A980u, letter, &g_origLetter},
+                         {0x0046AA80u, letterF, &g_origLetterF},
 #if POP_SPRITE_VU1
                          {0x004AA240u, haloDisplay, &g_origHalo},
                          {0x004AEA00u, pinchEffect, &g_origPinch},
@@ -5145,6 +5422,15 @@ namespace pop_native_live
             g_origHaze = runtime.lookupFunction(0x004A93C0u);
             if (g_origHaze)
                 runtime.replaceFunction(0x004A93C0u, smartBlur);
+            g_origRect = runtime.lookupFunction(0x004B4580u);
+            if (g_origRect)
+                runtime.replaceFunction(0x004B4580u, rectangle);
+            g_origLetter = runtime.lookupFunction(0x0046A980u);
+            if (g_origLetter)
+                runtime.replaceFunction(0x0046A980u, letter);
+            g_origLetterF = runtime.lookupFunction(0x0046AA80u);
+            if (g_origLetterF)
+                runtime.replaceFunction(0x0046AA80u, letterF);
             g_origAddHalo = runtime.lookupFunction(0x004AB1C0u);
             if (g_origAddHalo)
                 runtime.replaceFunction(0x004AB1C0u, addHalo);

@@ -540,8 +540,9 @@ namespace pop_native
 
         // the scene pass into `fb` (colour ends in TRANSFER_SRC layout, see the render pass); `colour` is fb's colour
         // image, copied into frameCopy at each Draw::copyFrame (prepareFrameCopy first)
+        // twoD: the 2D layer (Draw::afterPost), resumed over the scene after the post effects, without a clear
         void recordScene(VkCommandBuffer cb, VkFramebuffer fb, VkImage colour, uint32_t width, uint32_t height, const float clip[16],
-                         const std::vector<Draw> &draws)
+                         const std::vector<Draw> &draws, bool twoD = false)
         {
             // The game's clip matrix is stored for row vectors (clip = [x y z 1] * C), so read as a
             // column-major array it is already C transposed, the matrix for column vectors.
@@ -549,11 +550,11 @@ namespace pop_native
             std::memcpy(clear[0].color.float32, options.clearColour, sizeof(float) * 4);
             clear[1].depthStencil = {0.0f, 0};
             VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-            rb.renderPass = renderPass;
+            rb.renderPass = twoD ? renderPassLoad : renderPass;
             rb.framebuffer = fb;
             rb.renderArea.extent = {width, height};
-            rb.clearValueCount = 2;
-            rb.pClearValues = clear;
+            rb.clearValueCount = twoD ? 0 : 2;
+            rb.pClearValues = twoD ? nullptr : clear;
             vkCmdBeginRenderPass(cb, &rb, VK_SUBPASS_CONTENTS_INLINE);
             // the GS samples a pixel at its integer coordinate, Vulkan at its centre: shift the picture by
             // half a GS pixel (640x448 across the target) so both sample the same points (Z then matches
@@ -570,6 +571,8 @@ namespace pop_native
                 VkPipeline bound = VK_NULL_HANDLE;
                 for (const Draw &d : draws)
                 {
+                    if (d.afterPost != twoD)
+                        continue;
                     if ((d.copyFrame || d.saveFrame) && pass == 0 && frameCopy.image && frameCopyW == width && frameCopyH == height)
                     {
                         const VkImage target = d.saveFrame ? frameSave.image : frameCopy.image;
@@ -641,7 +644,10 @@ namespace pop_native
                         bound = want;
                     }
                     Push push;
-                    mul(clip, d.model, push.mvp);
+                    if (d.screen)
+                        std::memcpy(push.mvp, d.model, sizeof push.mvp);
+                    else
+                        mul(clip, d.model, push.mvp);
                     // x: bit 0 alpha test, bit 1 blended (alpha out = texel * vertex alpha), bit 2 test LESS,
                     // bit 3 legacy blend (glTF BLEND: drop nearly transparent texels), bit 4 keep the
                     // failures instead (the failure pass keeps exactly the pixels the test rejects), bit 5 fog as vertex alpha
@@ -1853,6 +1859,7 @@ namespace pop_native
         // the post chain set by setPostEffects (the in-game world: the effects the game left to the native frame) runs over
         // the colour before the readback; the depth read back is the scene's
         const bool post = m->postOn();
+        const bool twoD = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.afterPost; });
         ok = ok && (!post || m->ensurePostBuffers(width, height, error));
         if (!post)
             m->postPrevValid = false;
@@ -1862,6 +1869,8 @@ namespace pop_native
                 m->recordScene(cb, fb, colour.image, width, height, clip, draws);
                 if (post)
                     m->recordPost(cb, colour.image, width, height);
+                if (twoD)
+                    m->recordScene(cb, fb, colour.image, width, height, clip, draws, true);
                 VkBufferImageCopy region{};
                 region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 region.imageExtent = {width, height, 1};
@@ -1964,6 +1973,8 @@ namespace pop_native
         }
         else
             m->postPrevValid = false; // a skipped post chain leaves postPrev stale
+        if (!overlay && std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return d.afterPost; }))
+            m->recordScene(cb, m->targetFb, m->targetColour.image, internalWidth, internalHeight, clip, draws, true);
         VkImage dst = m->swapImages[index];
         Impl::barrier(cb, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
                       VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);

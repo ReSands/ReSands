@@ -56,12 +56,10 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: 0.14 step 1, the native 2D layer offline. Plan and survey: `docs/native_2d.md` (approved 30 Oct: engine-level
-  hooks per 2D producer, no GS packets).** Step 1 = a renderer pass after the post effects (no Z test) + hooks for STR
-  letters (FUN_0046A980 / FUN_0046AA80) and rectangles (FUN_004B4580, kind 11 fades) + CJIdxMesh / particles in +0xB8,
-  replayed by `pop_state_frame`; judge against GS-only saves 185602 (HUD), 191358 (white-out), 192114 (save menu),
-  090720 (pause menu), 191059 (letterbox). Then steps 2-5 (live HUD behind `POP_NATIVE_2D`, movie display, loading
-  screen, user TV check) need boots: ask the user first.
+- **Next: 0.14 step 2 boot (asks the user first).** Steps 1 + 2 in code 1 Nov (`docs/native_2d.md` "Steps"): 2D layer
+  after the post effects, rectangle / letter hooks, +0xB8 through the 2D camera, live behind `POP_NATIVE_2D=1`. Offline:
+  white-out, save / pause menu, HUD bars, letterbox right; letters only checkable live. Then steps 3-5 (movie display,
+  loading screen, user TV check).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".

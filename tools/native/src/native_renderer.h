@@ -135,6 +135,8 @@ namespace pop_native
         bool copyFrame = false;        // copy the frame (as drawn so far) for kFrameCopyImage before this draw (one pass in game order only)
         bool saveFrame = false;        // as copyFrame, into kFrameSaveImage
         float copyRect[4] = {0, 0, 1, 1}; // the part copied (x0, y0, x1, y1 of the frame, 0..1); the rest of the copy is stale
+        bool afterPost = false; // the 2D layer: drawn over the frame after the post effects (HUD, menus, fades, letterbox)
+        bool screen = false;    // `model` is the whole transform to clip space (2D quads in screen pixels), not object -> world
     };
 
     // The game's post effects for the window path (present): CAfterEffect::ColorDiffusion (glow) and
