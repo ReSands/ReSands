@@ -2690,8 +2690,13 @@ namespace pop_native_live
             if (logged++ < 6)
                 std::fprintf(stderr, "[pop:native] water (P6 %s) element %08x packet %08x: %zu packets, %zu triangles\n",
                              s.usePort ? "port" : "interpreter", element, packet, sink.packets.size(), b.indices.size() / 3);
-            if (b.indices.empty())
-                return false;
+            if (b.indices.empty()) // every triangle clipped away: skipping the call keeps the frame pure (as particles)
+            {
+                if (!(g_world && g_worldLate))
+                    return false;
+                ++g_waterStats.native;
+                return true;
+            }
             // P6's own fog: F per vertex (XYZF2), about 225-255 in the saves, far less than the zone's line (the colour pass
             // copies a frame that is fogged already). The renderer's F is a + b * w per draw: a least-squares line through
             // P6's (w, F), clamped to their range. shortcut: up to ~18 off (fountain, 225..255, < 5 elsewhere); F per vertex if it shows.

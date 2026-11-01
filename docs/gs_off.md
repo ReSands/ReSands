@@ -58,6 +58,10 @@ frame rather than causes: to confirm with the why-lines.
   (`07c` / `076` / `07d` / `05c` and every "skinned call on the GS" line sit in the first frames after the load, counters
   frozen after that). 155110's Pinch calls (3) also fall there, so the blended Pinch needs a live rewind check. No water
   drawn in 162819's view.
+- **Water session (user, cold boot + own memory-card save, `play_20261101_160253.log`):** water looks right to the user;
+  draws 9101, native 8984, not replayed 0; frames 13200, pure 12797, **ended by water +0x88 206**. The 117 non-native
+  water draws were the silent `b.indices.empty()` path (all triangles clipped: the GS got an empty colour pass that still
+  closed the purity). Fixed: skipped as native, as particles already were. A 45 fps dip seen once: performance, later.
 So the steady game, title and movie are covered; the open fallbacks are the ones only seen in play (blended Pinch, now
 native; water; single calls).
 
