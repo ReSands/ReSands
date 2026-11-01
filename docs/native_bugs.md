@@ -784,3 +784,9 @@ MotionSmooth, FixBlend, Spiral, SmartBlur). FUN_004AF940's floats: f12..f15 = th
   `POP_STATE_ZOOMSMOOTH=<p>` forces it (no save has it). Forced p = 1 on 1024 184926: a strong centred zoom blur, looks plausible;
   **no GS reference yet**: needs a GS-only save while the power of haste runs (the live ramp's range of p is not known).
 
+
+- **Progressive scan crash (1 Nov, parked by the user):** choosing progressive scan in the title menu (step 5 boot,
+  `POP_NATIVE_2D=1`) -> black screen + looping garbage audio. Log `play_20261101_134251.log` ends with
+  `guest-branch:missing-target` JALR from 0x16AA0C to 0x3F091440 (a float, not code; a0 = 0xC22DA2F1 also a float):
+  a corrupt function pointer, game-side. Not yet known whether it happens on the GS-only build (`-Mode gs`) or on a
+  real PS2; check that first.
