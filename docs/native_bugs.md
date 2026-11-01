@@ -807,7 +807,7 @@ MotionSmooth, FixBlend, Spiral, SmartBlur). FUN_004AF940's floats: f12..f15 = th
   **no GS reference yet**: needs a GS-only save while the power of haste runs (the live ramp's range of p is not known).
 
 
-- **Progressive scan crash (1 Nov, parked by the user):** choosing progressive scan in the title menu (step 5 boot,
+- **Progressive scan crash (1 Nov; next job, user 1 Nov: before the next PC rebuild):** choosing progressive scan in the title menu (step 5 boot,
   `POP_NATIVE_2D=1`) -> black screen + looping garbage audio. Log `play_20261101_134251.log` ends with
   `guest-branch:missing-target` JALR from 0x16AA0C to 0x3F091440 (a float, not code; a0 = 0xC22DA2F1 also a float):
   a corrupt function pointer, game-side. Not yet known whether it happens on the GS-only build (`-Mode gs`) or on a

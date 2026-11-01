@@ -15,6 +15,11 @@ measured and explained).
    ApplyConvolution blits).
 5. **Re-check the parked bugs with the GS off:** hybrid-frame bugs (`docs/native_bugs.md`, rule of 26 Oct), audit
    item 11, N28, the progressive-scan crash (GS-only first).
+   **Decision (user, 1 Nov): step 5 and the default flip wait for the real-PS2 pipeline (step 4c point 7)**; judging
+   against our GS emulation now is a halfway house. Exception, done next: the progressive-scan crash
+   (`docs/native_bugs.md`, a crash, not a picture question). Questions for the hardware when it is set up: N27 (halo
+   flicker), N30 (slowed enemy white vs sandy), N15 / N17, N28 (Retry fade pop-in), 185807's darker floor (step 4c
+   leftovers (d)), the single GS calls (step 1), then the parked hybrid bugs.
 
 Not 0.2: performance (waits until fully native), the real-PS2 reference (N15, N17, N27).
 
@@ -162,7 +167,8 @@ capture also keeps that frame's GS trace for the real-PS2 replay later (`docs/ro
    against a `-GsOff` boot of the same save) and the scores separate real differences from noise. Not useful
    (offline replay misses live-only paths that matter, or alignment fails) -> build the comparison mode early
    (both renderers every frame, `docs/native_renderer.md` "Reference renderer toggle"; several days, estimate).
-Then step 5 (parked bugs with the GS off), then flip `play.ps1` to `-GsOff` by default (0.2 done).
+Then step 5 (parked bugs with the GS off), then flip `play.ps1` to `-GsOff` by default (0.2 done). Both wait for the
+real-PS2 pipeline (user, 1 Nov; step 5 above).
 
 ## Step 4b, first run (1 Nov)
 **Job** `tools/windows/gsoff-capture.ps1` (2.7 min, TV on, no build): 9 scenes in `-Mode gs`, three Select quick-saves
