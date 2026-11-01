@@ -56,9 +56,10 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: plan 0.2** (GS off by default, judged frame by frame; `docs/roadmap.md`). Parked from step 5 (`docs/native_bugs.md`):
-  N28 (objects pop in at the end of the Retry fade-out, minor), progressive scan from the title menu crashes (game-side
-  bad function pointer; check GS-only first).
+- **Next: 0.2** (GS off by default; plan + progress `docs/gs_off.md`). Step 1 (GS census, `POP_NATIVE_GS_CENSUS`) 1 Nov:
+  pure game frames draw only alpha on the GS; colour comes from fallback frames (~1 in 300: blended Pinch, water,
+  single calls). Next: dump the title / movie / loading frames, why-lines for the fallbacks. Parked (`docs/native_bugs.md`):
+  N28 (Retry fade pop-in), progressive scan from the title menu crashes (check GS-only first).
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".

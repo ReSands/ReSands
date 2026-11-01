@@ -30,7 +30,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   HUD; 0.13's flashes are the after-effects, Pinch first.) 0.13 closed 30 Oct night by the user's in-motion check; `-NativeLate` is the default.
 - **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the emulated GS output
   of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats
-  differ, so residual differences must be measured and explained).
+  differ, so residual differences must be measured and explained). Plan and progress: `docs/gs_off.md`.
 - **Hardware reference (idea, user 25 Oct 2026; tool for 0.2, not investigated yet):** a real PS2 as ground truth for
   "is this original?" and as the true reference for `tools/livecmp.py`. Not whole save states (emulator snapshots
   cannot be restored on a console). (a) GS replay (days, estimate): a PS2SDK homebrew player, loaded over ethernet
