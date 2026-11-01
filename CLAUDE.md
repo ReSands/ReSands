@@ -44,7 +44,7 @@ for Xbox addresses and Hor+ hooks.
 Keep this short: finished work goes to the topic docs, replaced bullets to `docs/history.md` (last moved:
 "Moved from CLAUDE.md on 1 Nov 2026 (N18-N22 closed)").
 
-- **Where we are (1 Nov): 0.13 closed and every open native bug before 0.14 cleared; 0.14 steps 1-2 closed 1 Nov; next is step 3 (movie display).**
+- **Where we are (1 Nov): 0.13 closed and every open native bug before 0.14 cleared; 0.14 steps 1-3 closed 1 Nov, step 4 in code (not seen live); next is step 5 (user TV check).**
   Native renderer on by default in `play.ps1` (world, lit statics, characters, translucents, shadows, P5/P6/P9, late
   lists, halos, Pinch, post chain; `-NoNative*` switches send parts back to the GS). The frame is "pure" (no GS draw yet)
   up to the 2D pass in ~2399/2400 frames (192645, 162621 boots 1 Nov): it ends at list +0xB8 (`list18`, `idx`), which is
@@ -56,9 +56,11 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Next: 0.14 step 3 (movie display, `docs/native_2d.md` "Steps").** Steps 1 + 2 in code and booted 1 Nov (`docs/native_2d.md` "Steps"): `POP_NATIVE_2D=1`
-  keeps the frame pure through the 2D pass, text right, fades / menus right after 39f6c78. HUD rings + save-menu panel
-  fixed 1 Nov (CLAMP_1 from flags, 4-bit CT32 texture; boot checked). Next: steps 3-5 (movie display, loading screen, user TV check).
+- **Next: 0.14 step 5 (user TV check, `docs/native_2d.md` "Steps").** With `play.ps1 -Env 'POP_NATIVE_2D=1'`: HUD in a fight, pause +
+  title menus, a loading screen, a movie, a fade, a cutscene. Steps 1-3 booted 1 Nov (movie: `PS2_DisplayVideo` hook, test
+  pattern exact, 0 missed frames). Step 4 (loading screen, `closeStream` / `loadingQuads`) is offline-checked only: no scripted
+  boot reaches one (save boots freeze it; new game skips it), so step 5 is its first live test (log `[pop:world] loading
+  screen: N frames native`). Then `play.ps1` default on and close 0.14.
 - **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 124/669 matched; 1 Nov: run 5 analysed, header + aligned diff + runner fixes, short test run (same passes, better near misses, faster); Qwen queue via the "Qwen DARE
   audio decomp" shortcut). Small open items (Mac runtime build: stale precompiled header after a compiler update, delete `game/recomp/runtime-src/build-mac` PCH; Esc not quitting, `POP_NATIVE_SKIP` ignored, `pop_world_test` exit 138
   on the Mac): `docs/native_bugs.md` "Side jobs".

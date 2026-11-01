@@ -117,6 +117,11 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    kick). With POP_NATIVE_2D the blocks are unpacked into one image (a per-frame `kShadowKey` image: sent with pixels every frame)
    drawn as a 2D-layer quad (opaque, clamped); a frame with no marker gets it from `worldDisplay3D` here. Native clear = black
    around a letterboxed movie. Boot: `POP_MOVIE_TEST=1` pattern for the placement, no "unexpected buffers" log line, sharpness.
+   **Boot 1 Nov (`game\jobs\twod1101f.ps1`, shots `game\recomp-sotc\shots1101f`): works.** Cold boot to INTRO.INT, native vs +2D
+   vs +2D with `POP_MOVIE_TEST=1`: the test pattern sits exactly on its 256-pixel tiles with smooth gradients (placement and
+   block unpacking right); the intro and letterboxed CINE_010 frames as the GS (shots differ only by movie timing: playback
+   follows the clock); 1800 frames injected, 0 missed, 0 unexpected buffers; 60 fps. Some movie frames log "FRAME fbp .. is on
+   screen, picture into fbp .." (targetFbp redirect, as in 3D frames); no visible effect. **Step 3 done.**
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).
    **Code 1 Nov (offline, boot pending):** FUN_004C9C80 builds its own DMA list (FUN_004A3D00: FRAME / ZBUF / scissor) and kicks
    it itself (no PS2_Flip, so worldKick never sees it). Hook point: its ClosePacketStream (0x4A1800) while 0x6751F4 = 1 (set only
@@ -129,6 +134,11 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    / 0xF402E7E8 (disc), 256 x 256 PSMCT32 **stored raw** (no chunks: `pop_bigfile::readEntry` now returns such an entry as is),
    alpha 0 / 0xFF; the disc's As = 0xFF x 0x40 >> 7 = 127/128 baked into its image (the renderer would clamp the texel first).
    Offline check (Python model of the same maths, save 192103): mean abs diff 0.47 / 255 against its GS frame.
+   **Not yet seen live.** Boot 1 Nov: a save boot of 192103 never redraws the loading screen (the picture stays as saved, 2D
+   shots pixel-identical to native, then CINE_010 starts), and a cold boot with the balcony script (`twod1101g`) has no
+   loading screen (new game -> balcony directly; it shows on later level changes). Log line `[pop:world] loading screen: N frames
+   native` (every 120) says whether the hook drew. Checked in step 5. If wrong, the likely symptom is the GS's own loading
+   screen (it draws before the marker), not a crash; if the GS hook misses the picture, "no native picture" in the log.
 5. **User check (TV):** HUD in a fight, pause menu, title menu, a loading screen, a movie, a fade, a cutscene. Then
    `play.ps1` default on and close 0.14.
 
