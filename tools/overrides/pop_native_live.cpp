@@ -5068,6 +5068,9 @@ namespace pop_native_live
                 if (g_worldMarked)
                 {
                     loadingQuads(rdram);
+                    static uint64_t frames = 0;
+                    if (frames++ % 120 == 0)
+                        std::fprintf(stderr, "[pop:world] loading screen: %llu frames native\n", (unsigned long long)frames);
                     std::vector<uint8_t> f;
                     writeFrame(true, &f);
                     pop_native_world::submitFrame(g_worldSeq, g_frameGeneration, std::move(f));
