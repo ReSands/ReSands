@@ -42,7 +42,8 @@ the display merge uses PMODE's ALP (`docs/native_renderer.md` "Display stage"). 
 over the 1 Nov sessions (~22,000 game frames; ~1 in 300):
 - **Pinch, blended** (`+0x74 != 0xFF`): the `pinchRecord` shortcut, hit in play (session 1: 15 calls; the 13:46
   session 22). Native Pinch only does the opaque case. **Native since 1 Nov** (InvBlend, As = +0x74 >> 1, TCC 0 from FUN_004AFFC0's t1;
-  opaque gate save 115837 unchanged at 8.04); to confirm live at a rewind's start / end.
+  opaque gate save 115837 unchanged at 8.04). Live 1 Nov (user, 155110): 1718 / 1721 native (the 3 at the load); the
+  white flash at the rewind's start is in `-Mode gs` too (N29, not a bug).
 - **Water (P6)**: 32 + 12 frames; draws not replayed natively (`water ... draws N, native M`; reason not logged yet).
 - **Single calls** (session 2: 9 frames): mesh +0x2c (4), mesh +0x3c, mesh +0x88 (2), sprite +0x88, idx +0xb8;
   session 1: ref +0x2c (1). Need `POP_NATIVE_WORLD_WHY=1` lines.

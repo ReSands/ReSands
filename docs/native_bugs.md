@@ -586,6 +586,11 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   each retry load are black; after load 03 (frame 4171-4172) 2 injected pictures show a close-up wall from a stale
   camera (the 23 Oct load-flash family, N3), the other retries black throughout. Not obviously what the user saw
   (objects on black, before the load). Not known: GS-only (`-NoNative2D`) does the same? Next: a GS-only retry A/B.
+- **N29 (not a bug for now; user 1 Nov): white flash at the start of every rewind.** Seen in native play from 155110
+  (blended Pinch native, 6054f84; `play_20261101_155413.log`: pinch 1721 calls, 1718 native) and **in `-Mode gs` too**
+  (user A/B, same save), so it is the game's own effect, not ours. The four user saves (`play_20261101_155605` ..
+  `155619`, copies in `game/analysis/saves1101/`) are mid-rewind, flash not caught, Pinch +0x74 0xFF in all. Re-check on a
+  real PS2 / video with N15 / N17 / N27.
 
 ## Storage of captures (agreed with the user 24 Oct)
 
