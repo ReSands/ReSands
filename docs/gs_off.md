@@ -71,7 +71,7 @@ native; water; single calls).
 session 1: `046` 684 kicks, `15e`/`14e` on fbp 0x118) were seen only as first sightings, not dumped. Next: a cold-boot
 dump (`POP_NATIVE_GS_CENSUS=50`, intro movie + title menu) and a why-line boot over the fallback saves.
 
-## Step 2: native presenter (1 Nov, code; not built or booted yet)
+## Step 2: native presenter (1 Nov; built and booted, user check pending)
 **Switch:** `POP_NATIVE_PRESENT=1` (off by default). Runtime patch 45 (`GSHostPresent`, `gs_host_inject.h`): at each
 presentation a hook gets the display registers and may return its own frame; the backend's Present is then skipped and
 the window loop does not take the GS's shared GPU texture. Override (`pop_native_world.cpp`): each native picture also goes
@@ -86,5 +86,13 @@ change nothing on screen. Until the first native picture the GS's picture is sho
   measures this; step 3 must make those frames native or accept them.
 - The merge runs on the CPU every refresh (4 MB copy + 640x448 merge on the window thread; ~1-3 ms, estimate). A GPU line
   blend later (performance waits until fully native).
-**Next:** PC build (`rebuild.ps1 -Fast` after applying patch 45), then a short boot with the user's OK:
-`play.ps1 -Env 'POP_NATIVE_PRESENT=1'` (game, title menu, a movie, a loading screen) against the default.
+**Boots 1 Nov** (patch 45 applied on the PC; jobs `game\jobs\gsoff1101e/f/g.ps1`, shots `game/analysis/gsoff1101e/f/g/`;
+A = play.ps1 defaults, B = + POP_NATIVE_PRESENT=1): no crash, fps and native counters unchanged (0 missed, 0 unexpected).
+- Save menu 192114 (static): B vs A mean 0.5-1.3 / 255, < 0.1% of pixels off by more than 8.
+- Fight 185602 (HUD, tutorial text) and the cold-boot intro movie: right by eye (the runs are not in step, so no pixel score).
+- Save 192103 (loading screen kept in the save, not redrawn): B first showed the title's last "Loading options" box (our
+  memory does not come back with a save state). Fixed (221548a): the GS's picture is shown when no native picture came for
+  0.5 s; rerun: identical to A (0.00). The movie after it: the same movie frames in A and B (0.0 apart), shown a few
+  fields apart (movie playback follows the clock; not a presenter error).
+**Next:** the user's check on the TV: `play.ps1 -Env 'POP_NATIVE_PRESENT=1'` (title menu, a movie, a loading screen, play,
+a quick-save load), then step 3.
