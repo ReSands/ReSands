@@ -112,6 +112,11 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    **Step 2 done.**
 3. **Movie display**: `PS2_DisplayVideo` hook, picture drawn natively full screen (a frame with no marker: the native
    frame is just the movie).
+   **Code 1 Nov (offline, boot pending):** `displayVideo` (pop_native_live.cpp) hooks 0x4B4340 (frame a0 = 16x16 RGBA blocks,
+   blocks across a1 / down a2, x a3, y t0; called from VIDEO_DrawFrame, then PS2_Flip = table 0x6BB44C +0x1C -> 0x4A20C0 -> the
+   kick). With POP_NATIVE_2D the blocks are unpacked into one image (a per-frame `kShadowKey` image: sent with pixels every frame)
+   drawn as a 2D-layer quad (opaque, clamped); a frame with no marker gets it from `worldDisplay3D` here. Native clear = black
+   around a letterboxed movie. Boot: `POP_MOVIE_TEST=1` pattern for the placement, no "unexpected buffers" log line, sharpness.
 4. **The loading screen** (`FUN_004C9C80` hook: the two rotating layers and the fade; a frame with no marker).
 5. **User check (TV):** HUD in a fight, pause menu, title menu, a loading screen, a movie, a fade, a cutscene. Then
    `play.ps1` default on and close 0.14.

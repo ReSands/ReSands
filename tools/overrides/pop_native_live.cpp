@@ -4947,6 +4947,38 @@ namespace pop_native_live
             g_frameClosedBy.clear();
         }
 
+        // 0.14 step 3, the movie picture: PS2_DisplayVideo 0x4B4340 (VIDEO_DrawFrame; frame a0 = 16x16 RGBA blocks, row by row of
+        // blocks, blocks across a1 / down a2, at display pixel x a3, y t0) uploads it straight into the frame. With POP_NATIVE_2D it is
+        // a 2D-layer quad with the picture as this frame's own image; a frame with no 3D gets its marker here, so the native frame
+        // is just the movie (black around it: the native clear).
+        PS2Runtime::RecompiledFunction g_origVideo = nullptr;
+        void displayVideo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            if (g_world2D && g_worldPost && g_worldLate)
+            {
+                if (!g_worldMarked)
+                    worldDisplay3D(rdram);
+                const uint32_t src = getRegU32(ctx, 4), bw = getRegU32(ctx, 5), bh = getRegU32(ctx, 6);
+                const float x = float(getRegU32(ctx, 7)), y = float(getRegU32(ctx, 8));
+                if (twoDNative() && bw && bh && bw <= 64 && bh <= 64)
+                {
+                    pop_native::Image img;
+                    img.width = 16 * bw, img.height = 16 * bh;
+                    img.rgba.resize(size_t(img.width) * img.height * 4);
+                    const uint8_t *in = getConstMemPtr(rdram, src);
+                    for (uint32_t row = 0; row < img.height; ++row)
+                        for (uint32_t b = 0; b < bw; ++b)
+                            std::memcpy(&img.rgba[(size_t(row) * img.width + 16 * b) * 4], in + ((row / 16) * bw + b) * 1024u + (row % 16) * 64u, 64);
+                    const uint32_t key = kShadowKey + uint32_t(g_frameShadowImages.size()); // per-frame images: sent with their pixels every frame
+                    g_frameShadowImages.push_back(std::move(img));
+                    twoDQuad(rdram, x, y, x + 16 * bw, y + 16 * bh, 0, 0, 1, 1, 0x80808080u, key, 0x200u, 0, true, g_frameSeq++).native = true;
+                    return;
+                }
+                worldOnGs(rdram, "video");
+            }
+            g_origVideo(rdram, ctx, runtime);
+        }
+
         // glitch capture (pop_native_world dumpRecent): the frame's camera, fog zones 0-4 and purity, one line
         void noteGlitchFrame(uint8_t *rdram)
         {
@@ -5365,6 +5397,7 @@ namespace pop_native_live
                          {0x004ADD80u, motionSmooth, &g_origMotion},
                          {0x004A93C0u, smartBlur, &g_origHaze},
                          {0x004B4580u, rectangle, &g_origRect},
+                         {0x004B4340u, displayVideo, &g_origVideo},
                          {0x0046A980u, letter, &g_origLetter},
                          {0x0046AA80u, letterF, &g_origLetterF},
 #if POP_SPRITE_VU1
