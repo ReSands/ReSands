@@ -13,8 +13,9 @@
 # Run 2 (28 Oct night) is the first with -sdatathreshold 0, global names, float constants and member offsets in
 # the prompt; the queue starts with run 1's misses (moved to game\analysis\qwen_run1_misses\ to retry them).
 # -Until HH:mm: no new round after that time. -NoShutdown keeps the PC on. -Shortcut: (re)make the desktop shortcut.
-# -Addrs a,b,c: only these functions (a test run), in this order.
-param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut, [string]$Addrs = '')
+# -AddrsFile <file>: only the functions listed in it (one hex address per line; a test run), in this order. A file, not
+# a list argument: through start-job.ps1 a list arrived space-joined and 17e140 as the number 1.7E+141 (1 Nov).
+param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut, [string]$AddrsFile = '')
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 
@@ -85,7 +86,7 @@ try {
     foreach ($f in 'dare.h', 'dare_fix.h', 'units.tsv', 'protos.tsv', 'callees.tsv', 'asm', 'ghidra_c') {
         if (-not (Test-Path "$Root\game\decomp\dare\$f")) { throw "missing game\decomp\dare\$f (copy it from the Mac)" }
     }
-    if ($Addrs) { $queue = @($Addrs -split ',') }
+    if ($AddrsFile) { $queue = @(Get-Content $AddrsFile | Where-Object { $_.Trim() } | ForEach-Object { $_.Trim() }) }
     else {
         $queue = @(& $Python -I $Match --queue)
         if ($LASTEXITCODE -ne 0) { throw "qwen_match.py --queue failed: $($queue -join ' ')" }
