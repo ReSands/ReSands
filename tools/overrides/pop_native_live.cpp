@@ -1355,8 +1355,34 @@ namespace pop_native_live
             ++g_stats.drawsLightmap;
         }
 
+        // A skinned pass packet in memory: the bind-space batches as cnt tags up to the RET (an element's, as in the
+        // file) or as REF tags (an instanced ref's: per-instance qwords at ref + 0x10, then the element's shared
+        // block). Copied into one inline buffer (tag qword + its data) for the file decoder.
+        bool skinnedPacketBatches(uint8_t *rdram, uint32_t packet, std::vector<pop_assets::SkinnedBatch> &out)
+        {
+            std::vector<uint8_t> buf;
+            uint32_t pc = packet;
+            for (int steps = 0; steps < 4096 && pc + 16 <= kRam; ++steps)
+            {
+                const uint32_t t0 = guest32(rdram, pc), id = (t0 >> 28) & 7, qwc = t0 & 0xFFFF;
+                const uint32_t data = id == 3 || id == 0 ? guest32(rdram, pc + 4) & 0x01FFFFF0u : pc + 16;
+                if (data + qwc * 16 > kRam)
+                    return false;
+                buf.insert(buf.end(), rdram + pc, rdram + pc + 16);
+                buf.insert(buf.end(), rdram + data, rdram + data + qwc * 16);
+                pc = id == 1 ? data + qwc * 16 : pc + 16;
+                if (id != 1 && id != 3)
+                    break;
+            }
+            return pop_assets::skinnedFromPacket(buf.data(), buf.size(), 0, uint32_t(buf.size()), out) && !out.empty();
+        }
+        // skinned refs: bind pose per element, then packet (empty: failed); per element so readElement can forget it
+        std::unordered_map<uint32_t, std::unordered_map<uint32_t, std::vector<pop_assets::SkinnedBatch>>> g_refSkinned;
+
         // CJMeshElementRef::Display(ref, matrix index, pass): the instance's pass packet is the word
         // at ref + 4 * pass (pass 4: 0; low 4 bits masked); the object's next ref is at +0x1C.
+        // Skinned refs (element +0x48 = bone palette, N19 moss tufts) send the ref's packet with the element's
+        // bones, as CJMeshElement::Display: posed with poseSkinned(element, index), driver switch replayed.
         void refDisplayRecord(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             const uint32_t pass = getRegU32(ctx, 6) & 0xFF, index = getRegU32(ctx, 5) & 0xFFFF;
@@ -1365,6 +1391,8 @@ namespace pop_native_live
             bool worldOk = false;
             std::vector<WorldRecord> worldRecs;
             std::vector<uint64_t> worldBase;
+            std::vector<uint32_t> worldPalettes; // skinned refs' bone palettes in order (driver switches to replay)
+            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
             if (g_frameCapturing)
             {
                 uint32_t ref = getRegU32(ctx, 4);
@@ -1383,20 +1411,42 @@ namespace pop_native_live
                                                          (pass == 2 ? uint64_t(2) << 56 : 0);
                     const uint64_t base = (uint64_t(ref) << 16) | index | (uint64_t(1) << 63);
                     const bool seen = worldOk && g_frameSeen.count(key);
-                    const size_t world2 = worldOk ? worldCount2() : 0;
-                    if (worldOk)
+                    const size_t world1 = worldOk ? worldCount1() : 0, world2 = worldOk ? worldCount2() : 0;
+                    const uint32_t refEl = guestAny(rdram, ref + 0x20u), palette = refEl ? guestAny(rdram, refEl + 0x48u) : 0u;
+                    if (worldOk && palette)
                     {
-                        const uint32_t el = guestAny(rdram, ref + 0x20u);
-                        if (el && guestAny(rdram, el + 0x48u))
-                            worldOk = false; // a bone palette (skinned instance)
+                        if (g_worldCharacters && pass != 2 && pass != 3)
+                            worldPalettes.push_back(palette); // drawn natively below, its driver switch replayed
+                        else
+                        {
+                            worldOk = false; // characters on the GS, or a skinned pass we do not pose
+                            if (whyLog)
+                                std::fprintf(stderr, "[pop:world] skinned ref on the GS: ref %08x pass %u list +0x%x element %08x palette %08x\n", ref,
+                                             pass, g_currentList, refEl, palette);
+                        }
                     }
                     if (pass == 3)
                         lightmapRecord(rdram, ref, guestAny(rdram, ref + 12), index);
                     else if (g_frameSeen.insert(key).second)
                     {
                         const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & ~0xFu;
-                        const uint32_t el = guestAny(rdram, ref + 0x20u);
-                        if (el && !guestAny(rdram, el + 0x48u) && litDriverPass(rdram, el, pass))
+                        const uint32_t el = refEl;
+                        if (palette && pass != 2)
+                        {
+                            // skinned instance: the ref's packet (bind pose, decoded once per packet), the element's bones
+                            auto [bind, fresh] = g_refSkinned[el].try_emplace(packet & 0x01FFFFF0u);
+                            if (fresh && !skinnedPacketBatches(rdram, packet & 0x01FFFFF0u, bind->second))
+                                bind->second.clear();
+                            std::vector<pop_assets::Batch> posed;
+                            const LightEnv light = g_noLighting ? LightEnv{} : readLightEnv(rdram);
+                            if (!bind->second.empty() && poseSkinned(rdram, el, index, bind->second, posed, &light))
+                            {
+                                DrawMaterial dm = currentMaterial(rdram);
+                                dm.hasUvm = false; // the skin driver has no UV matrix
+                                g_framePosed.emplace_back(std::move(posed), dm);
+                            }
+                        }
+                        else if (el && !palette && litDriverPass(rdram, el, pass))
                         {
                             // a lit pass (as CJMeshElement::Display's, litDriverPass with the ref's element): litPose
                             auto &bind = g_litBatches[(uint64_t(ref) << 8) | pass];
@@ -1433,13 +1483,14 @@ namespace pop_native_live
                     {
                         if (pass == 3 && !g_worldBase.count(base))
                             worldOk = false; // its base was drawn by the GS
+                        else if (worldCount1() > world1)
+                            worldRecs.push_back({1, world1});
                         else if (worldCount2() > world2)
                             worldRecs.push_back({2, world2});
                         else if (!(seen && (pass == 3 || g_worldBase.count(base))))
                         {
                             worldOk = false;
                             ++g_worldStats.notRecorded;
-                            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
                             if (whyLog)
                             {
                                 const uint32_t packet = guestAny(rdram, ref + 4 * (pass == 4 ? 0 : pass)) & 0x01FFFFF0u;
@@ -1458,9 +1509,10 @@ namespace pop_native_live
                     ++g_worldStats.lightmaps;
                 if (g_currentList == 0x88u || g_currentList == 0xA8u)
                     ++g_lateStats.native;
+                for (const uint32_t palette : worldPalettes)
+                    worldReplayDriver(rdram, palette);
                 return;
             }
-            static const bool whyLog = std::getenv("POP_NATIVE_WORLD_WHY") != nullptr;
             if (whyLog && g_worldPure && g_worldOpen)
             {
                 // which refusal the per-record lines miss (sun 162621 ended purity at ref +0x2c without one)
@@ -3022,6 +3074,7 @@ namespace pop_native_live
             // was kept for the old one (N8/N9/N11: its lightmap, lit pass or skinned status drawn on the new one)
             g_skipped.erase(element);
             g_skinned.erase(element);
+            g_refSkinned.erase(element);
             for (uint64_t pass = 0; pass < 8; ++pass)
             {
                 g_fromPacket.erase((uint64_t(element) << 8) | pass);
@@ -3297,21 +3350,13 @@ namespace pop_native_live
                     const bool rigidSkinned = !palette && packet && (firstTag == 1 || firstTag == 6 || firstTag == 7);
                     if (((palette && guest8(rdram, palette)) || rigidSkinned) && packet)
                     {
-                        uint32_t pc = packet;
-                        for (int steps = 0; steps < 4096 && pc + 16 <= kRam; ++steps)
-                        {
-                            const uint32_t t0 = guest32(rdram, pc), id = (t0 >> 28) & 7;
-                            pc += 16 + (id == 1 || id == 6 || id == 7 ? (t0 & 0xFFFF) * 16 : 0);
-                            if (id != 1)
-                                break;
-                        }
                         std::vector<pop_assets::SkinnedBatch> skinned;
-                        const bool ok = pop_assets::skinnedFromPacket(rdram, kRam, packet, pc - packet, skinned);
+                        const bool ok = skinnedPacketBatches(rdram, packet, skinned);
                         static const bool skinLog = std::getenv("POP_NATIVE_SKINLOG") != nullptr;
                         if (skinLog)
-                            std::fprintf(stderr, "[pop:skin] el %08x from memory: packet %08x, %u bytes, %s, %zu batches\n", element, packet,
-                                         pc - packet, ok ? "decoded" : "FAILED", skinned.size());
-                        if (ok && !skinned.empty())
+                            std::fprintf(stderr, "[pop:skin] el %08x from memory: packet %08x, %s, %zu batches\n", element, packet,
+                                         ok ? "decoded" : "FAILED", skinned.size());
+                        if (ok)
                             g_skinned[element] = std::move(skinned);
                         else if (!rigidSkinned)
                             g_skipped[element] = 's';
