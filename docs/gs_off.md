@@ -225,6 +225,16 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    13 gate saves are pixel-identical to the build before (live path unchanged: the hook is null in the game); with it
    on, every one scores the same or better even against the old (displayed) reference. Live runtime not rebuilt (the
    change there is a null hook + a default argument; compiled into the offline tools on the Mac).
+3. ... **Done (1 Nov):** every one of the 40 saves (27 gsoffcap + 13 gate) is plain double buffering: the last chain
+   draws its colour into the buffer not displayed (0x0 <-> 0x8c; 0x118 = the glow buffer). `popstate.py --drawn` takes
+   that one; `score_saves.sh` scores against it (`game.png`) and passes the displayed one (`shown.png`) as FixBlend's
+   `--prev`. Re-scored (old = pool poses vs displayed, new = chain poses vs drawn; plain / vu1 build): 134636_1 13.76 ->
+   7.28 / 13.64 -> 7.14 (target met), 184926_2 9.42 -> 6.10 / 8.42 -> 4.97, 202314_1 9.12 -> 6.16, 115853_2 vu1 6.45 ->
+   5.09; 21 of 27 better in both builds. Worse: 115837_2 13.68 -> 14.41 / 12.59 -> 13.19 (the big flash, points 5-6),
+   202926 slightly in vu1 (5.81 -> 5.87, fountain). Nightly gate (`tools/nightly/render_gate.txt`) re-based to the new
+   reference (+ 0.1): most lines dropped (115837 9.53 -> 5.29, 134636 10.71 -> 7.65); 162246 plain rose 2.37 -> 2.43
+   (the plain build lacks the VU1 effects, which move between the two frames; its vu1 score is 1.61). Scores in
+   `game/analysis/gsoffcap/score/`, `score_vu1/`.
 2. **Poses from the chain (A; time box half a day).** Offline only: `state_frame.cpp` walks the chain once, records per
    skinned CALL (packet address, in order) the matrices uploaded before it; `poseSkinned` gets an optional source
    (a hook the offline tool sets; live keeps the pool), matched by packet + order. Same for layout B object matrices if

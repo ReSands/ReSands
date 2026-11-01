@@ -1,8 +1,10 @@
 #!/bin/bash
 # Native frame of every save in a folder against the game's own picture (offline, Mac or PC with bash):
 # pop_state_frame -> pop_native_view --frame, tools/popstate.py --frame, tools/livecmp.py score and side.
+# The game's picture is the buffer the save's last chain drew (popstate --drawn: the same frame as the native one,
+# docs/gs_off.md step 4c); the displayed one (the frame before) is FixBlend's previous frame.
 # Usage: tools/native/score_saves.sh <states dir> <out dir>   (run from anywhere; needs game/native-build)
-# Output: <out>/<save>.{pnf,log,native.png,game.png,side.png}, <out>/scores.txt (one line per save).
+# Output: <out>/<save>.{pnf,log,native.png,game.png,shown.png,side.png}, <out>/scores.txt (one line per save).
 # STATE_FRAME=pop_state_frame_vu1 for the VU1 paths (sprites, P5, P6, halos); VIEW_ARGS e.g. --noglow.
 set -u
 P=$(cd "$(dirname "$0")/../.." && pwd)
@@ -16,9 +18,9 @@ for st in "$IN"/*.state; do
     n=$(basename "$st" .state)
     "$B/${STATE_FRAME:-pop_state_frame}" "$st" "$OUT/$n.pnf" --bigfile DATA/PRINCE.BF --packindex "$P/game/analysis/packindex.txt" \
         > "$OUT/$n.log" 2>&1 || { echo "$n state_frame FAILED" | tee -a "$OUT/scores.txt"; continue; }
-    python3 -I "$P/tools/popstate.py" "$st" --frame "$OUT/$n.game.png" >> "$OUT/$n.log" 2>&1
-    # --prev: FixBlend's previous frame = the save's displayed picture (the game's other draw buffer)
-    "$B/pop_native_view" "$OUT/$n.pnf" "$OUT/identity.clip" "$OUT/$n.native.png" --frame --prev "$OUT/$n.game.png" ${VIEW_ARGS:-} \
+    python3 -I "$P/tools/popstate.py" "$st" --frame "$OUT/$n.game.png" --drawn >> "$OUT/$n.log" 2>&1
+    python3 -I "$P/tools/popstate.py" "$st" --frame "$OUT/$n.shown.png" >> "$OUT/$n.log" 2>&1
+    "$B/pop_native_view" "$OUT/$n.pnf" "$OUT/identity.clip" "$OUT/$n.native.png" --frame --prev "$OUT/$n.shown.png" ${VIEW_ARGS:-} \
         >> "$OUT/$n.log" 2>&1 || { echo "$n view FAILED" | tee -a "$OUT/scores.txt"; continue; }
     python3 -I "$P/tools/livecmp.py" side "$OUT/$n.native.png" "$OUT/$n.game.png" "$OUT/$n.side.png" >> "$OUT/$n.log" 2>&1
     echo "$n $(python3 -I "$P/tools/livecmp.py" score "$OUT/$n.native.png" "$OUT/$n.game.png" | tail -1)" | tee -a "$OUT/scores.txt"
