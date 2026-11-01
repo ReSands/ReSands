@@ -107,11 +107,78 @@ namespace
     // The shadow pass in the same chain (step 4c point 4): per drawn projector, from its caster-buffer FRAME (fbw 4, alpha
     // only) until the frame's FRAME comes back with colour writes, the CALL targets in order (casters, then receivers)
     std::vector<std::vector<uint32_t>> g_shadowSeqs;
+    // The halos the chain drew (point 5): each halo's texture pass (ALPHA 0x58 with FIX 0x80, Cs * Ad + Cd) is a sprite in
+    // 32-pixel strips; their bounding box = the halo square haloRecord builds (GS primitive coordinates, 1/16 px)
+    struct HaloSquare
+    {
+        int x0 = 1 << 30, y0 = 1 << 30, x1 = -(1 << 30), y1 = -(1 << 30);
+        bool used = false;
+    };
+    std::vector<HaloSquare> g_chainHalos;
+    // Text slot packets (point 5): CNT records holding one GIF tag (PACKED, 5 registers ST RGBA XYZ2 ST XYZ2 = 0x52512, nloop
+    // = letters) and the letters, in chain order (data address, letters)
+    std::vector<std::pair<uint32_t, uint32_t>> g_chainText;
+    size_t g_chainTextNext = 0, g_textSlotsChain = 0, g_textSlotsMissing = 0;
+    uint32_t chainTextSlot(uint32_t letters)
+    {
+        for (size_t i = g_chainTextNext; i < g_chainText.size(); ++i)
+            if (g_chainText[i].second == letters)
+            {
+                g_chainTextNext = i + 1;
+                ++g_textSlotsChain;
+                return g_chainText[i].first;
+            }
+        ++g_textSlotsMissing;
+        return 0;
+    }
+    // Every register write of a GIF stream (words [begin, end)): A+D, PACKED XYZ2 / XYZF2 (handed on as the register's own
+    // layout: x | y << 16), REGLIST; IMAGE data skipped
+    template <class F> void gifWrites(const std::vector<uint32_t> &w, size_t q, size_t end, F f)
+    {
+        while (q + 4 <= end)
+        {
+            const uint64_t lo = w[q] | uint64_t(w[q + 1]) << 32, hi = w[q + 2] | uint64_t(w[q + 3]) << 32;
+            const uint32_t nloop = lo & 0x7FFF, flg = (lo >> 58) & 3, nreg = (lo >> 60) & 0xF ? (lo >> 60) & 0xF : 16;
+            q += 4;
+            if (flg >= 2)
+            {
+                q += 4 * size_t(nloop);
+                continue;
+            }
+            size_t half = 0; // REGLIST: 64-bit words
+            for (uint32_t l = 0; l < nloop; ++l)
+                for (uint32_t r = 0; r < nreg; ++r)
+                {
+                    const uint32_t desc = (hi >> (4 * r)) & 0xF;
+                    if (flg == 0)
+                    {
+                        if (q + 4 > end)
+                            return;
+                        if (desc == 0xE)
+                            f(w[q + 2] & 0xFF, w[q] | uint64_t(w[q + 1]) << 32);
+                        else if (desc == 4 || desc == 5)
+                            f(desc, (w[q] & 0xFFFF) | (w[q + 1] & 0xFFFF) << 16);
+                        q += 4;
+                    }
+                    else
+                    {
+                        if (q + 2 * half + 2 > end)
+                            return;
+                        f(desc, w[q + 2 * half] | uint64_t(w[q + 2 * half + 1]) << 32);
+                        if (++half == 2)
+                            half = 0, q += 4;
+                    }
+                }
+            if (half)
+                q += 4;
+        }
+    }
     void readLastChain()
     {
         std::vector<std::array<float, 4>> vu(1024, std::array<float, 4>{});
         size_t calls = 0;
         enum { None, Casters, Receivers } shadow = None;
+        bool halo = false;
         const auto frame = [&](uint64_t v) {
             const uint32_t fbw = uint32_t(v >> 16) & 0x3F, mask = uint32_t(v >> 32);
             if (fbw == 4 && mask == 0xFFFFFFu)
@@ -152,28 +219,34 @@ namespace
                     while ((i + 2) % 4)
                         ++i;
                     const size_t end = std::min(w.size(), i + 4 * size_t(imm ? imm : 65536));
-                    for (size_t q = i; q + 4 <= end;)
-                    {
-                        const uint64_t lo = w[q] | uint64_t(w[q + 1]) << 32, hi = w[q + 2] | uint64_t(w[q + 3]) << 32;
-                        const uint32_t nloop = lo & 0x7FFF, flg = (lo >> 58) & 3, nreg = (lo >> 60) & 0xF;
-                        q += 4;
-                        if (flg == 2)
+                    gifWrites(w, i, end, [&](uint32_t reg, uint64_t v) {
+                        if (reg == 0x4C || reg == 0x4D)
+                            frame(v);
+                        else if (reg == 0x42 || reg == 0x43)
                         {
-                            q += 4 * size_t(nloop);
-                            continue;
+                            halo = (v & 0xFF) == 0x58 && ((v >> 32) & 0xFF) == 0x80;
+                            if (halo)
+                                g_chainHalos.emplace_back();
                         }
-                        if (flg != 0 || nreg != 1 || (hi & 0xF) != 0xE)
-                            break;
-                        for (uint32_t k = 0; k < nloop && q + 4 <= end; ++k, q += 4)
-                            if ((w[q + 2] & 0xFF) == 0x4C || (w[q + 2] & 0xFF) == 0x4D)
-                                frame(w[q] | uint64_t(w[q + 1]) << 32);
-                    }
+                        else if (halo && (reg == 4 || reg == 5))
+                        {
+                            HaloSquare &h = g_chainHalos.back();
+                            const int x = int(v & 0xFFFF), y = int((v >> 16) & 0xFFFF);
+                            h.x0 = std::min(h.x0, x), h.x1 = std::max(h.x1, x), h.y0 = std::min(h.y0, y), h.y1 = std::max(h.y1, y);
+                        }
+                    });
                     i = end;
                 }
                 else if (cmd == 0x20)
                     i += 1;
                 else if (cmd == 0x30 || cmd == 0x31)
                     i += 4;
+            }
+            if (id == 1 && qwc >= 6)
+            {
+                const uint32_t lo = rd32(data), hi = rd32(data + 4), regs = rd32(data + 8), nloop = lo & 0x7FFF;
+                if (((hi >> 26) & 3) == 0 && (hi >> 28) == 5 && regs == 0x52512u && rd32(data + 12) == 0 && qwc == 1 + 5 * nloop)
+                    g_chainText.emplace_back(data, nloop);
             }
             if (id != 5)
                 return;
@@ -192,7 +265,22 @@ namespace
                 p.bones.push_back(mat(q));
             g_chainPoses[rd32(tag + 4) & 0x01FFFFF0u].push_back(std::move(p));
         });
-        std::fprintf(stderr, "[state] chain: %zu calls, %zu packets, %zu shadow projectors\n", calls, g_chainPoses.size(), g_shadowSeqs.size());
+        std::fprintf(stderr, "[state] chain: %zu calls, %zu packets, %zu shadow projectors, %zu halos, %zu text slots\n", calls,
+                     g_chainPoses.size(), g_shadowSeqs.size(), g_chainHalos.size(), g_chainText.size());
+    }
+    size_t g_halosKept = 0, g_halosDropped = 0;
+    bool haloFilter(int x0, int y0, int x1, int y1)
+    {
+        constexpr int tol = 2 * 16; // 2 px
+        for (HaloSquare &h : g_chainHalos)
+            if (!h.used && std::abs(h.x0 - x0) <= tol && std::abs(h.y0 - y0) <= tol && std::abs(h.x1 - x1) <= tol && std::abs(h.y1 - y1) <= tol)
+            {
+                h.used = true;
+                ++g_halosKept;
+                return true;
+            }
+        ++g_halosDropped;
+        return false;
     }
     void chainBones(uint32_t packet, std::vector<std::array<float, 16>> &bones)
     {
@@ -778,6 +866,8 @@ int main(int argc, char **argv)
         readLastChain();
         pop_native_live::g_chainBones = chainBones;
         g_chainShadows = true;
+        pop_native_live::g_haloFilter = haloFilter;
+        pop_native_live::g_chainTextSlot = chainTextSlot;
     }
 #if POP_SPRITE_VU1
     if (const char *e = std::getenv("POP_NATIVE_P5"); !e || *e != '0') // on by default, as live
@@ -965,6 +1055,8 @@ int main(int argc, char **argv)
     std::fprintf(stderr, "[state] lightmap draws %llu, from packets %llu, instanced lightmaps %llu\n",
                  (unsigned long long)pop_native_live::g_stats.drawsLightmap, (unsigned long long)pop_native_live::g_stats.drawsFromPacket,
                  (unsigned long long)g_lightmapRefs);
+    std::fprintf(stderr, "[state] text slots from the chain: %zu, not found: %zu\n", g_textSlotsChain, g_textSlotsMissing);
+    std::fprintf(stderr, "[state] halos: %zu as in the chain, %zu dropped (not drawn by it)\n", g_halosKept, g_halosDropped);
     std::fprintf(stderr, "[state] skinned draws posed from the chain: %zu, kept on the pool: %zu\n", g_chainPosed, g_chainKept);
     std::fprintf(stderr, "[state] lit static passes native: lit %llu, env %llu\n", (unsigned long long)pop_native_live::g_worldStats.litNative,
                  (unsigned long long)pop_native_live::g_worldStats.envNative);

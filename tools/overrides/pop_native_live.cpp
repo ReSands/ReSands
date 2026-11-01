@@ -123,6 +123,13 @@ namespace pop_native_live
     // offline only (pop_state_frame, step 4c): replaces a skinned draw's bones (palette order; one bone = the single-bone
     // matrix) by those the save's last chain drew the packet with, which run a frame behind the pool. Null in the game.
     void (*g_chainBones)(uint32_t packet, std::vector<std::array<float, 16>> &bones) = nullptr;
+    // offline only (pop_state_frame, step 4c point 5): false = the save's last chain drew no halo with this square (GS
+    // primitive coordinates, 1/16 px), so the entry is a stale one or the game culled it. Null in the game.
+    bool (*g_haloFilter)(int x0, int y0, int x1, int y1) = nullptr;
+    // offline only (pop_state_frame, step 4c point 5): the packet of a text slot with this many letters as the save's last
+    // chain sent it (GIF tag, then per letter ST0 RGBA XYZ2 ST1 XYZ2), the next one in chain order; 0 = none. The letter
+    // functions are game code, so offline this is the only source of the text. Null in the game.
+    uint32_t (*g_chainTextSlot)(uint32_t letters) = nullptr;
     void onBigfileLookup(uint32_t key); // below: load a world pack once
 
     namespace
@@ -2842,6 +2849,8 @@ namespace pop_native_live
             const uint32_t alpha = uint32_t(float(guestAny(rdram, halo + 0x18) >> 24) * onScreen) & 0xFF;
             const int px0 = cx0 & ~15, py0 = cy0 & ~15, px1 = cx1 & ~15, py1 = cy1 & ~15; // ProcessLensFlare: whole pixels
             const int ox0 = cx0 - size, oy0 = cy0 - size, ox1 = cx1 + size, oy1 = cy1 + size;
+            if (g_haloFilter && !g_haloFilter(ox0, oy0, ox1, oy1))
+                return false;
             // a GS sprite (RGBAQ, ST, XYZ2, ST, XYZ2) through gifToBatch, as the water's clear
             const auto sprite = [&](int x0, int y0, int x1, int y1, uint32_t rgba, pop_assets::Batch &b) {
                 std::vector<uint8_t> pk(6 * 16, 0);
@@ -3198,8 +3207,9 @@ namespace pop_native_live
             g_textActive = false;
             const uint32_t x = guestAny(rdram, guestAny(rdram, (guestAny(rdram, entry) << 4) + 0x14u));
             const uint32_t str = x ? guestAny(rdram, x) : 0, font = x ? guestAny(rdram, x + 4) : 0, gfx = guestAny(rdram, 0x00674B00u);
-            if (!str || !font || guestAny(rdram, str + 0x14u) == guestAny(rdram, gfx + 0xEB8u))
-                return false; // drawn already this frame: the function does nothing
+            // drawn already this frame: the function does nothing (offline the save is past the frame: the chain decides)
+            if (!str || !font || (!g_chainTextSlot && guestAny(rdram, str + 0x14u) == guestAny(rdram, gfx + 0xEB8u)))
+                return false;
             const bool multi = guestAny(rdram, guestAny(rdram, font)) == 4u;
             const uint32_t pages = multi ? std::min<uint32_t>(guestAny(rdram, font + 8), 64) : 1;
             if (!pages)
@@ -3244,7 +3254,8 @@ namespace pop_native_live
             return true;
         }
         // one letter: false when it goes to the GS (unknown slot)
-        bool letterRecord(uint8_t *rdram, uint32_t slot, float x0, float y0, float x1, float y1, uint32_t rgba, uint32_t uv)
+        bool letterRecord(uint8_t *rdram, uint32_t slot, float x0, float y0, float x1, float y1, uint32_t rgba, float s0, float t0, float s1,
+                          float t1)
         {
             if (!g_textActive || !g_frameCapturing || slot >= g_textSlots.size() || g_textCount[slot] >= 4096)
                 return false;
@@ -3256,9 +3267,7 @@ namespace pop_native_live
                     std::fprintf(stderr, "[pop:world] text slot mismatch: slot %u gets letter %u, %u counted (%zu slots)\n", slot,
                                  g_textCount[slot] + 1, g_textExpected[slot], g_textSlots.size());
             }
-            // ST of the two corners: (+0, +0xC) and (+4, +8)
-            DrawMaterial &m = twoDQuad(rdram, x0, y0, x1, y1, guestF(rdram, uv), guestF(rdram, uv + 0xC), guestF(rdram, uv + 4),
-                                       guestF(rdram, uv + 8), rgba, s.key, s.flags, s.ref, g_currentList == 0xB8u,
+            DrawMaterial &m = twoDQuad(rdram, x0, y0, x1, y1, s0, t0, s1, t1, rgba, s.key, s.flags, s.ref, g_currentList == 0xB8u,
                                        g_textSeq + (slot << 12) + g_textCount[slot]++);
             ++g_twoDStats.letters;
             m.native = g_textNative;
@@ -3276,7 +3285,10 @@ namespace pop_native_live
         {
             const uint32_t slot = getRegU32(ctx, 11), h = guestAny(rdram, 0x0066D040u);
             const auto s16 = [&](int r) { return float(int16_t(getRegU32(ctx, r) & 0xFFFF)); };
-            if (letterRecord(rdram, slot, s16(5), float(h) - s16(6), s16(7), float(h) - s16(8), getRegU32(ctx, 9), getRegU32(ctx, 10)) &&
+            // ST of the two corners: (+0, +0xC) and (+4, +8)
+            const uint32_t uv = getRegU32(ctx, 10);
+            if (letterRecord(rdram, slot, s16(5), float(h) - s16(6), s16(7), float(h) - s16(8), getRegU32(ctx, 9), guestF(rdram, uv),
+                             guestF(rdram, uv + 0xC), guestF(rdram, uv + 4), guestF(rdram, uv + 8)) &&
                 g_textNative)
                 return letterSkip(rdram, slot);
             g_origLetter(rdram, ctx, runtime);
@@ -3291,8 +3303,9 @@ namespace pop_native_live
             float f[4];
             std::memcpy(f, &ctx->f[12], sizeof f);
             const auto px = [](float o, float v) { return float(int32_t(o + v)) - o; };
+            const uint32_t uv = getRegU32(ctx, 6);
             if (letterRecord(rdram, getRegU32(ctx, 7), px(ox, f[0] * sx), px(oy, h - f[1] * sy), px(ox, f[2] * sx), px(oy, h - f[3] * sy),
-                             getRegU32(ctx, 5), getRegU32(ctx, 6)) &&
+                             getRegU32(ctx, 5), guestF(rdram, uv), guestF(rdram, uv + 0xC), guestF(rdram, uv + 4), guestF(rdram, uv + 8)) &&
                 g_textNative)
                 return letterSkip(rdram, getRegU32(ctx, 7));
             g_origLetterF(rdram, ctx, runtime);
@@ -3304,6 +3317,24 @@ namespace pop_native_live
             if (N == 3 && g_frameCapturing && textBegin(rdram, getRegU32(ctx, 4)))
             {
                 ++g_twoDStats.strings;
+                if (g_chainTextSlot) // offline: the letters from the chain's slot packets (GS coordinates: (offset + pixel) x 16)
+                {
+                    const float ox = float(int32_t(guestAny(rdram, 0x00675170u))), oy = float(int32_t(guestAny(rdram, 0x00675174u)));
+                    for (uint32_t slot = 0; slot < g_textSlots.size(); ++slot)
+                    {
+                        const uint32_t p = g_textSlots[slot].key ? g_chainTextSlot(g_textExpected[slot]) : 0u;
+                        for (uint32_t k = 0; p && k < g_textExpected[slot]; ++k)
+                        {
+                            const uint32_t l = p + 16 + 0x50 * k; // ST0, RGBA, XYZ2, ST1, XYZ2
+                            const auto xy = [&](uint32_t a, float o) { return float(guest16(rdram, a)) / 16.0f - o; };
+                            const uint32_t rgba = (guestAny(rdram, l + 16) & 0xFF) | (guestAny(rdram, l + 20) & 0xFF) << 8 |
+                                                  (guestAny(rdram, l + 24) & 0xFF) << 16 | (guestAny(rdram, l + 28) & 0xFF) << 24;
+                            letterRecord(rdram, slot, xy(l + 32, ox), xy(l + 36, oy), xy(l + 64, ox), xy(l + 68, oy), rgba, guestF(rdram, l),
+                                         guestF(rdram, l + 4), guestF(rdram, l + 48), guestF(rdram, l + 52));
+                        }
+                    }
+                    return;
+                }
                 // native: list +0xB8 only (text in the 3D lists stays on the GS), every page's texture at hand
                 g_textNative = twoDNative() && g_currentList == 0xB8u &&
                                std::all_of(g_textSlots.begin(), g_textSlots.end(), [](const TextSlot &s) { return s.key && worldTextureReady(s.key); });
