@@ -47,7 +47,7 @@ SNDCLIST_ARGS = {('CTheme', 'm_PartList'): 'CThemePart *, CThemePart *',
 TEMPLATED = {'sndCList', 'sndCNode'}
 # methods retail calls without 'this' (DWARF does not mark static)
 STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength'),
-                  ('SndManager', 'GetRendererRate')}  # 0x189180 never reads a0; its callers set none (31 Oct)
+                  ('SndManager', 'GetRendererRate'), ('SndManager', 'Renderer')}  # 0x189180 / 0x189cc0 never read a0 (31 Oct, 1 Nov)
 # C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
 # called by DARE but with no DWARF in POP1 (the PS2 OS layer at 0x199xxx, libc): argument counts read from the retail
 # bodies (a char argument where the body masks it with andi 0xff); Sony kernel / sif calls are left to the prompt
