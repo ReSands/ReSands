@@ -544,7 +544,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   bias 0 vs 32, since the remaining flicker may be a real decal there; (e) re-check N16's moss save 163042 is still
   clean (unchanged for decals, but confirm). Captures: `game/analysis/saves1031/`, offline scratch: rerun
   `pop_state_frame_vu1` + `POP_VIEW_LIST=1 pop_native_view` on the save.
-- **N19 (orange band on the wall at frieze height, 192645): fixed in code 1 Nov (afa2244), live boot + user check pending.**
+- **N19 (orange band on the wall at frieze height, 192645): closed 1 Nov (afa2244; user TV check: band and moss brightening gone).**
   **Fix (1 Nov):** `refDisplayRecord` poses skinned refs like skinned elements: `poseSkinned(element, index)` (the ref Display
   decompile, 0x4C7B40, uses the element's palette at ref +0x20 -> +0x48 and the same first-bone table), records them in
   `g_framePosed`, replays the driver switch. Ref packets are REF tags (3 qw per instance at ref +0x10, then the element's
@@ -552,7 +552,10 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   element path uses it too). Bind cache per element then packet, cleared in `readElement` (streaming reuse, as N8/N9/N11).
   Skinned refs left on the GS (characters off, pass 2/3) now print a WHY line. Offline 192645: the 14 refs now pose
   (83 skinned draws, was 69) and the picture is pixel-identical to before (offline drew them as statics already; live,
-  the refusal sent them to the GS a second time). Still to do: steps (4) and (5) below.
+  the refusal sent them to the GS a second time). **Boot 1 Nov (`game\jobs\n19boot.ps1`, WHY on, 45 s each):** 192645 and
+  162621 both 2399/2400 frames pure at +0x88, `ref +0x2c` gone from "ended by" (was ~26% of frames), 0 skinned refs on
+  the GS, 60 fps; the rest end at the HUD (+0xB8, 0.14). One-offs left (1-2 frames in 2400, not N19): `ref +0x88`
+  (ref 01693bc0, 192645), `mesh +0x2c` / `mesh +0x88` / `gfx +0x88` (162621).
   **What the user sees (native only; GS mode clean):** a soft orange scalloped band across the wall just above the
   grass, coming and going, and **the moss/grass below it brightens at the same moments** (user's annotation:
   `game/analysis/saves1101/desk_114347_8.png`, top box = band, ellipse = moss). Not the post chain: still there with
