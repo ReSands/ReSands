@@ -104,7 +104,9 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
    split by As (with ordering issues for overlapping triangles in one draw), and still inexact where Cs x As > 1.
    Exact options: read Cd in the shader (programmable blending: `VK_EXT_rasterization_order_attachment_access`,
    check MoltenVK support, or input attachments with a feedback-loop barrier per overlapping draw), or a float
-   target with the GS's per-draw clamp emulated. To decide at 0.13, after the P1 check shows how many draws need it.
+   target with the GS's per-draw clamp emulated. (ICO-pc, 2 Nov: float fixed-function LERP is 1 level above the GS
+   on ~50 % of channels, up to 5-6 accumulated; they keep it as the default, exact path opt-in with a per-device
+   self-test. So expect 1-level diffs in blended areas when judging 0.2 frames.) To decide at 0.13, after the P1 check shows how many draws need it.
    **Census 30 Oct** (`POP_ALPHA_CENSUS=1 pop_state_frame --world`, all 231 distinct saves; mesh draws only, P5 / P9 / P6
    write their own alpha): draws with a vertex alpha > 0x80, by blend kind: **6 AddAlpha 3,793 of 8,146** (193 saves,
    nearly all instanced +0x88); **1 Blend 1,336 of 18,822** (132 saves, all instanced +0x88); 4 Add 2,806 (alpha

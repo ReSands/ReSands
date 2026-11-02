@@ -79,7 +79,7 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | Guitar Hero II Recompiled | sp00nznet/gh2 |  | unbaked.games (13 Oct) |
 | Guitar Hero II – Recompiled Files | KrispyKerabs/GuitarHero2recomp |  | unbaked.games (13 Oct) |
 | Haunting Ground | KunoDemetries/hg2 | RM2B | unbaked.games (13 Oct) |
-| (ico-recomp) | nathanialf/ico-recomp | LAN | unbaked.games (13 Oct) |
+| (ico-recomp, now ico-pc) | nathanialf/ico-pc | LAN | unbaked.games (13 Oct) |
 | Kessen II | creativeprofit22/kessen2 | R | unbaked.games (13 Oct) |
 | (KillzoneRecomp) | drakolordx7/KillzoneRecomp | RGVI2UWF | unbaked.games (13 Oct) |
 | King's Field: The Ancient City | Voicedrew11/holyland | RM2B | unbaked.games (13 Oct) |

@@ -91,13 +91,17 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   pillarboxed; check cutscene framing and edge pop-in by playing through. Plan: `docs/widescreen.md` (God Hand:
   Rearmed's method: constants computed from the aspect ratio via instruction hooks, HUD groups anchored, menus/loading
   screen latched to 4:3; the PCSX2 patch decoded against our ELF). Also GT4Recomp's any-aspect-ratio work
-  (`docs/reference.md` "GT4Recomp").
+  (`docs/reference.md` "GT4Recomp"). ICO-pc (2 Nov, `docs/reference.md` "ico-pc"): VU1 region test drops edge
+  triangles on a wide frame (its `VU1_PROGRAMS.md` "The region rule"; check whether PoP's VU1 programs do the same);
+  its gate-b test (centre columns at every aspect byte-equal to 4:3) as our widescreen check.
 - **1.2 = uncapped frame rate** (30 and 60 stay available as caps). Basis: the engine is variable-timestep
   (`TIM_Clock_Update` scales logic by real elapsed time) and the PCSX2 one-word patch (`POP_60FPS=1`) already gives
   59.9 fps on the PC (16 Oct). Work: play-test at several rates (60, 120, 144+) for fixed-rate assumptions (physics,
   animation, sound, cutscenes, sand rewind, timers that count frames) and fix them; frame pacing. Fallback if logic
   breaks above some rate: a fixed logic tick with interpolated presentation (Chronicle's `DECOUPLING_PLAN.md`,
-  `docs/reference.md` "Renderer and DLSS notes") (estimate: needs only the native renderer's draw lists).
+  `docs/reference.md` "Renderer and DLSS notes") (estimate: needs only the native renderer's draw lists). Worked
+  design for that fallback: ICO-pc's `RENDER.md` "Camera blending" / "Interpolation and presentation" (draws paired
+  by key/type/list/ordinal, bone slerp with turn memory, unmoved scenery re-based on the blended camera, glow per tick).
   Borrowed for 1.2 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **"register locals" code generation** (guest registers in C++ locals; -22 % game-thread
   time there; changes every generated function), earlier only if a fight profile shows the game thread limits fps;
   **frame overlap** (start frame N+1 before the GS FINISH of frame N; their ~3.5 ms serial gap per frame), designed
