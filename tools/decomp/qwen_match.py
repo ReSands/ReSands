@@ -550,7 +550,7 @@ def main(argv):
         if not res:
             continue
         code, text, got, ok = max(res, key=lambda r: r[2])
-        if got > best:
+        if got > best or ok:  # a MATCH can tie a draft with extra instructions (0x192f40, 2 Nov)
             best, best_try = got, (code, text)
             open(os.path.join(out, 'best.cpp'), 'w').write(code)
         prev = (code, text)

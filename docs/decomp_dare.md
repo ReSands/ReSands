@@ -187,6 +187,17 @@ the compiler check: `docs/roadmap.md` "2.0".
   - Fixed after: `.b` also ran when round 1 had already matched (13 passes, ~1 min each); now skipped.
   Folders copied to `game/analysis/qwen_pc/`.
 
+- **Run 7 (2 Nov 07:45-14:57, stopped by me for the header fix below): 23 of 44 matched (52%)**, 4 NEEDS HEADER
+  CHANGE (191040, 167c00, 191540, 1608c0), 17 misses; ~10 min per function. Now **165 of 669**.
+  - **Header (2 Nov): retail `_tdstBankElement` is 0x30 bytes, POP1's 0x48**: `fn_pstGetBank` 0x175200 mallocs
+    0x30, `strncpy(+0xc, name, 0xb)` (`char czBankName[12]`, POP1 33), `pBankHeader` +0x18 (191040's request),
+    `eLoadState` a byte at +0x2c (`sb`/`lbu` in 175340-175ac0). `RETAIL_MEMBER` in `dare_header.py` (type, size,
+    shift of later members). All passes re-judged: 165 of 165 match.
+  - **Runner fix:** a MATCH that tied the best score (a draft with every retail instruction plus extras) did not
+    replace `best.cpp` (192f40 kept round01.b's; round02 put back, old as `best.cpp.pre1102`).
+  - Reopened with `RETRY`: 191040 (`HEADER` -> `HEADER.1102`) and the 8 misses whose attempts used the struct
+    (16b380 175700 176840 176b40 176bc0 17bfc0 18eb80 18f040). Run 8 = run 7 resumed.
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669

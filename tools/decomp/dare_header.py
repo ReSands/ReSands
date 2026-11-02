@@ -74,6 +74,9 @@ EXTRA_METHODS = {'SndManager': ['int PlayLoopingVoice(_VOICE *, _tduRefRes, _Sou
 # members retail has and POP1 lacks: (record, member it goes before) -> (declaration, size); later offsets shift
 RETAIL_INSERT = {('ASSOCIATION_DESCRIPTION_', 'pstBlockEvent'): ('int _retail04', 4)}  # 1 Nov: lChannelId +0xc,
 # next link +0x60, fade +0x70 in KillSoundChannel / GetStopAssoForStopNGo / KillAndDestroyAssoPlay (POP1 +8/+0x5c/+0x6c)
+# members retail declares differently: (record, member) -> (declaration with {} for the name, size, shift of later members)
+RETAIL_MEMBER = {('_tdstBankElement', 'czBankName'): ('char {}[12]', 12, -0x18),  # 2 Nov: fn_pstGetBank 0x175200
+                 ('_tdstBankElement', 'eLoadState'): ('unsigned char {}', 1, 0)}  # mallocs 0x30, strncpy(+0xc, 0xb), sb +0x2c
 
 
 def symbols(d):
@@ -571,6 +574,8 @@ def main(elf_path, out_h, out_tsv=None):
             nm = mbr.attrs.get('name') or '_m%x' % off
             if 'bit_size' in mbr.attrs:
                 L.append('    %s : %d;' % (g.render(mbr.attrs, nm), mbr.attrs['bit_size']))
+            elif (n, nm) in RETAIL_MEMBER:
+                L.append('    %s;  // retail' % RETAIL_MEMBER[n, nm][0].format(nm))
             elif (n, nm) in MEMBER_TYPES:
                 L.append('    %s;' % MEMBER_TYPES[n, nm].format(nm))
                 sz = 12
@@ -581,6 +586,9 @@ def main(elf_path, out_h, out_tsv=None):
             else:
                 L.append('    %s;' % g.render(mbr.attrs, nm))
             sz = 12 if (n, nm) in MEMBER_TYPES else (mbr.attrs.get('byte_size') or g_size(g, t, records, mbr.attrs))
+            if (n, nm) in RETAIL_MEMBER:
+                sz = RETAIL_MEMBER[n, nm][1]
+                shift += RETAIL_MEMBER[n, nm][2]
             pos = max(pos, off + (sz or 0))
         if not mems and not bases and n not in vt and x.attrs.get('byte_size'):
             L.append('    char _data[%d];  // no members in DWARF' % x.attrs['byte_size'])
