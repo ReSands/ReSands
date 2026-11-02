@@ -6,7 +6,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **142 of 669 matched** (after run 6, 2 Nov; "Runs" below). **Next: run 7** from the PC shortcut (queue now in the
+- **172 of 669 matched** (after run 8, 2 Nov; "Runs" below). **Next: run 9** from the PC shortcut (queue now in the
   untried functions whose size differs from POP1, smallest first: ~48% passes at 36-64 bytes). Open: 2 header requests
   from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
   instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
@@ -197,6 +197,15 @@ the compiler check: `docs/roadmap.md` "2.0".
     replace `best.cpp` (192f40 kept round01.b's; round02 put back, old as `best.cpp.pre1102`).
   - Reopened with `RETRY`: 191040 (`HEADER` -> `HEADER.1102`) and the 8 misses whose attempts used the struct
     (16b380 175700 176840 176b40 176bc0 17bfc0 18eb80 18f040). Run 8 = run 7 resumed.
+
+- **Run 8 (2 Nov 15:02-18:29, stopped by me at the user's request): 7 of 21 matched (33%)**, no header requests;
+  ~10 min per function. Now **172 of 669** (10 need a header change, 215 tried without a match, 272 untried).
+  - **The 9 reopened: 2 passed** (18f040 round 7, 191040 round 5). The `_tdstBankElement` fix helped the rest
+    (best instructions differing, rounds 1-4 -> 5-8): 16b380 18->5, 175700 50->25, 17bfc0 67->25, 176840 35->27,
+    176b40 6->5; 18eb80 3->4 (no gain). Still open for a hand pass: 16b380 and 176b40 (5 off), 18eb80 (3-4 off).
+  - **12 new: 5 passed** (16ee00, 190780, 15a640, 15ea00, 162d40); nearest misses 193480 (4 off), 191680 (5 off);
+    17ce80 never compiled.
+  Folders copied to `game/analysis/qwen_pc/`. Next: run 9 = the shortcut again (continues the queue).
 
 ## Fixes after run 1 (all done 28 Oct night)
 
