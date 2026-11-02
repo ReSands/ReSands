@@ -6,8 +6,10 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **124 of 669 matched** (after run 5 and the 1 Nov test run; "Runs" below). **Next: run 6**, prepared 1 Nov
-  (compile-fix calls + second first draft; "Prepared for run 6" under "Runs"), started from the PC shortcut below.
+- **142 of 669 matched** (after run 6, 2 Nov; "Runs" below). **Next: run 7** from the PC shortcut (queue now in the
+  untried functions whose size differs from POP1, smallest first: ~48% passes at 36-64 bytes). Open: 2 header requests
+  from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
+  instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
   (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
   or `no match after 4 more rounds`); for run 6 also the two checks at the end of "Prepared for run 6". For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
@@ -173,6 +175,17 @@ the compiler check: `docs/roadmap.md` "2.0".
   function now costs ~1-3 more model calls, so expect fewer functions per night. **To read in the morning:** how many
   `.fix` files compile (`grep -l "^MATCH\|instructions differ" */attempts/*.fix*.report.txt`), and how often `.b`
   beats round 1 (`match.log`).
+
+- **Run 6 (1 Nov 21:58 - 2 Nov 07:36, stopped by me at the user's request): 18 of 47 matched (38%)**, 2 NEEDS HEADER
+  CHANGE, 27 misses; ~12 min per function. Now **142 of 669**. Two halves: the last same-size untried functions
+  (376-1336 bytes, #1-20) **2 of 20** (15f0c0, 16d400; 15-35 min each, best misses 5-10 off: 167680, 165180, 166000),
+  then the untried size-differs ones from 36 bytes up (#21-47) **16 of 27**, mostly round 1. The two checks:
+  - **Compile fixes work:** 64 fix calls, 52 compiled (81%), 4 of them a MATCH (191780 passed through `round01.fix1`).
+    Main rounds that did not compile: 56 of 181 (31%; run 5: 41%, before the fix calls).
+  - **`.b` draft is a wash on average:** better than round 1 in 13 functions, worse in 12, equal in 19; but on big
+    functions it is often far better (167680 45->8, 193140 57->20, 15abc0 128->66, 1596c0 89->61). Kept.
+  - Fixed after: `.b` also ran when round 1 had already matched (13 passes, ~1 min each); now skipped.
+  Folders copied to `game/analysis/qwen_pc/`.
 
 ## Fixes after run 1 (all done 28 Oct night)
 

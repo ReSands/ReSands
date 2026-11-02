@@ -541,7 +541,7 @@ def main(argv):
                           'reply with the complete file in one ```cpp block. Keep your reasoning short.'}]
         check = lambda p: judge(p, mangled, addr, size, elf)
         res = [attempt(url, messages, att, 'round%02d' % n, check, say, out)]
-        if not prev and not res[0] == 'HEADER':  # fresh function: a second, differently framed first draft
+        if not prev and not (res[0] == 'HEADER' or (res[0] and res[0][3])):  # fresh function, not yet matched: a second, differently framed first draft
             res.append(attempt(url, [{'role': 'user', 'content': first + DRAFT_B}], att, 'round%02d.b' % n, check,
                                say, out))
         if 'HEADER' in res:
