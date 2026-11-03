@@ -6,7 +6,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **172 of 669 matched** (after run 8, 2 Nov; "Runs" below). **Next: run 9** from the PC shortcut (queue now in the
+- **186 of 669 matched** (after run 9, 3 Nov; "Runs" below). **Next: run 10** from the PC shortcut (queue now in the
   untried functions whose size differs from POP1, smallest first: ~48% passes at 36-64 bytes). Open: 2 header requests
   from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
   instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
@@ -205,7 +205,23 @@ the compiler check: `docs/roadmap.md` "2.0".
     176b40 6->5; 18eb80 3->4 (no gain). Still open for a hand pass: 16b380 and 176b40 (5 off), 18eb80 (3-4 off).
   - **12 new: 5 passed** (16ee00, 190780, 15a640, 15ea00, 162d40); nearest misses 193480 (4 off), 191680 (5 off);
     17ce80 never compiled.
-  Folders copied to `game/analysis/qwen_pc/`. Next: run 9 = the shortcut again (continues the queue).
+  Folders copied to `game/analysis/qwen_pc/`. 
+
+- **Run 9 (2 Nov 23:10 - 3 Nov 07:33, stopped by me at the user's request): 14 of 43 matched (33%)**, 5 NEEDS HEADER
+  CHANGE, 24 misses; ~10 min per function. Now **186 of 669** (15 need a header change, 240 tried without a match,
+  228 untried). Untried size-differs functions, 28-46 instructions.
+  - **Passed:** 18ea40 1914c0 193d80 18a9c0 18e880 191440 18fd80 162dc0 193300 193c40 15a840 15b500 190880 190580
+    (9 in round 1-2).
+  - **Nearest misses (hand pass):** 193a40 1 off (branch sense flipped + one store), 160a80 2 off (calls
+    `SND_fn_vEnterCriticalSectionThreadSnd` where retail calls 0x160cc0), 169580 3 off (stores zero where retail stores
+    t0/t1); then 18d480, 190800 (6), 16b840, 186b00 (7).
+  - **177c80 never compiled:** rounds 3-4 lacked the `sndCList<_tdstASyncBankRequest,...>` destructor in the object
+    (template instance not emitted). 2 round-1 calls hit the 32768-token cap with no code block (17ce00, 193a40).
+  - **Header requests, not yet checked against the assembly:** 17d780 `_tdstVoice` missing from `dare.h` (only
+    `_tdstVoicePosAssoc`/`_tdstVoicesData` are there), 162240 `CTool::Pause`/`Resume` virtual, 182600
+    `fn_vUpdateVoiceStatusAndTransfer1stStack` returns a value, 18b780 `_tdstTypeSampleMem` member at +0x24,
+    1952c0 `_stPartInfo` nested in `CThemeChannel` (mangled `Q213CThemeChannel11_stPartInfo`).
+  Folders copied to `game/analysis/qwen_pc/`. Next: run 10 = the shortcut again (continues the queue).
 
 ## Fixes after run 1 (all done 28 Oct night)
 
