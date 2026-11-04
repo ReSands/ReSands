@@ -97,7 +97,10 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
 - **1.2 = uncapped frame rate** (30 and 60 stay available as caps). Basis: the engine is variable-timestep
   (`TIM_Clock_Update` scales logic by real elapsed time) and the PCSX2 one-word patch (`POP_60FPS=1`) already gives
   59.9 fps on the PC (16 Oct). Work: play-test at several rates (60, 120, 144+) for fixed-rate assumptions (physics,
-  animation, sound, cutscenes, sand rewind, timers that count frames) and fix them; frame pacing. Fallback if logic
+  animation, sound, cutscenes, sand rewind, timers that count frames) and fix them; frame pacing. Saves to re-check
+  above 60 (user, 4 Nov; `docs/native_bugs.md` "Bridges"): rope swing `play_20261103_214828` (R1 held; looked the same
+  at 30 and 60, but its AccumulateForces pull scales with dt^3 per step) and the rope bridges `play_20261103_213556` /
+  `play_20261104_191745` (already fixed-step with extrapolation; check smoothness and walking back onto the ledge). Fallback if logic
   breaks above some rate: a fixed logic tick with interpolated presentation (Chronicle's `DECOUPLING_PLAN.md`,
   `docs/reference.md` "Renderer and DLSS notes") (estimate: needs only the native renderer's draw lists). Worked
   design for that fallback: ICO-pc's `RENDER.md` "Camera blending" / "Interpolation and presentation" (draws paired
