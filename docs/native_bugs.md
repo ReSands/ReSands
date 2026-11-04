@@ -601,7 +601,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   picture, offline render) vs the GS-only grey; the 134636 save (native whiter than the GS picture). Next: a fresh slow
   (not from a save) in `-Mode gs` and in `-GsOff`, side by side by eye; a real-PS2 / video reference with N27.
 
-## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fix in override, 4 Nov; in-game check pending)
+## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fixed in override 4 Nov; boot-checked, user play check pending)
 
 Not a renderer bug: the save's own GS frame shows the bridge high too, and its collision moves with it.
 `GEO_ModifierBridge_Apply` (retail 0x423940) moves a Verlet chain each frame (struct 0x74 B: n points +4, segment
@@ -621,6 +621,11 @@ extrapolated by the elapsed fraction of a step (current + (current - previous) *
 build, and the true points are put back at the next Solver call (only if the guest did not rewrite them: rewind,
 reinit, save load). Fraction 0 at 30 fps, so 30 fps is the original. Offline: rest pose held at 20/30/60/144 fps.
 Shortcut: the extrapolated points stay in guest memory between frames (AI reading them sees up to one step ahead).
+Boot check 4 Nov (`game\jobs\bridge1104.ps1`, save 213556 at 60 fps, walk forward at 10 s; logs
+`bridge_*.log`, shots `game/analysis/bridge1103/compare*.png`): fixed, the middle point starts at the save's +0.88,
+settles to rest within ~7 s (+-0.013), sags to -0.6 under the Prince and returns to +-0.000; the deck sits level with
+the floor. `POP_BRIDGE_PER_FRAME=1`: +0.8..+0.9 throughout, still bobbing after 20 s, the Prince barely moves it.
+Not boot-checked at 30 fps: the save holds the 60 fps word (0x66D044 = 1), so `POP_60FPS=0` still ran at 60.
 Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
 
 ## Storage of captures (agreed with the user 24 Oct)
