@@ -45,6 +45,9 @@ SNDCLIST_ARGS = {('CTheme', 'm_PartList'): 'CThemePart *, CThemePart *',
                  ('CThemeManager', 'm_ThemeChannelList'): 'CThemeChannel *, CThemeChannel *',
                  (None, 'gs_CallBackRequestList'): 'stCallBackRequest_, stCallBackRequest_'}
 TEMPLATED = {'sndCList', 'sndCNode'}
+# types the source nests in a class (DWARF puts them at top level): retail mangles Q213CThemeChannel11_stPartInfo
+# (195380, 1952c0: run 9-10 header requests)
+NESTED = {'_stPartInfo': 'CThemeChannel'}
 # methods retail calls without 'this' (DWARF does not mark static)
 STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength'),
                   ('SndManager', 'GetRendererRate'), ('SndManager', 'Renderer')}  # 0x189180 / 0x189cc0 never read a0 (31 Oct, 1 Nov)
@@ -157,7 +160,8 @@ def demangle_params(sig):
                 while sig[j].isdigit():
                     j += 1
                 n = int(sig[pos[0]:j]); parts.append(sig[j:j + n]); pos[0] = j + n
-            name = parts[-1]        # nested types are top-level in the DWARF (and in this header)
+            # nested types are top-level in the DWARF (and in this header), except NESTED
+            name = '::'.join(parts) if parts[-1] in NESTED else parts[-1]
             return lambda d, name=name, pre=pre: pre + name + (' ' + d if d else '')
         if c.isdigit():
             j = pos[0]
@@ -614,6 +618,16 @@ def main(elf_path, out_h, out_tsv=None):
             L.append('extern %s;' % gdecl(n))
     L += ['}'] + ['extern %s;' % gdecl(n) for n in sorted(cplus)]
     L += [decl(m, x) for m, x in cxxfuncs] + NO_DWARF + ['', '#include "dare_fix.h"', '#endif']
+    for n, outer in NESTED.items():  # move the definition into the class, before the members that use it
+        i = L.index('struct %s {' % n)
+        j = L.index('};', i)
+        body = L[i:j + 1]
+        del L[i:j + 1]
+        L.remove('struct %s;' % n)
+        k = L.index('struct %s {' % outer)
+        L[k + 1:k + 1] = ['    ' + l for l in body]
+        L = [l.replace('(%s)' % n, '(%s::%s)' % (outer, n)).replace('DARE_OFS(%s,' % n, 'DARE_OFS(%s::%s,' % (outer, n))
+             if l.startswith('DARE_CHECK') else l for l in L]
     open(out_h, 'w').write('\n'.join(L) + '\n')
     print('%d records, %d enums, %d typedefs, %d methods, %d C functions, %d globals, %d vtables -> %s' % (
         len(records), len(enums), len(typedefs), sum(map(len, methods.values())), len(cfuncs) + len(cxxfuncs), len(globals_),

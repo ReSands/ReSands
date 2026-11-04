@@ -337,7 +337,7 @@ def prompt(mangled, addr, size, file):
                       '- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
                                               else 'not in dare.h: declare it yourself')
                       for n, (sz, desc) in sorted(used.items())) or 'none'
-    how = 'as %s::<name>' % cls if cls else 'a C function: dare.h declares it extern "C"'
+    how = 'as %s::<name>' % cpp_name(mangled).rsplit('::', 1)[0] if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
                        header=header, how=how, globals=globs, examples=examples(file, addr))
@@ -442,6 +442,8 @@ def selftest():
     assert c.startswith('sndCList<_tdstMemoryCluster *, ') and c.endswith('>::RemoveHead') and '18' not in c, c
     assert cpp_name('RemoveHead__51sndCList<18stCallBackRequest_,18stCallBackRequest_>Fv') == \
         'sndCList<stCallBackRequest_, stCallBackRequest_>::RemoveHead'
+    assert cpp_name('RemoveHead__71sndCList<Q213CThemeChannel11_stPartInfo,Q213CThemeChannel11_stPartInfo>Fv') == \
+        'sndCList<CThemeChannel::_stPartInfo, CThemeChannel::_stPartInfo>::RemoveHead', 'NESTED type keeps its class'
     assert cpp_name('SND_fn_bInitSourceMemoryModule__Fv') == 'SND_fn_bInitSourceMemoryModule'
     assert cpp_name('gs_CallBackRequestList__10SndManager') == 'SndManager::gs_CallBackRequestList'
     assert 'static local clock of SND_ClockNative::GetInstance()' == \
