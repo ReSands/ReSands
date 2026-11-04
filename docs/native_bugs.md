@@ -632,6 +632,11 @@ Solver uses up, and carries them by the chain's last step: twice per step at 60 
 gives -0.477/-0.405 at points 3/4, the save has -0.479/-0.408 (once per step: -0.27/-0.23). Collision now runs on step
 frames only (the extrapolation still runs every frame). Boot: sag under the Prince -0.33 (was -0.61), back to rest
 after. User play check (save 191745): walking back onto the ledge works, motion smooth.
+Ropes (4 Nov, same check): `GAO_ModifierRope_Apply` (retail 0x40A3C0) has the same Verlet shape (Solver 0x408240
+clamps dt to 1/30, 3 Normalize passes 0x409640, Collision 0x4094C0) plus a force scaled by dt in AccumulateForces
+(0x408440, 960 * dt). Boot of save 214828 (Prince on a rope in the cistern, R1 held, 31 shots 0.1 s apart) at 60 and
+at a real 30 fps (`POP_60FPS=0` now writes the ELF's 2 vsyncs per frame): rope shape, swing width and half-period
+look the same (`game/analysis/rope1104/pairs.png`, `rope_60_vs_30.gif`). No fix; the user's eye is the judge.
 Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
 
 ## Storage of captures (agreed with the user 24 Oct)
