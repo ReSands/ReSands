@@ -55,6 +55,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   step 4c point 7). Step 5 and the `-GsOff` default flip wait for it; its hardware questions (N27 halo flicker,
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile the DARE decomp runs overnight.
+- **4 Nov:** rope bridges fixed at any frame rate (fixed 1/30 s steps + extrapolation; user-checked), ropes look
+  the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.2 re-check list in roadmap).
 - **0.1:** crash 1 closed 30 Oct (3b80b66). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
