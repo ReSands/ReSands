@@ -601,7 +601,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   picture, offline render) vs the GS-only grey; the 134636 save (native whiter than the GS picture). Next: a fresh slow
   (not from a save) in `-Mode gs` and in `-GsOff`, side by side by eye; a real-PS2 / video reference with N27.
 
-## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fixed in override 4 Nov; boot-checked, user play check pending)
+## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fixed in override 4 Nov; user play check passed 4 Nov evening)
 
 Not a renderer bug: the save's own GS frame shows the bridge high too, and its collision moves with it.
 `GEO_ModifierBridge_Apply` (retail 0x423940) moves a Verlet chain each frame (struct 0x74 B: n points +4, segment
@@ -630,7 +630,8 @@ User play 4 Nov 19:17 (save 191745): onto the bridge fine, motion smooth, but wa
 to step onto the ledge. Collision (run every frame) adds the riders' weight (+0x2C, 60) to the force array the next
 Solver uses up, and carries them by the chain's last step: twice per step at 60 fps. Replay: weight twice per step
 gives -0.477/-0.405 at points 3/4, the save has -0.479/-0.408 (once per step: -0.27/-0.23). Collision now runs on step
-frames only (the extrapolation still runs every frame).
+frames only (the extrapolation still runs every frame). Boot: sag under the Prince -0.33 (was -0.61), back to rest
+after. User play check (save 191745): walking back onto the ledge works, motion smooth.
 Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
 
 ## Storage of captures (agreed with the user 24 Oct)
