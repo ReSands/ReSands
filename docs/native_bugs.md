@@ -601,6 +601,28 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   picture, offline render) vs the GS-only grey; the 134636 save (native whiter than the GS picture). Next: a fresh slow
   (not from a save) in `-Mode gs` and in `-GsOff`, side by side by eye; a real-PS2 / video reference with N27.
 
+## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fix in override, 4 Nov; in-game check pending)
+
+Not a renderer bug: the save's own GS frame shows the bridge high too, and its collision moves with it.
+`GEO_ModifierBridge_Apply` (retail 0x423940) moves a Verlet chain each frame (struct 0x74 B: n points +4, segment
+length +8, rest/current/previous points +0xC/+0x10/+0x14, gravity (0,0,-25) +0x20; dt = clock 0x675040 (/ time scale
+0x66CFC0 below 1), clamped to 1/30, low-passed 0.2 at +0x38): `Solver` (0x423740, gravity * dt^2), `Normalize`
+(0x423480, 3 passes of length constraints), `Collision` (0x422C40, called only at 0x423A98), then the mesh and the
+collision points follow each point's offset from rest. The rest pose is the equilibrium only at dt = 1/30: offline
+replay of Solver + Normalize (save 213556, 13 points) gives a middle-point rise of 0.000 at 30 fps, 0.57 at 45,
+**0.90 at 60** (the save: +0.896) and 0.35-1.67 with jittery 60 fps frames (the bobbing). The PCSX2 "60 FPS" pnach
+(our `POP_60FPS=1`) must do the same.
+
+Fix (`pop_slus20743.cpp`, always on, any frame rate; `POP_BRIDGE_PER_FRAME=1` = the game's own per-frame steps for
+A/B; `POP_BRIDGE_LOG=1` = the middle point's range above rest every 60 frames): the chain steps at a fixed 1/30 s
+(Solver + Normalize skipped on frames that do not complete a step, 2 ms slack; a frame of 1/30 s or longer = one
+step, rest dropped, as the game's clamp). For smooth motion above 30 fps, after Collision the current points are
+extrapolated by the elapsed fraction of a step (current + (current - previous) * fraction) for the mesh/collision
+build, and the true points are put back at the next Solver call (only if the guest did not rewrite them: rewind,
+reinit, save load). Fraction 0 at 30 fps, so 30 fps is the original. Offline: rest pose held at 20/30/60/144 fps.
+Shortcut: the extrapolated points stay in guest memory between frames (AI reading them sees up to one step ahead).
+Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
+
 ## Storage of captures (agreed with the user 24 Oct)
 
 `.state` files (48 MB) are kept: the offline A/B test set. `.glitch` captures (129 MB) are temporary: after

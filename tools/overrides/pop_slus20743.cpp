@@ -2450,8 +2450,115 @@ namespace
         std::fprintf(stderr, "%s\n", line.c_str());
     }
 
+    // Rope bridges at any frame rate (bug 3 Nov 2026, save play_20261103_213556; docs/native_bugs.md "Bridges").
+    // GEO_ModifierBridge_Apply (0x423940) runs a Verlet chain once per frame: Solver (0x423740, gravity * dt^2),
+    // Normalize (0x423480, 3 fixed passes of segment-length constraints), Collision (0x422C40), then deforms the
+    // mesh and collision points by each point's offset from rest. The rest pose is the chain's equilibrium only
+    // at dt = 1/30: at 60 fps the bridge rose ~0.9 units mid-span (the Prince got stuck in it) and bobbed with
+    // frame-time jitter. So the chain steps at a fixed 1/30 s whatever the frame rate (Solver + Normalize run
+    // only on frames that complete a step), and between steps the points the deformation reads are extrapolated
+    // by the elapsed fraction of a step (current + (current - previous) * fraction; 0 at 30 fps, so 30 fps is
+    // the original). The true points go back before the next frame's step. POP_BRIDGE_PER_FRAME=1: original.
+    struct BridgeState
+    {
+        float acc = 0.0f;                   // time since the last step
+        bool step = false;                  // this frame's Solver ran
+        std::vector<uint8_t> real, shown;   // true current points / what we wrote over them
+    };
+    std::unordered_map<uint32_t, BridgeState> g_bridges; // by bridge struct address
+    constexpr float kBridgeStep = 1.0f / 30.0f;
+    bool g_bridgeLog = false, g_bridgePerFrame = false;
+    void bridgeSolver(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t bridge = getRegU32(ctx, 4);
+        if (g_bridgePerFrame)
+            return callOriginal(0x00423740u, rdram, ctx, runtime);
+        BridgeState &b = g_bridges[bridge];
+        const uint32_t cur = guestU32(rdram, bridge + 0x10u);
+        if (!b.shown.empty() && std::memcmp(rdram + cur, b.shown.data(), b.shown.size()) == 0) // else the game rewrote them
+            std::memcpy(rdram + cur, b.real.data(), b.real.size());
+        b.shown.clear();
+        // the frame's time as Apply computes it before its filter: clock dt, divided by the time scale below 1
+        float clock, scale;
+        std::memcpy(&clock, rdram + 0x00675040u, 4);
+        std::memcpy(&scale, rdram + 0x0066CFC0u, 4);
+        float dt = scale < 1.0f ? clock / scale : clock;
+        if (!(dt >= 0.0f && dt < 1.0f)) // a 0 time scale must not leave NaN behind
+            dt = kBridgeStep;
+        if (dt >= kBridgeStep)
+            b.acc = 0.0f; // below 30 fps one step per frame and the rest dropped, as the game's clamp does
+        else if ((b.acc += dt) >= kBridgeStep - 0.002f) // 2 ms slack: a 30 fps frame always makes a step
+            b.acc = std::max(0.0f, b.acc - kBridgeStep);
+        else
+        {
+            b.step = false;
+            ctx->pc = getRegU32(ctx, 31);
+            return;
+        }
+        b.step = true;
+        std::memcpy(&ctx->f[12], &kBridgeStep, 4);
+        callOriginal(0x00423740u, rdram, ctx, runtime);
+    }
+    void bridgeNormalize(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (!g_bridgePerFrame && !g_bridges[getRegU32(ctx, 4)].step)
+        {
+            ctx->pc = getRegU32(ctx, 31);
+            return;
+        }
+        callOriginal(0x00423480u, rdram, ctx, runtime);
+    }
+    void bridgeCollision(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t bridge = getRegU32(ctx, 4), ra = getRegU32(ctx, 31);
+        callOriginal(0x00422C40u, rdram, ctx, runtime);
+        // only Apply calls it (0x423A98; guarded anyway), and only if it returned normally
+        if (ra != 0x00423AA0u || ctx->pc != ra)
+            return;
+        BridgeState &b = g_bridges[bridge];
+        const uint32_t n = guestU32(rdram, bridge + 4u), cur = guestU32(rdram, bridge + 0x10u), old = guestU32(rdram, bridge + 0x14u);
+        const float t = std::min(b.acc / kBridgeStep, 1.0f);
+        if (g_bridgeLog)
+        {
+            static int frames = 0;
+            static float lo = 1e9f, hi = -1e9f;
+            float z, rz;
+            const uint32_t mid = n / 2u * 12u + 8u;
+            std::memcpy(&z, rdram + cur + mid, 4);
+            std::memcpy(&rz, rdram + guestU32(rdram, bridge + 0xCu) + mid, 4);
+            lo = std::min(lo, z - rz), hi = std::max(hi, z - rz);
+            if (++frames == 60)
+            {
+                std::fprintf(stderr, "[pop:bridge] %x middle above rest %+.3f .. %+.3f (60 frames)\n", bridge, lo, hi);
+                frames = 0, lo = 1e9f, hi = -1e9f;
+            }
+        }
+        if (g_bridgePerFrame || t <= 0.0f || n == 0u || n > 256u)
+            return;
+        b.real.assign(rdram + cur, rdram + cur + n * 12u);
+        for (uint32_t i = 0; i < n * 3u; ++i)
+        {
+            float c, o;
+            std::memcpy(&c, rdram + cur + 4u * i, 4);
+            std::memcpy(&o, rdram + old + 4u * i, 4);
+            c += (c - o) * t;
+            std::memcpy(rdram + cur + 4u * i, &c, 4);
+        }
+        b.shown.assign(rdram + cur, rdram + cur + n * 12u);
+    }
+
     void applyPopOverrides(PS2Runtime &runtime)
     {
+        {
+            const char *v = std::getenv("POP_BRIDGE_PER_FRAME");
+            g_bridgePerFrame = v && *v == '1';
+            for (const uint32_t addr : {0x00423740u, 0x00423480u, 0x00422C40u})
+                g_originals[addr] = runtime.lookupFunction(addr);
+            runtime.replaceFunction(0x00423740u, bridgeSolver);
+            runtime.replaceFunction(0x00423480u, bridgeNormalize);
+            runtime.replaceFunction(0x00422C40u, bridgeCollision);
+            g_bridgeLog = std::getenv("POP_BRIDGE_LOG") != nullptr;
+        }
         for (const uint32_t addr : kSndTrace)
             g_originals[addr] = runtime.lookupFunction(addr);
         for (const uint32_t addr : {0x0010BB70u, 0x0010BD40u, 0x00112980u, 0x00112AC0u, 0x001008C0u, 0x00100AC0u, 0x00101880u, 0x0014F380u, 0x00152080u, 0x00152B40u, 0x00153140u, 0x00153940u, 0x00156C00u, 0x00488240u, 0x00488280u, 0x0048DFC0u, 0x00494CC0u, 0x00186440u})
