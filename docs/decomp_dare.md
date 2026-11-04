@@ -6,8 +6,8 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **193 of 669 matched** (after run 10, 4 Nov; "Runs" below). **Next: before run 11, the header fixes and the timer
-  helper listed under run 10** (run 10 fell to 18%: the queue reached the C API and timer files); then the shortcut. Open: 2 header requests
+- **195 of 669 matched** (4 Nov, after run 10 + 2 by hand). **Run 11 running** (started 4 Nov 07:52 over SSH,
+  `oct28.ps1`); it starts with the 9 functions reopened on 4 Nov (see "4 Nov: fixes after run 10"). Open: 2 header requests
   from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
   instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
@@ -243,6 +243,21 @@ the compiler check: `docs/roadmap.md` "2.0".
     counts matching retail instructions and ignores extras), 190940 2 off, 16b9c0 and 15a6c0 3 off.
   - **Far misses:** 191c40 `MixBuffers_32_16_MMI` (MMI, 22 off), 1609c0, 17cbc0, 17cc80, 18fe00, 160240, 17ad80 (14-22 off).
   Folders copied to `game/analysis/qwen_pc/`.
+
+- **4 Nov: fixes after run 10.** Two of the three header requests were Qwen misreadings. I first listed 168440 as
+  real, but the "retail" name I cited came from Qwen's own draft, and retail has no symbols. In retail, 168440
+  passes (format on the stack, loop info, frequency) exactly as POP1 declares. For 197840, the allocator at 0x199a40
+  never reads `a1`, and about 37 callers do not set it. Both were reopened as they are.
+  - **`_stPartInfo` nested in `CThemeChannel`** (`NESTED` in `dare_header.py`; the demangler keeps the class for
+    it). Prompts now name template classes in C++ (`sndCList<CThemeChannel::_stPartInfo, ...>`), not mangled.
+    **195380 `RemoveHead` matched by hand** (`nm/removehead_partinfo.cpp`; lesson: `TYPE returnValue = pOldNode->data;`
+    copy-initialised, not assigned).
+  - **`SND_fn_ulGetCount()` in `dare_fix.h`** (`__asm__ ("mfc0 %0, $9" : "=r" (c))`, the only form mwccps2 took).
+    **182fc0 `SND_fn_vResumeTimer` matched by hand** (`nm/resumetimer.cpp`; file-static `init` + `clock`,
+    `initTick += (m_current + (unsigned int)(Count - m_previous)) - pauseTick`). It is now an example in the
+    other timer prompts.
+  - Reopened (`RETRY`; `HEADER` -> `HEADER.1104`): 1952c0, 168440, 197840, timers 160680 182bc0 182c80 182d00
+    182e40 182f00.
 
 ## Fixes after run 1 (all done 28 Oct night)
 
