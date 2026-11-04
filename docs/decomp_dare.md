@@ -6,8 +6,8 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **186 of 669 matched** (after run 9, 3 Nov; "Runs" below). **Next: run 10** from the PC shortcut (queue now in the
-  untried functions whose size differs from POP1, smallest first: ~48% passes at 36-64 bytes). Open: 2 header requests
+- **193 of 669 matched** (after run 10, 4 Nov; "Runs" below). **Next: before run 11, the header fixes and the timer
+  helper listed under run 10** (run 10 fell to 18%: the queue reached the C API and timer files); then the shortcut. Open: 2 header requests
   from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
   instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
@@ -222,6 +222,27 @@ the compiler check: `docs/roadmap.md` "2.0".
     `fn_vUpdateVoiceStatusAndTransfer1stStack` returns a value, 18b780 `_tdstTypeSampleMem` member at +0x24,
     1952c0 `_stPartInfo` nested in `CThemeChannel` (mangled `Q213CThemeChannel11_stPartInfo`).
   Folders copied to `game/analysis/qwen_pc/`. Next: run 10 = the shortcut again (continues the queue).
+
+- **Run 10 (3 Nov 22:04 - 4 Nov 07:43, stopped by me at the user's request): 7 of 40 matched (18%)**, 3 NEEDS HEADER
+  CHANGE, 30 misses; ~14 min per function (run 9: ~10). Now **193 of 669** (18 need a header change, 271 tried
+  without a match, 187 untried). Untried size-differs functions, 36-45 instructions; every round compiled after the
+  fix calls.
+  - **Passed:** 1803c0 18d180 1904c0 18e980 190040 190f80 190ec0 (5 of 7 in `CASyncBankLoader`/`UnLoader`). The
+    misses are mostly the C API files (`sndplay.c`, `sndtimer_ee.c`, `SndManager`, `sndrpc_ee.c`); the POP1-to-retail
+    size ratio does not separate passes from misses (median 1.37 both).
+  - **Timer family blocks on `mfc0 $9`:** all 7 retail functions that read COP0 Count (160680, 182bc0-182fc0; the
+    timer functions inline a static clock) are unmatched, 6 tried. Qwen writes GCC `__asm__("mfc0 %0, 9")`, which
+    mwccps2 rejects ("illegal operand"), and spends its fix calls on it. One hand-checked inline helper in
+    `dare_fix.h` (CodeWarrior asm syntax) should unblock the family.
+  - **Header requests checked:** 195380 and run 9's 1952c0 are the same real gap (`_stPartInfo` must be nested in
+    `CThemeChannel`: mangled `Q213CThemeChannel11_stPartInfo`). 168440 real: retail mangled name is
+    `Create_TVirtualSample(TVirtualSample**, _SND_tdstLoopSampleInfo*, unsigned int*, int)`, `dare.h` has POP1's.
+    197840 (`SND_fn_pvMallocSnd` 2 arguments) plausible: 4 retail callers set `a1 = 0` before `jal 0x199a40`, 182bc0
+    does not; 0x199a40 is outside the DARE units, check it in Ghidra. 197840 was 1 off.
+  - **Nearest misses (hand pass):** 168dc0 1 off, 194640 1 extra `b` (the summary shows it as "37 of 37": the score
+    counts matching retail instructions and ignores extras), 190940 2 off, 16b9c0 and 15a6c0 3 off.
+  - **Far misses:** 191c40 `MixBuffers_32_16_MMI` (MMI, 22 off), 1609c0, 17cbc0, 17cc80, 18fe00, 160240, 17ad80 (14-22 off).
+  Folders copied to `game/analysis/qwen_pc/`.
 
 ## Fixes after run 1 (all done 28 Oct night)
 
