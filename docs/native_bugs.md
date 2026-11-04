@@ -626,6 +626,11 @@ Boot check 4 Nov (`game\jobs\bridge1104.ps1`, save 213556 at 60 fps, walk forwar
 settles to rest within ~7 s (+-0.013), sags to -0.6 under the Prince and returns to +-0.000; the deck sits level with
 the floor. `POP_BRIDGE_PER_FRAME=1`: +0.8..+0.9 throughout, still bobbing after 20 s, the Prince barely moves it.
 Not boot-checked at 30 fps: the save holds the 60 fps word (0x66D044 = 1), so `POP_60FPS=0` still ran at 60.
+User play 4 Nov 19:17 (save 191745): onto the bridge fine, motion smooth, but walking back the bridge sat too low
+to step onto the ledge. Collision (run every frame) adds the riders' weight (+0x2C, 60) to the force array the next
+Solver uses up, and carries them by the chain's last step: twice per step at 60 fps. Replay: weight twice per step
+gives -0.477/-0.405 at points 3/4, the save has -0.479/-0.408 (once per step: -0.27/-0.23). Collision now runs on step
+frames only (the extrapolation still runs every frame).
 Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
 
 ## Storage of captures (agreed with the user 24 Oct)

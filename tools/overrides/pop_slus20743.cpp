@@ -2511,11 +2511,17 @@ namespace
     void bridgeCollision(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t bridge = getRegU32(ctx, 4), ra = getRegU32(ctx, 31);
-        callOriginal(0x00422C40u, rdram, ctx, runtime);
+        BridgeState &b = g_bridges[bridge];
+        // Collision adds the riders' weight to the force the next Solver uses up and carries them by the chain's
+        // last step, so it runs once per step too (every frame doubled the Prince's weight at 60 fps: the bridge
+        // sat 0.48 low under him, save play_20261104_191745).
+        if (g_bridgePerFrame || b.step || ra != 0x00423AA0u)
+            callOriginal(0x00422C40u, rdram, ctx, runtime);
+        else
+            ctx->pc = ra;
         // only Apply calls it (0x423A98; guarded anyway), and only if it returned normally
         if (ra != 0x00423AA0u || ctx->pc != ra)
             return;
-        BridgeState &b = g_bridges[bridge];
         const uint32_t n = guestU32(rdram, bridge + 4u), cur = guestU32(rdram, bridge + 0x10u), old = guestU32(rdram, bridge + 0x14u);
         const float t = std::min(b.acc / kBridgeStep, 1.0f);
         if (g_bridgeLog)
