@@ -6,10 +6,10 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **195 of 669 matched** (4 Nov, after run 10 + 2 by hand). **Run 11 running** (started 4 Nov 07:52 over SSH,
-  `oct28.ps1`); it starts with the 9 functions reopened on 4 Nov (see "4 Nov: fixes after run 10"). Open: 2 header requests
-  from run 6 (16b800 `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3
-  instruction misses (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
+- **209 of 669 matched** (4 Nov, after run 11). Run 11 stopped 4 Nov ~18:05 (user). Next: the fixes listed under
+  "Run 11" below, then the shortcut again. Still open from earlier: 2 header requests from run 6 (16b800
+  `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3 instruction misses
+  (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
   (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
   or `no match after 4 more rounds`); for run 6 also the two checks at the end of "Prepared for run 6". For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
@@ -258,6 +258,31 @@ the compiler check: `docs/roadmap.md` "2.0".
     other timer prompts.
   - Reopened (`RETRY`; `HEADER` -> `HEADER.1104`): 1952c0, 168440, 197840, timers 160680 182bc0 182c80 182d00
     182e40 182f00.
+
+- **Run 11 (4 Nov 07:52-18:05, stopped by me at the user's request): 14 of 46 matched (30%)**, 7 NEEDS HEADER
+  CHANGE, 25 misses; ~13 min per function. Now **209 of 669** (21 need a header change, 291 tried without a match,
+  148 untried).
+  - **Passed:** 197840 (reopened: the "missing 2nd argument" was indeed a misreading), 182f00 (timer, helped by the
+    182fc0 example), 190cc0 180680 190640 16a2c0 18ff80 183e80 1903c0 190a00 16d900 190dc0 18c200 17b840.
+  - **Reopened 9:** 2 passed (197840, 182f00); the rest got much closer: 182e40 15 -> 5 off, 182c80 30 -> 11,
+    168440 27 -> 15, 182d00 8 off, 1952c0 19 off. 182bc0 asked again for a 2-argument `SND_fn_pvMallocSnd` (already
+    ruled out on 4 Nov: the allocator never reads a1).
+  - **160680 `SND_fn_rGetRandomSnd` never compiled (9 of 9 rounds):** it is not a timer, so no timer example reaches
+    its prompt, and nothing tells Qwen about `SND_fn_ulGetCount()`; it writes `__asm__("mfc0 %0, 9")` (illegal
+    operand) or `__mfc0`, then asks for a `GetCount` declaration. Fix: one rule line in `qwen_match.py` (retail
+    `mfc0 ..., Count` -> call `SND_fn_ulGetCount()`, the only form mwccps2 takes), then reopen.
+  - **Header requests (unchecked against Ghidra yet):** 18fa00 `ReadBankWaveForms` (`TestReadBankWaveForms` return
+    type), 18afc0 `SndManager::SetParamTransition` (wants `CPath::SetParam`; retail makes a virtual call, slot 0x34
+    of the object at +0x14), 18e780 `SND_fn_vFreeIOP` (wants `__sndPos` members; the asm walks a list whose nodes
+    point to `_tdstMemoryCluster` and tests `pvAddress == p`, so probably a misreading), 158580
+    `ChangeVolumeForType` (`_SND_tdstTypeObjectSoundInfo`), 16fd40 `TPitchShifter::AddChild` (`GetOutputFormat`
+    2 arguments). Common thread: 18fa00, 16fd40, 18e780 and 18afc0 call unnamed `FUN_` targets (0x18fb00, 0x1615c0,
+    0x199640, 0x18c400) that `callees.tsv` does not name; naming them may settle most of these.
+  - **Compile errors still high in some:** 193cc0 11 of 13 rounds, 16a040 10 of 13, 18b900 9 of 11 (invented members
+    `eFmt`, `lNumberOfElementsOpt`; pointer-to-member conversions). Not a new pattern.
+  - **Nearest misses (hand pass):** 18f080 `CASyncBankLoader::OpenBank` 2 off (48 of 49 in the summary),
+    1821c0 `SND_fn_vStopSxdWave` 4 off, 182e40 `SND_fn_vResetTimer` 5 off, 15a780 `IsAssoDynamic` 6 off.
+  Folders copied to `game/analysis/qwen_pc/`.
 
 ## Fixes after run 1 (all done 28 Oct night)
 

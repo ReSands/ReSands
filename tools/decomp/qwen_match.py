@@ -72,6 +72,8 @@ Original local variable names: {locals}
   - A free/delete call gets its pointer in a0: pass it (SND_fn_vFreeSnd(p)); __dt__(p, 1) is `delete p;`.
   - Stores come out in source order: write member assignments in the order the assembly stores them.
   - Plain int shifts give sll/sra; casts to short add dsll32/dsra32 pairs.
+  - `mfc0 rX,Count` (COP0 register 9) = call SND_fn_ulGetCount() (dare.h); this compiler rejects every inline-asm
+    mfc0 form you would write yourself.
   - The constructor's vptr store is generated; write only the member assignments.
   - A call to Class::operator new (__nw__<n>Class) and then, if it returned non-zero, the constructor = `p = new
     Class;` (never placement new: dare.h declares the class's own operator new).
