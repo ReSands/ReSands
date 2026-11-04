@@ -2054,12 +2054,12 @@ namespace
             last = now;
         }
         // POP_60FPS=1: PCSX2's "60 FPS" patch for SLUS-20743 (author asasega; pcsx2_patches),
-        // a data word, so written here each frame as PCSX2 re-applies patch=1 lines. POP_60FPS=0 writes 0: a save
-        // taken at 60 fps holds 1 and would otherwise keep running at 60.
+        // a data word (vsyncs per frame, read every frame at 0x4A2680; the ELF's value is 2), so written here each
+        // frame as PCSX2 re-applies patch=1 lines. POP_60FPS=0 writes 2 back: a save taken at 60 fps holds 1.
         static const int fps60 = [] { const char *v = std::getenv("POP_60FPS"); return v && (*v == '0' || *v == '1') ? *v - '0' : -1; }();
         if (fps60 >= 0)
         {
-            const uint32_t word = static_cast<uint32_t>(fps60);
+            const uint32_t word = fps60 ? 1u : 2u;
             std::memcpy(rdram + 0x0066D044u, &word, sizeof(word));
         }
         keepQuickSaves();
