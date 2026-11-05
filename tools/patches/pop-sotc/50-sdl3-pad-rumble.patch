@@ -1,0 +1,360 @@
+From 82744a7af5e847ea4523a2258cc1cb759ff53ede Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Thu, 5 Nov 2026 21:22:52 +0000
+Subject: [PATCH] input: pads through SDL3, DualShock 2 rumble from
+ scePadSetActDirect
+
+SDL3 gamepad subsystem only (raylib keeps the window); port N = N-th pad, hotplug.
+Large motor -> low-frequency, small on/off -> high-frequency. Motors stop on state load
+and at exit. gamepadButtons() lets overrides read pad buttons without raylib.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012y1nSfv93fXvHwE3EdxcbN
+---
+ ps2xRuntime/CMakeLists.txt                    |  13 ++
+ .../include/runtime/ps2_input_options.h       |   1 +
+ ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp      |   6 +-
+ ps2xRuntime/src/lib/ps2_host_input.cpp        | 179 ++++++++++++++++--
+ ps2xRuntime/src/lib/ps2_host_input.h          |   2 +
+ ps2xRuntime/src/lib/ps2_runtime.cpp           |   1 +
+ ps2xRuntime/src/lib/ps2_save_state.cpp        |   4 +
+ 7 files changed, 192 insertions(+), 14 deletions(-)
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 1fc621f..bafd7b4 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -239,6 +239,19 @@ else()
+ 
+     if(PS2X_IS_ANDROID)
+         target_link_libraries(ps2_host_backend INTERFACE log android)
++    else()
++        # SDL3 for pads and rumble (gamepad subsystem only; raylib keeps the window). Installed package or source.
++        find_package(SDL3 3.4 CONFIG QUIET)
++        if(NOT SDL3_FOUND)
++            set(SDL_SHARED OFF CACHE BOOL "" FORCE)
++            set(SDL_STATIC ON CACHE BOOL "" FORCE)
++            set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
++            FetchContent_Declare(sdl3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
++                                 GIT_TAG release-3.4.16 GIT_SHALLOW TRUE)
++            FetchContent_MakeAvailable(sdl3)
++        endif()
++        target_link_libraries(ps2_host_backend INTERFACE SDL3::SDL3)
++        target_compile_definitions(ps2_host_backend INTERFACE PS2X_HAVE_SDL3=1)
+     endif()
+ endif()
+ 
+diff --git a/ps2xRuntime/include/runtime/ps2_input_options.h b/ps2xRuntime/include/runtime/ps2_input_options.h
+index 9e66b91..05abf44 100644
+--- a/ps2xRuntime/include/runtime/ps2_input_options.h
++++ b/ps2xRuntime/include/runtime/ps2_input_options.h
+@@ -17,5 +17,6 @@ namespace ps2_host_input
+     void setRightStickInvertDefault(uint32_t axes);
+     void setMouseCameraEnabled(bool enabled);
+     void setMouseStickEnabled(bool enabled);
++    [[nodiscard]] uint16_t gamepadButtons(); // controllers only (no keyboard), PS2 bits: 1 << 0 = Select
+     [[nodiscard]] MouseCameraInput consumeMouseCameraInput();
+ }
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index a681c7c..3e9d84c 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -1,5 +1,6 @@
+ #include "Common.h"
+ #include "Pad.h"
++#include "../../ps2_host_input.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -694,8 +695,11 @@ namespace ps2_stubs
+ 
+     void scePadSetActDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+         (void)runtime;
++        // shortcut: the scePadSetActAlign table is not read; PoP always aligns byte 0 to the small motor (on/off)
++        // and byte 1 to the large one (0-255) (its pad state 7, 0x48B000). Honour the table if a game differs.
++        if (const uint8_t *data = getMemPtr(rdram, getRegU32(ctx, 6)))
++            ps2_host_input::setRumble(getRegU32(ctx, 4), data[0], data[1]);
+         setReturnS32(ctx, 1);
+     }
+ 
+diff --git a/ps2xRuntime/src/lib/ps2_host_input.cpp b/ps2xRuntime/src/lib/ps2_host_input.cpp
+index 0715da3..32d29fe 100644
+--- a/ps2xRuntime/src/lib/ps2_host_input.cpp
++++ b/ps2xRuntime/src/lib/ps2_host_input.cpp
+@@ -17,6 +17,10 @@
+ #include <utility>
+ #include <vector>
+ 
++#if PS2X_HAVE_SDL3
++#include <SDL3/SDL.h>
++#endif
++
+ namespace ps2_host_input
+ {
+     namespace
+@@ -335,6 +339,125 @@ namespace ps2_host_input
+             return low ? 0x00u : 0xFFu;
+         }
+ 
++        // Motor values per port from scePadSetActDirect: (large 0-255 << 8) | small (bit 0).
++        std::array<std::atomic<uint16_t>, kPadPorts> g_rumble{};
++        std::atomic<uint16_t> g_gamepadButtons{0u}; // all pads, last sample, PadButton bits
++
++        struct GamepadReading
++        {
++            uint16_t buttons = 0u;
++            float leftX = 0.0f, leftY = 0.0f, rightX = 0.0f, rightY = 0.0f;
++        };
++
++#if PS2X_HAVE_SDL3
++        // Pads through SDL3's gamepad API (any controller in its database, by button position: south = Cross).
++        // Only the gamepad subsystem: SDL makes no window and leaves raylib's events alone. Main thread only.
++        constexpr std::array<std::pair<uint16_t, SDL_GamepadButton>, 14> kSdlButtons{{
++            {PadButton::Up, SDL_GAMEPAD_BUTTON_DPAD_UP},
++            {PadButton::Down, SDL_GAMEPAD_BUTTON_DPAD_DOWN},
++            {PadButton::Left, SDL_GAMEPAD_BUTTON_DPAD_LEFT},
++            {PadButton::Right, SDL_GAMEPAD_BUTTON_DPAD_RIGHT},
++            {PadButton::Cross, SDL_GAMEPAD_BUTTON_SOUTH},
++            {PadButton::Circle, SDL_GAMEPAD_BUTTON_EAST},
++            {PadButton::Square, SDL_GAMEPAD_BUTTON_WEST},
++            {PadButton::Triangle, SDL_GAMEPAD_BUTTON_NORTH},
++            {PadButton::L1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER},
++            {PadButton::R1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER},
++            {PadButton::Start, SDL_GAMEPAD_BUTTON_START},
++            {PadButton::Select, SDL_GAMEPAD_BUTTON_BACK},
++            {PadButton::L3, SDL_GAMEPAD_BUTTON_LEFT_STICK},
++            {PadButton::R3, SDL_GAMEPAD_BUTTON_RIGHT_STICK},
++        }};
++
++        bool g_sdlReady = false;
++        std::array<SDL_Gamepad *, kPadPorts> g_pads{};
++        std::array<uint16_t, kPadPorts> g_rumbleSent{};
++
++        // Port N = the N-th connected gamepad; reopened when the list changes (hotplug).
++        void updateGamepads()
++        {
++            static const bool ok = []
++            {
++                SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++                if (SDL_Init(SDL_INIT_GAMEPAD))
++                    return g_sdlReady = true;
++                std::cerr << "[input] SDL_Init(SDL_INIT_GAMEPAD) failed: " << SDL_GetError() << std::endl;
++                return false;
++            }();
++            if (!ok || !g_sdlReady)
++                return;
++            SDL_UpdateGamepads();
++            int count = 0;
++            SDL_JoystickID *ids = SDL_GetGamepads(&count);
++            for (uint32_t port = 0; port < kPadPorts; ++port)
++            {
++                const SDL_JoystickID id = (ids && static_cast<int>(port) < count) ? ids[port] : 0;
++                SDL_Gamepad *&pad = g_pads[port];
++                if (pad && SDL_GetGamepadID(pad) != id)
++                {
++                    SDL_CloseGamepad(pad);
++                    pad = nullptr;
++                }
++                if (!pad && id)
++                {
++                    pad = SDL_OpenGamepad(id);
++                    g_rumbleSent[port] = 0u;
++                    const char *name = pad ? SDL_GetGamepadName(pad) : nullptr;
++                    std::cerr << "[input] port " << port << ": " << (name ? name : "gamepad") << (pad ? "" : " (open failed)") << std::endl;
++                }
++                const uint16_t rumble = g_rumble[port].load(std::memory_order_relaxed);
++                if (pad && rumble != g_rumbleSent[port])
++                {
++                    // Large motor -> low-frequency, small (on/off) -> high-frequency, as GT4Recomp and PCSX2.
++                    // A DS2 motor runs until told otherwise; SDL caps a rumble at ~65 s. A pad without motors just refuses.
++                    SDL_RumbleGamepad(pad, static_cast<Uint16>((rumble >> 8) * 257u), (rumble & 1u) ? 0xFFFFu : 0u, 0xFFFFu);
++                    g_rumbleSent[port] = rumble;
++                }
++            }
++            SDL_free(ids);
++        }
++
++        std::optional<GamepadReading> readGamepad(uint32_t port)
++        {
++            SDL_Gamepad *pad = g_pads[port];
++            if (!pad)
++                return std::nullopt;
++            GamepadReading reading;
++            for (const auto &[button, sdlButton] : kSdlButtons)
++                if (SDL_GetGamepadButton(pad, sdlButton))
++                    reading.buttons |= button;
++            constexpr Sint16 kTriggerDown = 30 * 128; // GT4Recomp's 30/255 threshold for L2/R2
++            if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kTriggerDown)
++                reading.buttons |= PadButton::L2;
++            if (SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > kTriggerDown)
++                reading.buttons |= PadButton::R2;
++            auto axis = [&](SDL_GamepadAxis a) { return static_cast<float>(SDL_GetGamepadAxis(pad, a)) / 32767.0f; };
++            reading.leftX = axis(SDL_GAMEPAD_AXIS_LEFTX);
++            reading.leftY = axis(SDL_GAMEPAD_AXIS_LEFTY);
++            reading.rightX = axis(SDL_GAMEPAD_AXIS_RIGHTX);
++            reading.rightY = axis(SDL_GAMEPAD_AXIS_RIGHTY);
++            return reading;
++        }
++#else
++        void updateGamepads() {}
++
++        std::optional<GamepadReading> readGamepad(uint32_t port)
++        {
++            const int gamepad = static_cast<int>(port);
++            if (!IsGamepadAvailable(gamepad))
++                return std::nullopt;
++            GamepadReading reading;
++            for (const ButtonBinding &binding : kButtons)
++                if (IsGamepadButtonDown(gamepad, binding.gamepadButton))
++                    reading.buttons |= binding.button;
++            reading.leftX = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X);
++            reading.leftY = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y);
++            reading.rightX = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X);
++            reading.rightY = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y);
++            return reading;
++        }
++#endif
++
+         std::atomic<const std::atomic<uint64_t> *> g_fieldCounter{nullptr};
+         std::atomic<uint32_t> g_invertRightDefault{0u};
+         std::atomic<bool> g_mouseCameraEnabled{false};
+@@ -511,10 +634,9 @@ namespace ps2_host_input
+         PadInputState readPort(uint32_t port)
+         {
+             PadInputState state;
+-            const int gamepad = static_cast<int>(port);
+-            const bool gamepadAvailable = IsGamepadAvailable(gamepad);
++            const std::optional<GamepadReading> gamepad = readGamepad(port);
+             const bool keyboard = port == 0u;
+-            state.connected = gamepadAvailable || keyboard;
++            state.connected = gamepad || keyboard;
+             if (!state.connected)
+                 return state;
+             state.leftX = kAxisNeutral;
+@@ -526,20 +648,17 @@ namespace ps2_host_input
+             for (size_t i = 0; i < kButtons.size(); ++i)
+             {
+                 const ButtonBinding &binding = kButtons[i];
+-                const bool padDown = gamepadAvailable && IsGamepadButtonDown(gamepad, binding.gamepadButton);
+-                const bool keyDown = keyboard && isHostBindingDown(hostBindings[i]);
+-                if (padDown || keyDown)
++                if (keyboard && isHostBindingDown(hostBindings[i]))
+                     state.buttons |= binding.button;
+             }
+-            if (gamepadAvailable)
++            if (gamepad)
+             {
+-                state.leftX = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_X));
+-                state.leftY = axisToByte(GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_LEFT_Y));
++                state.buttons |= gamepad->buttons;
++                state.leftX = axisToByte(gamepad->leftX);
++                state.leftY = axisToByte(gamepad->leftY);
+                 const uint32_t invert = rightStickInvert();
+-                const float rightX = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_X);
+-                const float rightY = GetGamepadAxisMovement(gamepad, GAMEPAD_AXIS_RIGHT_Y);
+-                state.rightX = axisToByte((invert & kInvertRightX) != 0u ? -rightX : rightX);
+-                state.rightY = axisToByte((invert & kInvertRightY) != 0u ? -rightY : rightY);
++                state.rightX = axisToByte((invert & kInvertRightX) != 0u ? -gamepad->rightX : gamepad->rightX);
++                state.rightY = axisToByte((invert & kInvertRightY) != 0u ? -gamepad->rightY : gamepad->rightY);
+             }
+             if (keyboard)
+             {
+@@ -578,13 +697,47 @@ namespace ps2_host_input
+     void sample()
+     {
+         sampleMouse();
++        updateGamepads();
+         std::array<PadInputState, kPadPorts> state{};
++        uint16_t gamepadButtons = 0u;
+         for (uint32_t port = 0; port < kPadPorts; ++port)
++        {
+             state[port] = readPort(port);
++            if (const std::optional<GamepadReading> gamepad = readGamepad(port))
++                gamepadButtons |= gamepad->buttons;
++        }
++        g_gamepadButtons.store(gamepadButtons, std::memory_order_relaxed);
+         std::lock_guard<std::mutex> lock(g_mutex);
+         g_state = state;
+     }
+ 
++    uint16_t gamepadButtons()
++    {
++        return g_gamepadButtons.load(std::memory_order_relaxed);
++    }
++
++    void setRumble(uint32_t port, uint8_t small, uint8_t large)
++    {
++        if (port < kPadPorts)
++            g_rumble[port].store(static_cast<uint16_t>((large << 8) | (small & 1u)), std::memory_order_relaxed);
++    }
++
++    void shutdown()
++    {
++#if PS2X_HAVE_SDL3
++        if (!g_sdlReady)
++            return;
++        for (SDL_Gamepad *&pad : g_pads)
++        {
++            if (pad)
++                SDL_CloseGamepad(pad); // stops its motors
++            pad = nullptr;
++        }
++        SDL_Quit();
++        g_sdlReady = false;
++#endif
++    }
++
+     void setMouseStickEnabled(bool enabled)
+     {
+         g_mouseStickEnabled.store(enabled, std::memory_order_relaxed);
+diff --git a/ps2xRuntime/src/lib/ps2_host_input.h b/ps2xRuntime/src/lib/ps2_host_input.h
+index 9fdc3b1..c6b7f47 100644
+--- a/ps2xRuntime/src/lib/ps2_host_input.h
++++ b/ps2xRuntime/src/lib/ps2_host_input.h
+@@ -12,5 +12,7 @@ namespace ps2_host_input
+     void setFieldCounter(const std::atomic<uint64_t> *counter);
+     void sample();
+     void releaseMouse();
++    void setRumble(uint32_t port, uint8_t small, uint8_t large); // any thread; applied by sample()
++    void shutdown();                                              // main thread, after the game thread stopped
+     [[nodiscard]] ps2x::iop::PadInputState padState(uint32_t port);
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 6fce9a1..c3c478b 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2780,6 +2780,7 @@ void PS2Runtime::run()
+         UnloadTexture(frameTex);
+     GSSharedPresent::ShutdownHost();
+     ps2_host_input::releaseMouse();
++    ps2_host_input::shutdown();
+     CloseWindow();
+ 
+     RUNTIME_LOG("[run] exiting loop");
+diff --git a/ps2xRuntime/src/lib/ps2_save_state.cpp b/ps2xRuntime/src/lib/ps2_save_state.cpp
+index 01e9eae..069ceac 100644
+--- a/ps2xRuntime/src/lib/ps2_save_state.cpp
++++ b/ps2xRuntime/src/lib/ps2_save_state.cpp
+@@ -8,6 +8,7 @@
+ #include "Kernel/Stubs/CD.h"
+ #include "Kernel/Stubs/SIF.h"
+ #include "GuestKernelMemory.h"
++#include "ps2_host_input.h"
+ 
+ #include <atomic>
+ #include <chrono>
+@@ -755,6 +756,9 @@ bool EeScheduler::serviceStateRequests()
+         return true;
+     }
+     publishSnapshotNow();
++    // The loaded game may think the motors are off already and never send a stop.
++    for (uint32_t port = 0; port < ps2_host_input::kPadPorts; ++port)
++        ps2_host_input::setRumble(port, 0u, 0u);
+     notify("State loaded (field " + std::to_string(m_vsyncTick) + ")");
+     return true;
+ }
+-- 
+2.54.0 (Apple Git-157)
+

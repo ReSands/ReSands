@@ -1633,10 +1633,14 @@ namespace
 #if POP_HAVE_QUICKSAVE
         static bool was = false;
         static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+#if POP_HAVE_INPUT_OPTIONS
+        const bool combo = (ps2_host_input::gamepadButtons() & 1u) != 0u; // Select, read through SDL3 (patch 50)
+#else
         bool combo = false;
         for (int g = 0; g < 4; ++g)
             if (IsGamepadAvailable(g) && IsGamepadButtonDown(g, GAMEPAD_BUTTON_MIDDLE_LEFT))
                 combo = true;
+#endif
         const auto now = std::chrono::steady_clock::now();
         if (combo && !was && now - last > std::chrono::seconds(2))
         {
