@@ -150,6 +150,7 @@ on all 11 movies.
    `FullMovie` hooks (where `tools/overrides/pop_movies.cpp` now plays Bink), so the disc's own
    movies play natively. Judge: frame hashes vs FFmpeg on the extracted stream; A/V sync by eye.
 
+**Decided 5 Nov (user): keep FFmpeg; 0.4 closed** (reasons in `docs/roadmap.md` 0.4). Earlier notes:
 Open question for 1.0: FFmpeg's IPU decoder is LGPL (fine to link, as we already link FFmpeg); a
 fully own decoder is not planned (thousands of lines, GPL-contamination risk if written from memory).
 **Revisit (1 Nov):** matt-pulsipher/GT3-revisited (MIT) has an own decoder small enough to adopt:

@@ -57,9 +57,12 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
 - **0.3 = native sound:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2 emulation). Reference:
   GT4Recomp's frame pacing + audio rate control (`docs/reference.md` "GT4Recomp"). GT3-revisited (MIT, read 1 Nov):
   an SPU2 reverb + Gaussian/ADSR voice mixer as the native mixer's reference (`docs/native_renderer.md` sound step 3).
-- **0.4 = native PS2 movie decoder** behind the game's own player (no IPU emulation; replaces the 13 Oct plan to
-  adapt ps2-web-recomp's IPU). Reference: GT3-revisited's own MPEG-2/IPU decoder in ~1.5k lines (`docs/movies.md`
-  "Open question").
+- **0.4 = native PS2 movie decoder** behind the game's own player (no IPU emulation). **Closed 5 Nov (user), with
+  FFmpeg:** the decoder has worked since 16 Oct (FFmpeg `ipu` behind `FullMovie` in `tools/overrides/pop_movies.cpp`,
+  all 11 disc + 39 vision movies, PCM sound straight to the audio output; user watched them on the PC 16 Oct).
+  GT3-revisited's MIT decoder not adopted: FFmpeg stays anyway (PS2Recomp's runtime links it, Bink at 1.2); revisit
+  only if the real PS2 shows a visible movie difference (`docs/movies.md` "Open question"). Re-check at 1.4: movies
+  at 60 fps (never watched since the 60 fps work).
 - **0.5 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer
   (cheap, could come earlier) and SDL3 pad layer (`docs/reference.md` "GT4Recomp").
   **Memory card (user, 5 Nov):** the native card reads and writes PCSX2's plain 8 MB `.ps2` card image (raw pages
@@ -79,6 +82,9 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
 - **0.7 = public playtest** (user, 5 Nov; first publish moved here from 1.0): announce, publish our own code on the
   1.0 terms below (no game data, users build from their own disc), and take bug reports from anyone who wants to
   play-test.
+  **FFmpeg licence (5 Nov):** source-only release carries no FFmpeg obligations. Binaries, if any, bundle an **LGPL**
+  FFmpeg build as separate replaceable libraries with the LGPL text and source pointer (Windows already fetches
+  System233's `lgpl-amd64-shared` 7.1 build), **never Homebrew's GPL v3 build** (`--enable-gpl --enable-version3`).
 
 ## 1.0: clean up, performance
 
