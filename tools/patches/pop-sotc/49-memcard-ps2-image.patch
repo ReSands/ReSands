@@ -1,0 +1,2150 @@
+From bfc5fd69bd26de4edd0087f9a07a1d2ea61b96e3 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Thu, 5 Nov 2026 20:53:30 +0000
+Subject: [PATCH] stubs: memory card in a PCSX2-compatible .ps2 image
+
+The libmc stubs kept saves as loose files in <elf>/mc0. They now read and
+write one raw card image per slot (512-byte pages + ECC spare, PS2 card
+file system), the format PCSX2 uses, so the same card works in both.
+
+- McImage.{h,cpp}: card file system (superblock, FAT via indirect FAT,
+  directories, ECC), format as mymc does, crash-safe save (tmp, fsync,
+  rename). Facts from PCSX2, mymc and ps2sdk mcman (open source).
+- Cards: Mcd001.ps2 / Mcd002.ps2 in the user's folder (Windows
+  %USERPROFILE%\Saved Games\PoP Recomp, macOS Application Support,
+  Linux XDG data); PS2X_MC_DIR overrides. A missing card is a formatted
+  card in memory, written on the first save; an old mc0/mc1 folder is
+  imported once. An unreadable image is never written (slot reads empty).
+- The image is written after each changing command (close, flush, mkdir,
+  delete, rename, format, unformat, file creation).
+- tests/mc_image_test.cpp: self-test (format layout, ECC, multi-cluster
+  files, directory growth, delete/reuse, rename, card full, reload).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp  | 642 ++++++++++++++
+ ps2xRuntime/src/lib/Kernel/Stubs/McImage.h    | 112 +++
+ .../src/lib/Kernel/Stubs/MemoryCard.cpp       | 817 +++++++-----------
+ ps2xRuntime/tests/mc_image_test.cpp           | 177 ++++
+ 4 files changed, 1236 insertions(+), 512 deletions(-)
+ create mode 100644 ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp
+ create mode 100644 ps2xRuntime/src/lib/Kernel/Stubs/McImage.h
+ create mode 100644 ps2xRuntime/tests/mc_image_test.cpp
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp
+new file mode 100644
+index 0000000..b21b2f5
+--- /dev/null
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp
+@@ -0,0 +1,642 @@
++#include "McImage.h"
++
++#include <algorithm>
++#include <array>
++#include <cstdio>
++#include <cstring>
++#include <ctime>
++#ifdef _WIN32
++#include <io.h>
++#else
++#include <unistd.h>
++#endif
++
++namespace ps2_mc
++{
++    namespace
++    {
++        constexpr uint32_t kEnd = 0xFFFFFFFFu;  // chain end (allocated) / empty-file cluster
++        constexpr uint32_t kUsed = 0x80000000u; // FAT entry in use
++        constexpr uint32_t kFreeEnd = 0x7FFFFFFFu;
++        constexpr char kMagic[] = "Sony PS2 Memory Card Format "; // 28 bytes incl. the trailing space
++
++        Tod nowTod()
++        {
++            const std::time_t t = std::time(nullptr) + 9 * 3600; // the PS2 clock and card stamps are JST
++            std::tm tm{};
++#ifdef _WIN32
++            gmtime_s(&tm, &t);
++#else
++            gmtime_r(&t, &tm);
++#endif
++            return Tod{0, uint8_t(tm.tm_sec), uint8_t(tm.tm_min), uint8_t(tm.tm_hour), uint8_t(tm.tm_mday),
++                       uint8_t(tm.tm_mon + 1), uint16_t(tm.tm_year + 1900)};
++        }
++
++        Entry makeEntry(uint16_t mode, const std::string &name)
++        {
++            Entry e{};
++            e.mode = mode;
++            e.created = e.modified = nowTod();
++            std::strncpy(e.name, name.c_str(), sizeof(e.name) - 1);
++            return e;
++        }
++
++        bool sameName(const Entry &e, const std::string &name)
++        {
++            return std::strncmp(e.name, name.c_str(), sizeof(e.name)) == 0;
++        }
++
++        // Wide on Windows so a user folder with any characters works (path::string() would not).
++        std::FILE *openFile(const std::filesystem::path &p, bool write)
++        {
++#ifdef _WIN32
++            return _wfopen(p.c_str(), write ? L"wb" : L"rb");
++#else
++            return std::fopen(p.c_str(), write ? "wb" : "rb");
++#endif
++        }
++
++        std::vector<std::string> split(const std::string &path)
++        {
++            std::vector<std::string> parts;
++            std::string cur;
++            for (char c : path)
++            {
++                if (c == '/')
++                {
++                    if (!cur.empty())
++                        parts.push_back(cur);
++                    cur.clear();
++                }
++                else
++                    cur += c;
++            }
++            if (!cur.empty())
++                parts.push_back(cur);
++            return parts;
++        }
++    }
++
++    // Hamming ECC per 128 bytes, as mymc / PCSX2 MemoryCardFile.cpp compute it (tables built, not pasted).
++    void computeEcc(const uint8_t *d, uint8_t out[3])
++    {
++        struct Tables
++        {
++            std::array<uint8_t, 256> parity{}, column{};
++            Tables()
++            {
++                static const uint8_t masks[7] = {0x55, 0x33, 0x0F, 0x00, 0xAA, 0xCC, 0xF0};
++                auto par = [](unsigned v)
++                {
++                    unsigned p = 0;
++                    for (; v; v >>= 1)
++                        p ^= v & 1u;
++                    return uint8_t(p);
++                };
++                for (unsigned b = 0; b < 256; ++b)
++                {
++                    parity[b] = par(b);
++                    for (unsigned i = 0; i < 7; ++i)
++                        column[b] |= uint8_t(par(b & masks[i]) << i);
++                }
++            }
++        };
++        static const Tables t;
++        uint8_t cp = 0x77, lp0 = 0x7F, lp1 = 0x7F;
++        for (unsigned i = 0; i < 128; ++i)
++        {
++            cp ^= t.column[d[i]];
++            if (t.parity[d[i]])
++            {
++                lp0 ^= uint8_t(~i);
++                lp1 ^= uint8_t(i);
++            }
++        }
++        out[0] = cp;
++        out[1] = lp0 & 0x7F;
++        out[2] = lp1;
++    }
++
++    bool Card::load(const std::filesystem::path &file)
++    {
++        std::FILE *f = openFile(file, false);
++        if (!f)
++            return false;
++        std::vector<uint8_t> data;
++        uint8_t buf[65536];
++        size_t n;
++        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
++            data.insert(data.end(), buf, buf + n);
++        std::fclose(f);
++        // shortcut: only images with ECC (PCSX2's .ps2); raw 8 MB dumps without spare bytes are refused.
++        if (data.empty() || data.size() % (kRawPage * 16) != 0)
++            return false;
++        m_raw = std::move(data);
++        m_dirtyPages.clear();
++        m_dirty = false;
++        // A card that says it is formatted but fails our checks is refused, never offered for formatting:
++        // a misreading of ours must not end with the user erasing a card full of saves.
++        return parseSuperblock() || std::memcmp(m_raw.data(), kMagic, 28) != 0;
++    }
++
++    bool Card::save(const std::filesystem::path &file)
++    {
++        for (uint32_t page : m_dirtyPages)
++        {
++            uint8_t *p = &m_raw[size_t(page) * kRawPage];
++            for (uint32_t i = 0; i < 4; ++i)
++                computeEcc(p + i * 128, p + kPage + i * 3);
++            std::memset(p + kPage + 12, 0, 4); // mymc pads the spare with zeros
++        }
++        m_dirtyPages.clear();
++
++        std::error_code ec;
++        if (file.has_parent_path())
++            std::filesystem::create_directories(file.parent_path(), ec);
++        std::filesystem::path tmp = file;
++        tmp += ".tmp";
++        std::FILE *f = openFile(tmp, true);
++        if (!f)
++            return false;
++        bool ok = std::fwrite(m_raw.data(), 1, m_raw.size(), f) == m_raw.size() && std::fflush(f) == 0;
++#ifdef _WIN32
++        ok = ok && _commit(_fileno(f)) == 0;
++#else
++        ok = ok && fsync(fileno(f)) == 0;
++#endif
++        ok = (std::fclose(f) == 0) && ok;
++        if (ok)
++            std::filesystem::rename(tmp, file, ec); // replaces the old card in one step: old or new, never half
++        if (!ok || ec)
++        {
++            std::filesystem::remove(tmp, ec);
++            return false;
++        }
++        m_dirty = false;
++        return true;
++    }
++
++    bool Card::parseSuperblock()
++    {
++        m_formatted = false;
++        if (m_raw.size() < kRawPage || std::memcmp(m_raw.data(), kMagic, 28) != 0)
++            return false;
++        auto u16 = [&](uint32_t o) { return uint32_t(m_raw[o] | (m_raw[o + 1] << 8)); };
++        auto u32 = [&](uint32_t o)
++        {
++            uint32_t v;
++            std::memcpy(&v, &m_raw[o], 4);
++            return v;
++        };
++        if (u16(0x28) != kPage || u16(0x2A) != 2)
++            return false;
++        m_allocOffset = u32(0x34);
++        m_allocEnd = u32(0x38);
++        m_root = u32(0x3C);
++        for (uint32_t i = 0; i < 32; ++i)
++            m_ifc[i] = u32(0x50 + i * 4);
++        const uint64_t clusters = m_raw.size() / kRawPage / 2;
++        m_formatted = m_allocOffset + uint64_t(m_allocEnd) <= clusters && m_root < m_allocEnd;
++        return m_formatted;
++    }
++
++    bool Card::formatted() const { return m_formatted; }
++
++    void Card::format()
++    {
++        const uint32_t pages = kStandardPages, clusters = pages / 2, blocks = pages / 16;
++        m_raw.assign(size_t(pages) * kRawPage, 0); // mymc: erased = zero data with ECC
++        m_dirtyPages.clear();
++        const uint32_t badBlock2 = blocks - 2;
++        for (uint32_t p = 0; p < pages; ++p)
++            if (p / 16 != badBlock2)
++                m_dirtyPages.insert(p);
++
++        uint8_t sb[0x154] = {};
++        std::memcpy(sb, kMagic, 28);
++        std::memcpy(sb + 0x1C, "1.2.0.0", 7);
++        auto put16 = [&](uint32_t o, uint16_t v) { std::memcpy(sb + o, &v, 2); };
++        auto put32 = [&](uint32_t o, uint32_t v) { std::memcpy(sb + o, &v, 4); };
++        const uint32_t fatClusters = (clusters + 255) / 256;       // 32
++        const uint32_t firstIfc = 8, firstFat = firstIfc + 1;       // block 0 holds the superblock
++        const uint32_t allocOffset = firstFat + fatClusters;        // 41
++        const uint32_t allocEnd = (blocks - 2) * 8 - allocOffset;   // 8135
++        put16(0x28, kPage);
++        put16(0x2A, 2);
++        put16(0x2C, 16);
++        put16(0x2E, 0xFF00);
++        put32(0x30, clusters);
++        put32(0x34, allocOffset);
++        put32(0x38, allocEnd);
++        put32(0x3C, 0);
++        put32(0x40, blocks - 1);
++        put32(0x44, blocks - 2);
++        put32(0x50, firstIfc);
++        std::memset(sb + 0xD0, 0xFF, 128);
++        sb[0x150] = 2;
++        sb[0x151] = 0x2B;
++        std::memcpy(m_raw.data(), sb, sizeof(sb));
++        for (uint32_t p = badBlock2 * 16; p < badBlock2 * 16 + 16; ++p)
++            std::memset(&m_raw[size_t(p) * kRawPage], 0xFF, kRawPage);
++
++        if (!parseSuperblock())
++            return;
++        for (uint32_t i = 0; i < 256; ++i)
++            setU32At(firstIfc, i * 4, i < fatClusters ? firstFat + i : kEnd);
++        // mymc: entry 0 = root (chain end), free up to alloc_end, chain end up to its allocatable_clusters
++        // (clusters - 10), the tail stays erased (0). Entries past alloc_end are never used.
++        for (uint32_t i = 0; i < fatClusters * 256; ++i)
++            setFat(i, i == 0 ? kEnd : i < allocEnd ? kFreeEnd : i < clusters - 10 ? kEnd : 0);
++
++        Entry dot = makeEntry(kModeRead | kModeWrite | kModeExec | kModeDir | kMode0400 | kModeExists, ".");
++        dot.length = 2;
++        Entry dotdot = makeEntry(kModeWrite | kModeExec | kModeDir | kMode0400 | kModeHidden | kModeExists, "..");
++        dotdot.created = dotdot.modified = dot.created;
++        putEntry({0, 0}, dot);
++        putEntry({0, 1}, dotdot);
++        m_dirty = true;
++    }
++
++    void Card::unformat()
++    {
++        m_raw.assign(m_raw.empty() ? size_t(kStandardPages) * kRawPage : m_raw.size(), 0xFF);
++        m_dirtyPages.clear();
++        m_formatted = false;
++        m_dirty = true;
++    }
++
++    uint32_t Card::u32At(uint32_t absCluster, uint32_t offset) const
++    {
++        const size_t page = size_t(absCluster) * 2 + offset / kPage;
++        uint32_t v = kEnd;
++        if ((page + 1) * kRawPage <= m_raw.size())
++            std::memcpy(&v, &m_raw[page * kRawPage + offset % kPage], 4);
++        return v;
++    }
++
++    void Card::setU32At(uint32_t absCluster, uint32_t offset, uint32_t value)
++    {
++        writeBytes(absCluster, offset, &value, 4);
++    }
++
++    void Card::writeBytes(uint32_t absCluster, uint32_t offset, const void *src, uint32_t size)
++    {
++        const uint8_t *s = static_cast<const uint8_t *>(src);
++        while (size > 0)
++        {
++            const size_t page = size_t(absCluster) * 2 + offset / kPage;
++            const uint32_t in = offset % kPage, n = std::min(size, kPage - in);
++            if ((page + 1) * kRawPage > m_raw.size())
++                return;
++            std::memcpy(&m_raw[page * kRawPage + in], s, n);
++            m_dirtyPages.insert(uint32_t(page));
++            m_dirty = true;
++            s += n;
++            offset += n;
++            size -= n;
++        }
++    }
++
++    void Card::readCluster(uint32_t absCluster, uint8_t *dst) const
++    {
++        for (uint32_t i = 0; i < 2; ++i)
++        {
++            const size_t page = size_t(absCluster) * 2 + i;
++            if ((page + 1) * kRawPage <= m_raw.size())
++                std::memcpy(dst + i * kPage, &m_raw[page * kRawPage], kPage);
++        }
++    }
++
++    uint32_t Card::fat(uint32_t rel) const
++    {
++        const uint32_t ind = rel / 256;
++        if (ind / 256 >= 32)
++            return kEnd;
++        const uint32_t fatCluster = u32At(m_ifc[ind / 256], (ind % 256) * 4);
++        return u32At(fatCluster, (rel % 256) * 4);
++    }
++
++    void Card::setFat(uint32_t rel, uint32_t value)
++    {
++        const uint32_t ind = rel / 256;
++        if (ind / 256 >= 32)
++            return;
++        setU32At(u32At(m_ifc[ind / 256], (ind % 256) * 4), (rel % 256) * 4, value);
++    }
++
++    uint32_t Card::chainCluster(uint32_t c, uint32_t n) const
++    {
++        for (uint32_t i = 0; i < n; ++i)
++        {
++            if (c >= m_allocEnd)
++                return kEnd;
++            const uint32_t v = fat(c);
++            if (v == kEnd || !(v & kUsed))
++                return kEnd;
++            c = v & ~kUsed;
++        }
++        return c < m_allocEnd ? c : kEnd;
++    }
++
++    uint32_t Card::allocate()
++    {
++        for (uint32_t rel = 0; rel < m_allocEnd; ++rel)
++        {
++            if (fat(rel) & kUsed)
++                continue;
++            setFat(rel, kEnd);
++            static const uint8_t zero[kCluster] = {};
++            writeBytes(rel + m_allocOffset, 0, zero, kCluster);
++            return rel;
++        }
++        return kEnd;
++    }
++
++    void Card::freeChain(uint32_t c)
++    {
++        // As mymc / mcman: clear the in-use bit along the chain, the last link becomes 0x7FFFFFFF.
++        for (uint32_t guard = 0; c < m_allocEnd && guard < m_allocEnd; ++guard)
++        {
++            const uint32_t v = fat(c);
++            if (!(v & kUsed))
++                break;
++            setFat(c, v & ~kUsed);
++            if ((v & ~kUsed) == kFreeEnd)
++                break;
++            c = v & ~kUsed;
++        }
++    }
++
++    uint32_t Card::freeClusters() const
++    {
++        uint32_t n = 0;
++        for (uint32_t rel = 0; m_formatted && rel < m_allocEnd; ++rel)
++            n += (fat(rel) & kUsed) ? 0u : 1u;
++        return n;
++    }
++
++    const uint8_t *Card::entryPtr(const Loc &loc) const
++    {
++        const uint32_t c = chainCluster(loc.dirCluster, loc.index / 2);
++        if (c == kEnd)
++            return nullptr;
++        const size_t page = size_t(c + m_allocOffset) * 2 + loc.index % 2;
++        return (page + 1) * kRawPage <= m_raw.size() ? &m_raw[page * kRawPage] : nullptr;
++    }
++
++    Entry Card::entry(const Loc &loc) const
++    {
++        Entry e{};
++        if (const uint8_t *p = entryPtr(loc))
++            std::memcpy(&e, p, sizeof(e));
++        return e;
++    }
++
++    void Card::putEntry(const Loc &loc, const Entry &e)
++    {
++        const uint32_t c = chainCluster(loc.dirCluster, loc.index / 2);
++        if (c != kEnd)
++            writeBytes(c + m_allocOffset, (loc.index % 2) * kPage, &e, sizeof(e));
++    }
++
++    std::vector<Entry> Card::list(const Loc &dir) const
++    {
++        std::vector<Entry> out;
++        const Entry d = entry(dir);
++        for (uint32_t i = 0; (d.mode & kModeDir) && i < d.length; ++i)
++        {
++            const Entry e = entry({d.cluster, i});
++            if (e.mode & kModeExists)
++                out.push_back(e);
++        }
++        return out;
++    }
++
++    int32_t Card::findChild(const Loc &dir, const std::string &name, Loc &out) const
++    {
++        const Entry d = entry(dir);
++        if (!(d.mode & kModeDir))
++            return kNoEntry;
++        for (uint32_t i = 0; i < d.length; ++i)
++        {
++            const Entry e = entry({d.cluster, i});
++            if ((e.mode & kModeExists) && sameName(e, name))
++            {
++                out = {d.cluster, i};
++                return kOk;
++            }
++        }
++        return kNoEntry;
++    }
++
++    int32_t Card::lookup(const std::string &path, Loc &out) const
++    {
++        if (!m_formatted)
++            return kNoFormat;
++        Loc cur{m_root, 0};
++        for (const std::string &part : split(path))
++        {
++            Loc next;
++            if (findChild(cur, part, next) != kOk)
++                return kNoEntry;
++            cur = next;
++        }
++        out = cur;
++        return kOk;
++    }
++
++    int32_t Card::parentOf(const std::string &path, Loc &dir, std::string &name) const
++    {
++        std::vector<std::string> parts = split(path);
++        if (parts.empty())
++            return kDenied;
++        name = parts.back();
++        if (name.size() >= sizeof(Entry::name))
++            return kDenied;
++        std::string parent;
++        for (size_t i = 0; i + 1 < parts.size(); ++i)
++            parent += "/" + parts[i];
++        const int32_t r = lookup(parent.empty() ? "/" : parent, dir);
++        if (r != kOk)
++            return r;
++        return (entry(dir).mode & kModeDir) ? kOk : kNoEntry;
++    }
++
++    int32_t Card::addEntry(const Loc &dir, const Entry &e, Loc &out)
++    {
++        Entry d = entry(dir);
++        for (uint32_t i = 2; i < d.length; ++i) // reuse a deleted slot first, as mymc does
++        {
++            if (!(entry({d.cluster, i}).mode & kModeExists))
++            {
++                out = {d.cluster, i};
++                putEntry(out, e);
++                return kOk;
++            }
++        }
++        if (d.length % 2 == 0) // two entries per cluster: the directory needs one more
++        {
++            const uint32_t c = allocate();
++            if (c == kEnd)
++                return kFull;
++            setFat(chainCluster(d.cluster, d.length / 2 - 1), kUsed | c);
++        }
++        out = {d.cluster, d.length};
++        putEntry(out, e);
++        d.length += 1;
++        d.modified = nowTod();
++        putEntry(dir, d);
++        return kOk;
++    }
++
++    int32_t Card::mkdir(const std::string &path)
++    {
++        Loc dir, existing;
++        std::string name;
++        int32_t r = parentOf(path, dir, name);
++        if (r != kOk)
++            return r;
++        if (findChild(dir, name, existing) == kOk)
++            return (entry(existing).mode & kModeDir) ? kOk : kDenied; // the old folder stub's answer
++        const uint32_t c = allocate();
++        if (c == kEnd)
++            return kFull;
++        Entry e = makeEntry(kModeRead | kModeWrite | kModeExec | kModeDir | kMode0400 | kModeExists, name);
++        e.length = 2;
++        e.cluster = c;
++        Loc at;
++        if ((r = addEntry(dir, e, at)) != kOk)
++        {
++            freeChain(c);
++            return r;
++        }
++        Entry dot = makeEntry(e.mode, "."), dotdot = makeEntry(e.mode, "..");
++        dot.dirEntry = at.index;
++        putEntry({c, 0}, dot);
++        putEntry({c, 1}, dotdot);
++        return kOk;
++    }
++
++    int32_t Card::createFile(const std::string &path, Loc &out)
++    {
++        Loc dir;
++        std::string name;
++        const int32_t r = parentOf(path, dir, name);
++        if (r != kOk)
++            return r;
++        Entry e = makeEntry(kModeRead | kModeWrite | kModeExec | kModeFile | kMode0080 | kMode0400 | kModeExists, name);
++        e.cluster = kEnd;
++        return addEntry(dir, e, out);
++    }
++
++    int32_t Card::remove(const std::string &path)
++    {
++        Loc loc;
++        int32_t r = lookup(path, loc);
++        if (r != kOk)
++            return r;
++        if (split(path).empty())
++            return kDenied;
++        Entry e = entry(loc);
++        if ((e.mode & kModeDir) && list(loc).size() > 2)
++            return kNotEmpty;
++        e.mode &= ~kModeExists; // the slot stays; the parent's length is unchanged (mymc, mcman)
++        putEntry(loc, e);
++        if (e.cluster != kEnd)
++            freeChain(e.cluster);
++        return kOk;
++    }
++
++    int32_t Card::rename(const std::string &path, const std::string &newName)
++    {
++        Loc loc, dir, clash;
++        std::string oldName;
++        int32_t r = lookup(path, loc);
++        if (r != kOk || (r = parentOf(path, dir, oldName)) != kOk)
++            return r;
++        if (newName.empty() || newName.size() >= sizeof(Entry::name) || newName.find('/') != std::string::npos)
++            return kDenied;
++        if (findChild(dir, newName, clash) == kOk)
++            return kDenied;
++        Entry e = entry(loc);
++        std::memset(e.name, 0, sizeof(e.name));
++        std::memcpy(e.name, newName.data(), newName.size());
++        putEntry(loc, e);
++        return kOk;
++    }
++
++    int32_t Card::truncate(const Loc &file)
++    {
++        Entry e = entry(file);
++        if (e.cluster != kEnd)
++            freeChain(e.cluster);
++        e.cluster = kEnd;
++        e.length = 0;
++        e.modified = nowTod();
++        putEntry(file, e);
++        return kOk;
++    }
++
++    int32_t Card::read(const Loc &file, uint32_t pos, uint8_t *dst, uint32_t size) const
++    {
++        const Entry e = entry(file);
++        if (pos >= e.length)
++            return 0;
++        size = std::min(size, e.length - pos);
++        uint32_t done = 0;
++        uint8_t buf[kCluster];
++        while (done < size)
++        {
++            const uint32_t c = chainCluster(e.cluster, (pos + done) / kCluster);
++            if (c == kEnd)
++                break;
++            readCluster(c + m_allocOffset, buf);
++            const uint32_t off = (pos + done) % kCluster, n = std::min(size - done, kCluster - off);
++            std::memcpy(dst + done, buf + off, n);
++            done += n;
++        }
++        return int32_t(done);
++    }
++
++    int32_t Card::write(const Loc &file, uint32_t pos, const uint8_t *src, uint32_t size)
++    {
++        Entry e = entry(file);
++        if (e.cluster == kEnd && size > 0)
++        {
++            if ((e.cluster = allocate()) == kEnd)
++                return kFull;
++        }
++        uint32_t c = e.cluster, idx = 0, done = 0;
++        while (done < size)
++        {
++            const uint32_t want = (pos + done) / kCluster;
++            for (; idx < want; ++idx)
++            {
++                const uint32_t v = fat(c);
++                if (v == kEnd)
++                {
++                    const uint32_t n = allocate();
++                    if (n == kEnd)
++                        break;
++                    setFat(c, kUsed | n);
++                    c = n;
++                }
++                else
++                    c = v & ~kUsed;
++            }
++            if (idx < want)
++                break; // card full
++            const uint32_t off = (pos + done) % kCluster, n = std::min(size - done, kCluster - off);
++            writeBytes(c + m_allocOffset, off, src + done, n);
++            done += n;
++        }
++        if (done > 0)
++        {
++            e.length = std::max(e.length, pos + done);
++            e.modified = nowTod();
++        }
++        putEntry(file, e);
++        return (done == 0 && size > 0) ? kFull : int32_t(done);
++    }
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/McImage.h b/ps2xRuntime/src/lib/Kernel/Stubs/McImage.h
+new file mode 100644
+index 0000000..c01f363
+--- /dev/null
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/McImage.h
+@@ -0,0 +1,112 @@
++#pragma once
++
++// PS2 memory card file system on a PCSX2-compatible raw image (.ps2: 512-byte pages + 16-byte spare with ECC).
++// Format facts from open-source code only: PCSX2 (GPL-3) MemoryCardFolder/MemoryCardFile, mymc (public domain),
++// ps2sdk mcman (AFL). No runtime dependencies so it can be tested on its own (ps2xRuntime/tests/mc_image_test.cpp).
++
++#include <cstdint>
++#include <filesystem>
++#include <set>
++#include <string>
++#include <vector>
++
++namespace ps2_mc
++{
++    // libmc result codes (same values the stubs return to the game).
++    constexpr int32_t kOk = 0;
++    constexpr int32_t kNoFormat = -2;
++    constexpr int32_t kFull = -3;
++    constexpr int32_t kNoEntry = -4;
++    constexpr int32_t kDenied = -5;
++    constexpr int32_t kNotEmpty = -6;
++
++    constexpr uint16_t kModeRead = 0x0001, kModeWrite = 0x0002, kModeExec = 0x0004, kModeFile = 0x0010,
++                       kModeDir = 0x0020, kMode0080 = 0x0080, kMode0400 = 0x0400, kModeHidden = 0x2000,
++                       kModeExists = 0x8000;
++
++#pragma pack(push, 1)
++    struct Tod // stored as on the card (the PS2 keeps JST)
++    {
++        uint8_t unused, sec, min, hour, day, month;
++        uint16_t year;
++    };
++
++    struct Entry
++    {
++        uint16_t mode;
++        uint16_t unused0;
++        uint32_t length; // bytes for a file, entry count (incl. "." and "..") for a directory
++        Tod created;
++        uint32_t cluster; // first cluster, relative to alloc_offset; 0xFFFFFFFF = empty file
++        uint32_t dirEntry;
++        Tod modified;
++        uint32_t attr;
++        uint8_t pad[28];
++        char name[32];
++        uint8_t unused1[416];
++    };
++#pragma pack(pop)
++    static_assert(sizeof(Entry) == 512, "card directory entry is 512 bytes");
++
++    // An entry's place: the first cluster of the directory holding it and its index there. Root "." is {0, 0}.
++    struct Loc
++    {
++        uint32_t dirCluster = 0;
++        uint32_t index = 0;
++    };
++
++    void computeEcc(const uint8_t *data128, uint8_t out[3]);
++
++    class Card
++    {
++    public:
++        static constexpr uint32_t kPage = 512, kSpare = 16, kRawPage = kPage + kSpare, kCluster = 1024;
++        static constexpr uint32_t kStandardPages = 16384; // 8 MB card
++
++        bool load(const std::filesystem::path &file); // false: missing, bad size, or a formatted card we cannot read
++        bool save(const std::filesystem::path &file);  // crash-safe: tmp, flush to disk, rename over
++        void format();                                 // fresh standard 8 MB card (mymc's layout)
++        void unformat();                               // all 0xFF, like a new PCSX2 card
++        bool formatted() const;
++        bool dirty() const { return m_dirty; }
++        uint32_t freeClusters() const;
++        const std::vector<uint8_t> &raw() const { return m_raw; }
++
++        // Paths are absolute card paths ("/", "/BASLUS-20743", "/BASLUS-20743/icon.sys").
++        int32_t lookup(const std::string &path, Loc &out) const;
++        Entry entry(const Loc &loc) const;
++        std::vector<Entry> list(const Loc &dir) const; // existing entries, card order ("." and ".." first)
++        int32_t mkdir(const std::string &path);
++        int32_t createFile(const std::string &path, Loc &out);
++        int32_t remove(const std::string &path);
++        int32_t rename(const std::string &path, const std::string &newName);
++        int32_t truncate(const Loc &file);
++        int32_t read(const Loc &file, uint32_t pos, uint8_t *dst, uint32_t size) const;
++        int32_t write(const Loc &file, uint32_t pos, const uint8_t *src, uint32_t size);
++
++    private:
++        uint32_t u32At(uint32_t absCluster, uint32_t offset) const;
++        void setU32At(uint32_t absCluster, uint32_t offset, uint32_t value);
++        void readCluster(uint32_t absCluster, uint8_t *dst) const;
++        void writeBytes(uint32_t absCluster, uint32_t offset, const void *src, uint32_t size);
++        uint32_t fat(uint32_t rel) const;
++        void setFat(uint32_t rel, uint32_t value);
++        uint32_t chainCluster(uint32_t first, uint32_t n) const; // n-th cluster of a chain, 0xFFFFFFFF if short
++        uint32_t allocate();                                       // 0xFFFFFFFF when full
++        void freeChain(uint32_t first);
++        void putEntry(const Loc &loc, const Entry &e);
++        int32_t addEntry(const Loc &dir, const Entry &e, Loc &out);
++        int32_t findChild(const Loc &dir, const std::string &name, Loc &out) const;
++        int32_t parentOf(const std::string &path, Loc &dir, std::string &name) const;
++
++        std::vector<uint8_t> m_raw;
++        std::set<uint32_t> m_dirtyPages; // ECC recomputed on save for touched pages only
++        bool m_dirty = false;
++        bool parseSuperblock();
++        const uint8_t *entryPtr(const Loc &loc) const;
++
++        bool m_formatted = false;
++        uint32_t m_allocOffset = 0, m_allocEnd = 0, m_root = 0;
++        uint32_t m_ifc[32] = {};
++    };
++}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+index 564d873..6eb97c7 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+@@ -1,5 +1,6 @@
+ #include "Common.h"
+ #include "MemoryCard.h"
++#include "McImage.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -33,16 +34,9 @@ namespace ps2_stubs
+         constexpr int32_t kMcTypePs2 = 2;
+         constexpr int32_t kMcFormatted = 1;
+         constexpr int32_t kMcUnformatted = 0;
+-        constexpr int32_t kMcFreeClusters = 0x2000;
+         constexpr size_t kMcMaxPathLen = 1024;
+         constexpr size_t kMcMaxOpenFiles = 32;
+ 
+-        constexpr uint16_t kMcAttrReadable = 0x0001;
+-        constexpr uint16_t kMcAttrWriteable = 0x0002;
+-        constexpr uint16_t kMcAttrFile = 0x0010;
+-        constexpr uint16_t kMcAttrSubdir = 0x0020;
+-        constexpr uint16_t kMcAttrClosed = 0x0080;
+-        constexpr uint16_t kMcAttrExists = 0x8000;
+ 
+         struct SceMcStDateTime
+         {
+@@ -71,15 +65,22 @@ namespace ps2_stubs
+ 
+         struct McOpenFile
+         {
+-            FILE *file = nullptr;
+             int32_t port = 0;
+-            std::filesystem::path hostPath;
++            ps2_mc::Loc loc;
++            uint32_t pos = 0;
++            bool append = false;
++            std::string guestPath;
+         };
+ 
++        // One PCSX2-compatible .ps2 image per slot. Loaded at sceMcInit; a missing card is a formatted
++        // card in memory that reaches the disk on the first write. A file we cannot parse is never written.
+         struct McPortState
+         {
+             std::string currentDir = "/";
+-            bool formatted = true;
++            ps2_mc::Card card;
++            std::filesystem::path file;
++            bool loaded = false;
++            bool broken = false;
+         };
+ 
+         std::mutex g_mcStateMutex;
+@@ -107,54 +108,145 @@ namespace ps2_stubs
+             cvMcKilobytes(kCvMcIconInfoBytes) +
+             cvMcKilobytes(kCvMcIconFileBytes) + 11;
+ 
++        constexpr int32_t kMcResultNoCard = -10; // (unverified) libmc's "no card"; only for an unreadable image
++
++        std::string mcPathText(const std::filesystem::path &p)
++        {
++            const std::u8string text = p.u8string(); // path::string() throws on Windows for unmappable characters
++            return std::string(text.begin(), text.end());
++        }
++
+         bool isValidMcPortSlot(int32_t port, int32_t slot)
+         {
+             return port >= 0 && port < static_cast<int32_t>(g_mcPorts.size()) && slot == 0;
+         }
+ 
+-        std::filesystem::path getMcRootPath(int32_t port)
++        // Saves live in the user's folder, named like PCSX2's cards so they can be copied across.
++        // PS2X_MC_DIR overrides the folder.
++        std::filesystem::path getMcCardPath(int32_t port)
+         {
+-            const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
+-            std::filesystem::path root = paths.mcRoot;
+-            if (root.empty())
++            std::filesystem::path dir;
++            const char *env = std::getenv("PS2X_MC_DIR");
++            if (env && *env)
++            {
++                dir = env;
++            }
++            else
++            {
++#if defined(_WIN32)
++                // shortcut: %USERPROFILE%\Saved Games, not the known-folder API; a moved Saved Games folder is not followed.
++                const char *home = std::getenv("USERPROFILE");
++                dir = home ? std::filesystem::path(home) / "Saved Games" / "PoP Recomp" : std::filesystem::path("memcards");
++#elif defined(__APPLE__)
++                const char *home = std::getenv("HOME");
++                dir = home ? std::filesystem::path(home) / "Library" / "Application Support" / "PoP Recomp"
++                           : std::filesystem::path("memcards");
++#else
++                const char *xdg = std::getenv("XDG_DATA_HOME");
++                const char *home = std::getenv("HOME");
++                dir = (xdg && *xdg) ? std::filesystem::path(xdg) / "pop-recomp"
++                      : home        ? std::filesystem::path(home) / ".local" / "share" / "pop-recomp"
++                                    : std::filesystem::path("memcards");
++#endif
++            }
++            return dir / (port == 0 ? "Mcd001.ps2" : "Mcd002.ps2");
++        }
++
++        // The old runtime kept saves as loose files in <elf>/mc0 (mc1 for slot 2). Copied into a new card once.
++        void importMcFolderLocked(ps2_mc::Card &card, const std::filesystem::path &hostDir, const std::string &guestDir)
++        {
++            std::error_code ec;
++            for (const auto &item : std::filesystem::directory_iterator(hostDir, ec))
+             {
+-                if (!paths.elfDirectory.empty())
++                const std::string guest = (guestDir == "/" ? "/" : guestDir + "/") + mcPathText(item.path().filename());
++                if (item.is_directory(ec))
+                 {
+-                    root = paths.elfDirectory / "mc0";
++                    card.mkdir(guest);
++                    importMcFolderLocked(card, item.path(), guest);
++                    continue;
+                 }
+-                else
++                std::ifstream in(item.path(), std::ios::binary);
++                const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++                ps2_mc::Loc loc;
++                if (card.createFile(guest, loc) == ps2_mc::kOk && !data.empty())
+                 {
+-                    std::error_code ec;
+-                    const std::filesystem::path cwd = std::filesystem::current_path(ec);
+-                    root = ec ? std::filesystem::path("mc0") : (cwd / "mc0");
++                    card.write(loc, 0, data.data(), static_cast<uint32_t>(data.size()));
+                 }
++                std::cerr << "[MC] imported " << mcPathText(item.path()) << " -> " << guest << std::endl;
+             }
++        }
+ 
+-            root = root.lexically_normal();
+-            if (port <= 0)
++        void loadMcPortLocked(int32_t port)
++        {
++            McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++            if (state.loaded)
+             {
+-                return root;
++                return;
++            }
++            state.loaded = true;
++            state.broken = false;
++            state.file = getMcCardPath(port);
++            std::error_code ec;
++            if (std::filesystem::exists(state.file, ec))
++            {
++                state.broken = !state.card.load(state.file);
++                std::cerr << "[MC] card " << port << ": " << mcPathText(state.file)
++                                         << (state.broken ? " UNREADABLE (left untouched, slot reads as empty)"
++                                                          : state.card.formatted() ? "" : " (unformatted)") << std::endl;
++                return;
+             }
+ 
+-            const std::filesystem::path parent = root.parent_path();
+-            const std::string leaf = root.filename().string();
+-            const std::string lowerLeaf = toLowerAscii(leaf);
+-            if (lowerLeaf == "mc0")
++            state.card.format();
++            const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
++            std::filesystem::path oldDir = paths.mcRoot.empty() ? paths.elfDirectory / "mc0" : paths.mcRoot;
++            if (port > 0)
+             {
+-                return (parent / "mc1").lexically_normal();
++                oldDir = oldDir.parent_path() / "mc1";
+             }
+-            if (leaf.empty())
++            if (std::filesystem::is_directory(oldDir, ec) && !std::filesystem::is_empty(oldDir, ec))
+             {
+-                return (root / "mc1").lexically_normal();
++                importMcFolderLocked(state.card, oldDir, "/");
++                const bool saved = state.card.save(state.file);
++                std::cerr << "[MC] card " << port << ": imported " << mcPathText(oldDir) << " into " << mcPathText(state.file)
++                                         << (saved ? "" : " (SAVE FAILED)") << std::endl;
++                return;
+             }
++            // Not written yet: an empty formatted card only reaches the disk when the game saves.
++            std::cerr << "[MC] card " << port << ": new card " << mcPathText(state.file) << std::endl;
++        }
+ 
+-            return (parent / (leaf + "_slot" + std::to_string(port))).lexically_normal();
++        // The port for a card command, or nullptr with the result to report.
++        McPortState *mcPortLocked(int32_t port, int32_t slot, int32_t &result)
++        {
++            if (!isValidMcPortSlot(port, slot))
++            {
++                result = kMcResultNoEntry;
++                return nullptr;
++            }
++            loadMcPortLocked(port);
++            McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++            if (state.broken)
++            {
++                result = kMcResultNoCard;
++                return nullptr;
++            }
++            if (!state.card.formatted())
++            {
++                result = kMcResultNoFormat;
++                return nullptr;
++            }
++            return &state;
+         }
+ 
+-        void ensureMcRootExists(int32_t port)
++        // Writes the card file after a command changed it (whole image, crash-safe).
++        int32_t commitMcPortLocked(McPortState &state, int32_t result)
+         {
+-            std::error_code ec;
+-            std::filesystem::create_directories(getMcRootPath(port), ec);
++            if (state.card.dirty() && !state.broken && !state.card.save(state.file))
++            {
++                std::cerr << "[MC] FAILED to write " << mcPathText(state.file) << std::endl;
++                return kMcResultDeniedPermit;
++            }
++            return result;
+         }
+ 
+         std::vector<std::string> splitMcPathComponents(const std::string &value)
+@@ -242,32 +334,6 @@ namespace ps2_stubs
+             return joinMcPathComponents(parts);
+         }
+ 
+-        std::filesystem::path guestMcPathToHostPath(int32_t port, const std::string &guestPath)
+-        {
+-            std::filesystem::path resolved = getMcRootPath(port);
+-            if (guestPath.size() > 1u)
+-            {
+-                resolved /= std::filesystem::path(guestPath.substr(1));
+-            }
+-            return resolved.lexically_normal();
+-        }
+-
+-        bool localtimeSafeMc(const std::time_t *value, std::tm *out)
+-        {
+-#ifdef _WIN32
+-            return localtime_s(out, value) == 0;
+-#else
+-            return localtime_r(value, out) != nullptr;
+-#endif
+-        }
+-
+-        std::time_t fileTimeToTimeTMc(std::filesystem::file_time_type value)
+-        {
+-            const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+-                value - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+-            return std::chrono::system_clock::to_time_t(systemTime);
+-        }
+-
+         void writeMcCString(uint8_t *rdram, uint32_t addr, const std::string &value)
+         {
+             if (addr == 0u)
+@@ -284,41 +350,15 @@ namespace ps2_stubs
+             std::memcpy(dst, value.c_str(), value.size() + 1u);
+         }
+ 
+-        void writeMcDateTime(SceMcStDateTime &out, std::time_t value)
++        void fillMcDirTableEntry(SceMcTblGetDir &out, const ps2_mc::Entry &e)
+         {
+-            std::tm tm{};
+-            if (!localtimeSafeMc(&value, &tm))
+-            {
+-                std::memset(&out, 0, sizeof(out));
+-                return;
+-            }
+-
+-            out.Resv2 = 0;
+-            out.Sec = static_cast<uint8_t>(tm.tm_sec);
+-            out.Min = static_cast<uint8_t>(tm.tm_min);
+-            out.Hour = static_cast<uint8_t>(tm.tm_hour);
+-            out.Day = static_cast<uint8_t>(tm.tm_mday);
+-            out.Month = static_cast<uint8_t>(tm.tm_mon + 1);
+-            out.Year = static_cast<uint16_t>(tm.tm_year + 1900);
+-        }
+-
+-        void fillMcDirTableEntry(SceMcTblGetDir &entry,
+-                                 const std::string &name,
+-                                 bool isDirectory,
+-                                 uint32_t sizeBytes,
+-                                 std::time_t modifiedTime)
+-        {
+-            std::memset(&entry, 0, sizeof(entry));
+-            writeMcDateTime(entry._Create, modifiedTime);
+-            writeMcDateTime(entry._Modify, modifiedTime);
+-            entry.FileSizeByte = isDirectory ? 0u : sizeBytes;
+-            entry.AttrFile = static_cast<uint16_t>(kMcAttrReadable |
+-                                                   kMcAttrWriteable |
+-                                                   (isDirectory ? kMcAttrSubdir : kMcAttrFile) |
+-                                                   kMcAttrClosed |
+-                                                   kMcAttrExists);
+-            std::strncpy(entry.EntryName, name.c_str(), sizeof(entry.EntryName) - 1u);
+-            entry.EntryName[sizeof(entry.EntryName) - 1u] = '\0';
++            std::memset(&out, 0, sizeof(out));
++            std::memcpy(&out._Create, &e.created, sizeof(out._Create)); // same 8-byte layout as on the card
++            std::memcpy(&out._Modify, &e.modified, sizeof(out._Modify));
++            out.FileSizeByte = e.length;
++            out.AttrFile = e.mode;
++            std::memcpy(out.EntryName, e.name, sizeof(out.EntryName));
++            out.EntryName[sizeof(out.EntryName) - 1u] = '\0';
+         }
+ 
+         bool wildcardMatch(const std::string &pattern, const std::string &value)
+@@ -356,7 +396,6 @@ namespace ps2_stubs
+             {
+                 ++patternPos;
+             }
+-
+             return patternPos == pattern.size();
+         }
+ 
+@@ -367,44 +406,16 @@ namespace ps2_stubs
+             g_mcCommandPending = true;
+         }
+ 
+-        void closeMcFilesLocked()
+-        {
+-            for (auto &[fd, openFile] : g_mcFiles)
+-            {
+-                if (openFile.file)
+-                {
+-                    std::fclose(openFile.file);
+-                    openFile.file = nullptr;
+-                }
+-            }
+-            g_mcFiles.clear();
+-        }
+-
+         void closeMcFilesForPortLocked(int32_t port)
+         {
+             for (auto it = g_mcFiles.begin(); it != g_mcFiles.end();)
+             {
+-                if (it->second.port == port)
+-                {
+-                    if (it->second.file)
+-                    {
+-                        std::fclose(it->second.file);
+-                    }
+-                    it = g_mcFiles.erase(it);
+-                }
+-                else
+-                {
+-                    ++it;
+-                }
++                it = (it->second.port == port) ? g_mcFiles.erase(it) : std::next(it);
+             }
+         }
+ 
+-        int32_t allocateMcFdLocked(FILE *file, int32_t port, const std::filesystem::path &hostPath)
++        int32_t allocateMcFdLocked(const McOpenFile &file)
+         {
+-            if (!file)
+-            {
+-                return kMcResultDeniedPermit;
+-            }
+             if (g_mcFiles.size() >= kMcMaxOpenFiles)
+             {
+                 return kMcResultUpLimitHandle;
+@@ -423,58 +434,24 @@ namespace ps2_stubs
+                     continue;
+                 }
+ 
+-                g_mcFiles.emplace(fd, McOpenFile{file, port, hostPath});
++                g_mcFiles.emplace(fd, file);
+                 return fd;
+             }
+ 
+             return kMcResultUpLimitHandle;
+         }
+ 
+-        FILE *openMcHostFile(const std::filesystem::path &hostPath, uint32_t flags)
++        void resetMcStateLocked()
+         {
+-            const uint32_t access = flags & PS2_FIO_O_RDWR;
+-            const bool read = (access == PS2_FIO_O_RDONLY) || (access == PS2_FIO_O_RDWR);
+-            const bool write = (access == PS2_FIO_O_WRONLY) || (access == PS2_FIO_O_RDWR);
+-            const bool append = (flags & PS2_FIO_O_APPEND) != 0u;
+-            const bool create = (flags & PS2_FIO_O_CREAT) != 0u;
+-            const bool truncate = (flags & PS2_FIO_O_TRUNC) != 0u;
+-
+-            std::error_code ec;
+-            const bool exists = std::filesystem::exists(hostPath, ec) && !ec;
+-
+-            const char *mode = "rb";
+-            if (read && write)
+-            {
+-                if (append)
+-                {
+-                    mode = exists ? "a+b" : "w+b";
+-                }
+-                else if (truncate || (create && !exists))
+-                {
+-                    mode = "w+b";
+-                }
+-                else
+-                {
+-                    mode = "r+b";
+-                }
+-            }
+-            else if (write)
++            g_mcFiles.clear();
++            g_mcNextFd = 1;
++            g_mcLastCmd = 0;
++            g_mcLastResult = 0;
++            g_mcCommandPending = false;
++            for (McPortState &state : g_mcPorts)
+             {
+-                if (append)
+-                {
+-                    mode = exists ? "ab" : "wb";
+-                }
+-                else if (truncate || (create && !exists))
+-                {
+-                    mode = "wb";
+-                }
+-                else
+-                {
+-                    mode = "r+b";
+-                }
++                state.currentDir = "/";
+             }
+-
+-            return std::fopen(hostPath.string().c_str(), mode);
+         }
+     }
+ 
+@@ -491,8 +468,8 @@ namespace ps2_stubs
+         {
+             snapshot.ports[i].port = static_cast<int32_t>(i);
+             snapshot.ports[i].currentDir = g_mcPorts[i].currentDir;
+-            snapshot.ports[i].formatted = g_mcPorts[i].formatted;
+-            snapshot.ports[i].rootPath = getMcRootPath(static_cast<int32_t>(i));
++            snapshot.ports[i].formatted = g_mcPorts[i].card.formatted();
++            snapshot.ports[i].rootPath = g_mcPorts[i].file;
+         }
+ 
+         snapshot.openFiles.reserve(g_mcFiles.size());
+@@ -501,7 +478,7 @@ namespace ps2_stubs
+             MemoryCardDebugOpenFile row{};
+             row.fd = fd;
+             row.port = file.port;
+-            row.hostPath = file.hostPath;
++            row.hostPath = file.guestPath;
+             snapshot.openFiles.push_back(std::move(row));
+         }
+         std::sort(snapshot.openFiles.begin(), snapshot.openFiles.end(), [](const MemoryCardDebugOpenFile &a, const MemoryCardDebugOpenFile &b)
+@@ -527,28 +504,19 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                currentDir = state.currentDir;
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
++                currentDir = state->currentDir;
++                result = kMcResultNoEntry;
++                const std::string resolvedDir =
++                    requestedDir.empty() ? state->currentDir : normalizeGuestMcPathLocked(port, requestedDir);
++                ps2_mc::Loc loc;
++                if (state->card.lookup(resolvedDir, loc) == ps2_mc::kOk &&
++                    (state->card.entry(loc).mode & ps2_mc::kModeDir))
+                 {
+-                    ensureMcRootExists(port);
+-                    const std::string resolvedDir =
+-                        requestedDir.empty() ? state.currentDir : normalizeGuestMcPathLocked(port, requestedDir);
+-                    const std::filesystem::path hostDir = guestMcPathToHostPath(port, resolvedDir);
+-                    std::error_code ec;
+-                    if (std::filesystem::exists(hostDir, ec) && !ec &&
+-                        std::filesystem::is_directory(hostDir, ec))
+-                    {
+-                        state.currentDir = resolvedDir;
+-                        currentDir = resolvedDir;
+-                        result = kMcResultSucceed;
+-                    }
++                    state->currentDir = resolvedDir;
++                    currentDir = resolvedDir;
++                    result = kMcResultSucceed;
+                 }
+             }
+ 
+@@ -570,11 +538,9 @@ namespace ps2_stubs
+             auto it = g_mcFiles.find(fd);
+             if (it != g_mcFiles.end())
+             {
+-                if (!it->second.file || std::fclose(it->second.file) == 0)
+-                {
+-                    result = kMcResultSucceed;
+-                }
++                McPortState &state = g_mcPorts[static_cast<size_t>(it->second.port)];
+                 g_mcFiles.erase(it);
++                result = commitMcPortLocked(state, kMcResultSucceed);
+             }
+             setMcCommandResultLocked(kMcCmdClose, result);
+         }
+@@ -590,42 +556,16 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
+-                {
+-                    const std::string guestPath = normalizeGuestMcPathLocked(port, path);
+-                    if (guestPath != "/")
+-                    {
+-                        const std::filesystem::path hostPath = guestMcPathToHostPath(port, guestPath);
+-                        std::error_code ec;
+-                        if (std::filesystem::exists(hostPath, ec) && !ec)
+-                        {
+-                            if (std::filesystem::is_directory(hostPath, ec) &&
+-                                !std::filesystem::is_empty(hostPath, ec))
+-                            {
+-                                result = kMcResultNotEmpty;
+-                            }
+-                            else if (std::filesystem::remove(hostPath, ec) && !ec)
+-                            {
+-                                result = kMcResultSucceed;
+-                            }
+-                            else
+-                            {
+-                                result = kMcResultDeniedPermit;
+-                            }
+-                        }
+-                    }
+-                }
++                const std::string guestPath = normalizeGuestMcPathLocked(port, path);
++                result = (guestPath == "/") ? kMcResultNoEntry : state->card.remove(guestPath);
++                result = commitMcPortLocked(*state, result);
+             }
+ 
+             setMcCommandResultLocked(kMcCmdDelete, result);
+         }
++        RUNTIME_LOG("[MC] Delete port=" << port << " '" << path << "' -> result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -633,15 +573,7 @@ namespace ps2_stubs
+     {
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            closeMcFilesLocked();
+-            g_mcNextFd = 1;
+-            g_mcLastCmd = 0;
+-            g_mcLastResult = 0;
+-            g_mcCommandPending = false;
+-            for (McPortState &state : g_mcPorts)
+-            {
+-                state.currentDir = "/";
+-            }
++            resetMcStateLocked();
+         }
+ 
+         // libmc teardown is just a local state reset in this immediate runtime model.
+@@ -655,9 +587,9 @@ namespace ps2_stubs
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+             auto it = g_mcFiles.find(fd);
+-            if (it != g_mcFiles.end() && it->second.file)
++            if (it != g_mcFiles.end())
+             {
+-                result = (std::fflush(it->second.file) == 0) ? kMcResultSucceed : kMcResultDeniedPermit;
++                result = commitMcPortLocked(g_mcPorts[static_cast<size_t>(it->second.port)], kMcResultSucceed);
+             }
+             setMcCommandResultLocked(kMcCmdFlush, result);
+         }
+@@ -674,23 +606,21 @@ namespace ps2_stubs
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                closeMcFilesForPortLocked(port);
+-                const std::filesystem::path root = getMcRootPath(port);
+-                std::error_code ec;
+-                std::filesystem::remove_all(root, ec);
+-                ec.clear();
+-                std::filesystem::create_directories(root, ec);
+-                if (!ec)
++                loadMcPortLocked(port);
++                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                result = kMcResultNoCard;
++                if (!state.broken)
+                 {
+-                    McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                    closeMcFilesForPortLocked(port);
++                    state.card.format();
+                     state.currentDir = "/";
+-                    state.formatted = true;
+-                    result = kMcResultSucceed;
++                    result = commitMcPortLocked(state, kMcResultSucceed);
+                 }
+             }
+ 
+             setMcCommandResultLocked(kMcCmdFormat, result);
+         }
++        RUNTIME_LOG("[MC] Format port=" << port << " -> result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -706,136 +636,60 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
++                result = kMcResultNoEntry;
++                const std::string guestQuery =
++                    normalizeGuestMcPathLocked(port, rawPath.empty() ? "." : rawPath);
++                const bool hasWildcard =
++                    guestQuery.find('*') != std::string::npos || guestQuery.find('?') != std::string::npos;
++
++                // Same query rules as the old folder stub: a directory lists its contents, otherwise the
++                // last component is a pattern in its parent.
++                ps2_mc::Loc dir;
++                std::string pattern = "*";
++                const bool isDir = !hasWildcard && state->card.lookup(guestQuery, dir) == ps2_mc::kOk &&
++                                   (state->card.entry(dir).mode & ps2_mc::kModeDir);
++                bool found = isDir;
++                if (!isDir)
+                 {
+-                    ensureMcRootExists(port);
+-                    const std::string guestQuery =
+-                        normalizeGuestMcPathLocked(port, rawPath.empty() ? "." : rawPath);
+-                    const bool hasWildcard =
+-                        guestQuery.find('*') != std::string::npos || guestQuery.find('?') != std::string::npos;
+-
+-                    const std::filesystem::path queryRel =
+-                        (guestQuery.size() > 1u) ? std::filesystem::path(guestQuery.substr(1)) : std::filesystem::path{};
+-
+-                    std::filesystem::path parentRel;
+-                    std::string pattern;
+-                    if (hasWildcard)
++                    const size_t slash = guestQuery.find_last_of('/');
++                    const std::string parent = slash == 0u ? "/" : guestQuery.substr(0, slash);
++                    pattern = guestQuery.substr(slash + 1u);
++                    if (pattern.empty())
+                     {
+-                        parentRel = queryRel.parent_path();
+-                        pattern = queryRel.filename().string();
++                        pattern = "*";
+                     }
+-                    else
++                    found = state->card.lookup(parent, dir) == ps2_mc::kOk &&
++                            (state->card.entry(dir).mode & ps2_mc::kModeDir);
++                }
++
++                if (found)
++                {
++                    for (const ps2_mc::Entry &e : state->card.list(dir))
+                     {
+-                        const std::filesystem::path queryHostPath = guestMcPathToHostPath(port, guestQuery);
+-                        std::error_code queryEc;
+-                        if (std::filesystem::exists(queryHostPath, queryEc) && !queryEc &&
+-                            std::filesystem::is_directory(queryHostPath, queryEc))
++                        if (wildcardMatch(pattern, std::string(e.name, strnlen(e.name, sizeof(e.name)))))
+                         {
+-                            parentRel = queryRel;
+-                            pattern = "*";
+-                        }
+-                        else
+-                        {
+-                            parentRel = queryRel.parent_path();
+-                            pattern = queryRel.filename().string();
++                            SceMcTblGetDir row{};
++                            fillMcDirTableEntry(row, e);
++                            entries.push_back(row);
+                         }
+                     }
+ 
+-                    if (pattern.empty())
++                    const size_t entryCount =
++                        std::min(entries.size(), maxEntries > 0 ? static_cast<size_t>(maxEntries) : 0u);
++                    if (entryCount == 0u || tableAddr == 0u)
+                     {
+-                        pattern = "*";
++                        result = static_cast<int32_t>(entryCount);
+                     }
+-
+-                    std::filesystem::path hostDir = getMcRootPath(port);
+-                    if (!parentRel.empty())
++                    else if (uint8_t *dst = getMemPtr(rdram, tableAddr))
+                     {
+-                        hostDir /= parentRel;
++                        std::memcpy(dst, entries.data(), entryCount * sizeof(SceMcTblGetDir));
++                        result = static_cast<int32_t>(entryCount);
+                     }
+-                    hostDir = hostDir.lexically_normal();
+-
+-                    std::error_code ec;
+-                    if (std::filesystem::exists(hostDir, ec) && !ec &&
+-                        std::filesystem::is_directory(hostDir, ec))
++                    else
+                     {
+-                        const std::time_t now = std::time(nullptr);
+-                        auto appendSpecial = [&](const std::string &name)
+-                        {
+-                            if (!wildcardMatch(pattern, name))
+-                            {
+-                                return;
+-                            }
+-                            SceMcTblGetDir entry{};
+-                            fillMcDirTableEntry(entry, name, true, 0u, now);
+-                            entries.push_back(entry);
+-                        };
+-
+-                        appendSpecial(".");
+-                        appendSpecial("..");
+-
+-                        std::vector<std::filesystem::directory_entry> dirEntries;
+-                        for (const auto &entry : std::filesystem::directory_iterator(
+-                                 hostDir, std::filesystem::directory_options::skip_permission_denied, ec))
+-                        {
+-                            if (ec)
+-                            {
+-                                break;
+-                            }
+-                            dirEntries.push_back(entry);
+-                        }
+-
+-                        std::sort(dirEntries.begin(), dirEntries.end(),
+-                                  [](const std::filesystem::directory_entry &lhs,
+-                                     const std::filesystem::directory_entry &rhs)
+-                                  {
+-                                      return toLowerAscii(lhs.path().filename().string()) <
+-                                             toLowerAscii(rhs.path().filename().string());
+-                                  });
+-
+-                        for (const auto &entry : dirEntries)
+-                        {
+-                            const std::string name = entry.path().filename().string();
+-                            if (!wildcardMatch(pattern, name))
+-                            {
+-                                continue;
+-                            }
+-
+-                            std::error_code entryEc;
+-                            const bool isDirectory = entry.is_directory(entryEc) && !entryEc;
+-                            const uint32_t sizeBytes =
+-                                isDirectory ? 0u : static_cast<uint32_t>(entry.file_size(entryEc));
+-                            entryEc.clear();
+-                            const std::time_t modifiedTime = fileTimeToTimeTMc(entry.last_write_time(entryEc));
+-                            SceMcTblGetDir tableEntry{};
+-                            fillMcDirTableEntry(tableEntry,
+-                                                name,
+-                                                isDirectory,
+-                                                sizeBytes,
+-                                                entryEc ? now : modifiedTime);
+-                            entries.push_back(tableEntry);
+-                        }
+-
+-                        const size_t entryCount =
+-                            std::min(entries.size(), maxEntries > 0 ? static_cast<size_t>(maxEntries) : 0u);
+-                        if (entryCount == 0u || tableAddr == 0u)
+-                        {
+-                            result = static_cast<int32_t>(entryCount);
+-                        }
+-                        else if (uint8_t *dst = getMemPtr(rdram, tableAddr))
+-                        {
+-                            std::memcpy(dst, entries.data(), entryCount * sizeof(SceMcTblGetDir));
+-                            result = static_cast<int32_t>(entryCount);
+-                        }
+-                        else
+-                        {
+-                            result = kMcResultDeniedPermit;
+-                        }
++                        result = kMcResultDeniedPermit;
+                     }
+                 }
+             }
+@@ -871,13 +725,16 @@ namespace ps2_stubs
+ 
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            McPortState *state = mcPortLocked(port, slot, result);
++            if (state || result == kMcResultNoFormat)
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+                 cardType = kMcTypePs2;
+-                freeBlocks = state.formatted ? kMcFreeClusters : 0;
+-                format = state.formatted ? kMcFormatted : kMcUnformatted;
+-                result = state.formatted ? kMcResultSucceed : kMcResultNoFormat;
++            }
++            if (state)
++            {
++                freeBlocks = static_cast<int32_t>(state->card.freeClusters());
++                format = kMcFormatted;
++                result = kMcResultSucceed;
+             }
+ 
+             setMcCommandResultLocked(kMcCmdGetInfo, result);
+@@ -920,19 +777,10 @@ namespace ps2_stubs
+     {
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            closeMcFilesLocked();
+-            g_mcNextFd = 1;
+-            g_mcLastCmd = 0;
+-            g_mcLastResult = 0;
+-            g_mcCommandPending = false;
+-            for (McPortState &state : g_mcPorts)
+-            {
+-                state.currentDir = "/";
+-                state.formatted = true;
+-            }
++            resetMcStateLocked();
++            loadMcPortLocked(0);
++            loadMcPortLocked(1);
+         }
+-        ensureMcRootExists(0);
+-        ensureMcRootExists(1);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -945,38 +793,15 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
+-                {
+-                    ensureMcRootExists(port);
+-                    const std::string guestPath = normalizeGuestMcPathLocked(port, path);
+-                    const std::filesystem::path hostPath = guestMcPathToHostPath(port, guestPath);
+-                    std::error_code ec;
+-                    if (std::filesystem::exists(hostPath, ec) && !ec)
+-                    {
+-                        result = std::filesystem::is_directory(hostPath, ec) ? kMcResultSucceed : kMcResultDeniedPermit;
+-                    }
+-                    else if (std::filesystem::create_directory(hostPath, ec) && !ec)
+-                    {
+-                        result = kMcResultSucceed;
+-                    }
+-                    else
+-                    {
+-                        result = std::filesystem::exists(hostPath.parent_path(), ec) && !ec
+-                                     ? kMcResultDeniedPermit
+-                                     : kMcResultNoEntry;
+-                    }
+-                }
++                result = state->card.mkdir(normalizeGuestMcPathLocked(port, path));
++                result = commitMcPortLocked(*state, result);
+             }
+ 
+             setMcCommandResultLocked(kMcCmdMkdir, result);
+         }
++        RUNTIME_LOG("[MC] Mkdir port=" << port << " '" << path << "' -> result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -990,56 +815,47 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
++                const std::string guestPath = normalizeGuestMcPathLocked(port, path);
++                const bool create = (flags & PS2_FIO_O_CREAT) != 0u;
++                const bool writable = (flags & PS2_FIO_O_RDWR) != PS2_FIO_O_RDONLY;
++                ps2_mc::Loc loc;
++                const bool exists = state->card.lookup(guestPath, loc) == ps2_mc::kOk;
++                if (guestPath == "/" || (exists && (state->card.entry(loc).mode & ps2_mc::kModeDir)))
+                 {
+-                    result = kMcResultNoFormat;
++                    result = kMcResultDeniedPermit;
++                }
++                else if (!exists && !create)
++                {
++                    result = kMcResultNoEntry;
+                 }
+                 else
+                 {
+-                    const std::string guestPath = normalizeGuestMcPathLocked(port, path);
+-                    const std::filesystem::path hostPath = guestMcPathToHostPath(port, guestPath);
+-                    std::error_code ec;
+-                    const bool create = (flags & PS2_FIO_O_CREAT) != 0u;
+-                    const bool exists = std::filesystem::exists(hostPath, ec) && !ec;
+-                    if (guestPath == "/")
++                    result = exists ? ps2_mc::kOk : state->card.createFile(guestPath, loc);
++                    if (result == ps2_mc::kOk && exists && writable && (flags & PS2_FIO_O_TRUNC) != 0u)
+                     {
+-                        result = kMcResultDeniedPermit;
++                        state->card.truncate(loc);
+                     }
+-                    else if (exists && std::filesystem::is_directory(hostPath, ec))
++                    if (result == ps2_mc::kOk)
+                     {
+-                        result = kMcResultDeniedPermit;
+-                    }
+-                    else if (!exists && !create)
+-                    {
+-                        result = kMcResultNoEntry;
++                        McOpenFile file{};
++                        file.port = port;
++                        file.loc = loc;
++                        file.append = (flags & PS2_FIO_O_APPEND) != 0u;
++                        file.guestPath = guestPath;
++                        result = allocateMcFdLocked(file);
+                     }
+-                    else if (!std::filesystem::exists(hostPath.parent_path(), ec) || ec)
++                    if (result >= 0 && state->card.dirty())
+                     {
+-                        result = kMcResultNoEntry;
+-                    }
+-                    else
+-                    {
+-                        FILE *file = openMcHostFile(hostPath, flags);
+-                        if (!file)
+-                        {
+-                            result = exists ? kMcResultDeniedPermit : kMcResultNoEntry;
+-                        }
+-                        else
+-                        {
+-                            result = allocateMcFdLocked(file, port, hostPath);
+-                            if (result < 0)
+-                            {
+-                                std::fclose(file);
+-                            }
+-                        }
++                        result = commitMcPortLocked(*state, result); // a new or truncated file is on the card now
+                     }
+                 }
+             }
+             setMcCommandResultLocked(kMcCmdOpen, result);
+         }
++        RUNTIME_LOG("[MC] Open port=" << port << " '" << path << "' flags=0x" << std::hex << flags << std::dec
++                                      << " -> result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1058,7 +874,7 @@ namespace ps2_stubs
+             {
+                 result = 0;
+             }
+-            else if (it == g_mcFiles.end() || !it->second.file)
++            else if (it == g_mcFiles.end())
+             {
+                 result = kMcResultNoEntry;
+             }
+@@ -1068,12 +884,10 @@ namespace ps2_stubs
+             }
+             else
+             {
+-                const size_t bytesRead = std::fread(dst, 1u, static_cast<size_t>(size), it->second.file);
+-                result = std::ferror(it->second.file) ? kMcResultDeniedPermit : static_cast<int32_t>(bytesRead);
+-                if (std::ferror(it->second.file))
+-                {
+-                    std::clearerr(it->second.file);
+-                }
++                McOpenFile &file = it->second;
++                result = g_mcPorts[static_cast<size_t>(file.port)].card.read(file.loc, file.pos, dst,
++                                                                              static_cast<uint32_t>(size));
++                file.pos += static_cast<uint32_t>(std::max(result, 0));
+             }
+ 
+             setMcCommandResultLocked(kMcCmdRead, result);
+@@ -1091,31 +905,18 @@ namespace ps2_stubs
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
+-                {
+-                    const std::filesystem::path oldHostPath =
+-                        guestMcPathToHostPath(port, normalizeGuestMcPathLocked(port, oldPath));
+-                    const std::filesystem::path newHostPath =
+-                        guestMcPathToHostPath(port, normalizeGuestMcPathLocked(port, newPath));
+-                    std::error_code ec;
+-                    if (std::filesystem::exists(oldHostPath, ec) && !ec &&
+-                        std::filesystem::exists(newHostPath.parent_path(), ec) && !ec)
+-                    {
+-                        std::filesystem::rename(oldHostPath, newHostPath, ec);
+-                        result = ec ? kMcResultDeniedPermit : kMcResultSucceed;
+-                    }
+-                }
++                // The card renames in place; only the new name's last component counts.
++                const std::vector<std::string> parts = splitMcPathComponents(newPath);
++                result = parts.empty() ? kMcResultDeniedPermit
++                                       : state->card.rename(normalizeGuestMcPathLocked(port, oldPath), parts.back());
++                result = commitMcPortLocked(*state, result);
+             }
+ 
+             setMcCommandResultLocked(kMcCmdRename, result);
+         }
++        RUNTIME_LOG("[MC] Rename port=" << port << " '" << oldPath << "' -> '" << newPath << "' result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1129,22 +930,23 @@ namespace ps2_stubs
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+             auto it = g_mcFiles.find(fd);
+-            if (it != g_mcFiles.end() && it->second.file)
++            if (it != g_mcFiles.end())
+             {
+-                int whence = SEEK_SET;
++                McOpenFile &file = it->second;
++                int64_t base = 0;
+                 if (origin == PS2_FIO_SEEK_CUR)
+                 {
+-                    whence = SEEK_CUR;
++                    base = file.pos;
+                 }
+                 else if (origin == PS2_FIO_SEEK_END)
+                 {
+-                    whence = SEEK_END;
++                    base = g_mcPorts[static_cast<size_t>(file.port)].card.entry(file.loc).length;
+                 }
+-
+-                if (std::fseek(it->second.file, offset, whence) == 0)
++                const int64_t position = base + offset;
++                if (position >= 0 && position <= INT32_MAX)
+                 {
+-                    const long position = std::ftell(it->second.file);
+-                    result = (position >= 0) ? static_cast<int32_t>(position) : kMcResultDeniedPermit;
++                    file.pos = static_cast<uint32_t>(position);
++                    result = static_cast<int32_t>(position);
+                 }
+                 else
+                 {
+@@ -1162,31 +964,25 @@ namespace ps2_stubs
+         const int32_t port = static_cast<int32_t>(getRegU32(ctx, 4));
+         const int32_t slot = static_cast<int32_t>(getRegU32(ctx, 5));
+         const std::string path = readPs2CStringBounded(rdram, getRegU32(ctx, 6), kMcMaxPathLen);
++        [[maybe_unused]] const uint32_t flags = getRegU32(ctx, 8);
+ 
+         int32_t result = kMcResultNoEntry;
+         {
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+-            if (isValidMcPortSlot(port, slot))
++            if (McPortState *state = mcPortLocked(port, slot, result))
+             {
+-                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
+-                if (!state.formatted)
+-                {
+-                    result = kMcResultNoFormat;
+-                }
+-                else
+-                {
+-                    const std::filesystem::path hostPath =
+-                        guestMcPathToHostPath(port, normalizeGuestMcPathLocked(port, path));
+-                    std::error_code ec;
+-                    if (std::filesystem::exists(hostPath, ec) && !ec)
+-                    {
+-                        result = kMcResultSucceed;
+-                    }
+-                }
++                // shortcut: reports success without changing times or attributes (as the folder stub did);
++                // implement if the log shows the game calling it.
++                ps2_mc::Loc loc;
++                result = state->card.lookup(normalizeGuestMcPathLocked(port, path), loc) == ps2_mc::kOk
++                             ? kMcResultSucceed
++                             : kMcResultNoEntry;
+             }
+ 
+             setMcCommandResultLocked(kMcCmdSetFileInfo, result);
+         }
++        RUNTIME_LOG("[MC] SetFileInfo port=" << port << " '" << path << "' flags=0x" << std::hex << flags << std::dec
++                                             << " -> result=" << result << " (not applied)");
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1244,23 +1040,21 @@ namespace ps2_stubs
+             std::lock_guard<std::mutex> lock(g_mcStateMutex);
+             if (isValidMcPortSlot(port, slot))
+             {
+-                closeMcFilesForPortLocked(port);
+-                const std::filesystem::path root = getMcRootPath(port);
+-                std::error_code ec;
+-                std::filesystem::remove_all(root, ec);
+-                ec.clear();
+-                std::filesystem::create_directories(root, ec);
+-                if (!ec)
++                loadMcPortLocked(port);
++                McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                result = kMcResultNoCard;
++                if (!state.broken)
+                 {
+-                    McPortState &state = g_mcPorts[static_cast<size_t>(port)];
++                    closeMcFilesForPortLocked(port);
++                    state.card.unformat();
+                     state.currentDir = "/";
+-                    state.formatted = false;
+-                    result = kMcResultSucceed;
++                    result = commitMcPortLocked(state, kMcResultSucceed);
+                 }
+             }
+ 
+             setMcCommandResultLocked(kMcCmdUnformat, result);
+         }
++        RUNTIME_LOG("[MC] Unformat port=" << port << " -> result=" << result);
+         setReturnS32(ctx, 0);
+     }
+ 
+@@ -1279,7 +1073,7 @@ namespace ps2_stubs
+             {
+                 result = 0;
+             }
+-            else if (it == g_mcFiles.end() || !it->second.file)
++            else if (it == g_mcFiles.end())
+             {
+                 result = kMcResultNoEntry;
+             }
+@@ -1289,16 +1083,15 @@ namespace ps2_stubs
+             }
+             else
+             {
+-                const size_t bytesWritten = std::fwrite(src, 1u, static_cast<size_t>(size), it->second.file);
+-                result = std::ferror(it->second.file) ? kMcResultDeniedPermit : static_cast<int32_t>(bytesWritten);
+-                if (!std::ferror(it->second.file))
+-                {
+-                    std::fflush(it->second.file);
+-                }
+-                else
++                // Written to the card image in memory; the file on disk is updated at sceMcClose/sceMcFlush.
++                McOpenFile &file = it->second;
++                ps2_mc::Card &card = g_mcPorts[static_cast<size_t>(file.port)].card;
++                if (file.append)
+                 {
+-                    std::clearerr(it->second.file);
++                    file.pos = card.entry(file.loc).length;
+                 }
++                result = card.write(file.loc, file.pos, src, static_cast<uint32_t>(size));
++                file.pos += static_cast<uint32_t>(std::max(result, 0)); // -3 = card full, as libmc
+             }
+ 
+             setMcCommandResultLocked(kMcCmdWrite, result);
+diff --git a/ps2xRuntime/tests/mc_image_test.cpp b/ps2xRuntime/tests/mc_image_test.cpp
+new file mode 100644
+index 0000000..0758445
+--- /dev/null
++++ b/ps2xRuntime/tests/mc_image_test.cpp
+@@ -0,0 +1,177 @@
++// Self-test for the .ps2 memory card image (McImage). Build and run:
++//   c++ -std=c++17 -O1 -I ps2xRuntime/src/lib/Kernel/Stubs ps2xRuntime/tests/mc_image_test.cpp \
++//       ps2xRuntime/src/lib/Kernel/Stubs/McImage.cpp -o mc_image_test && ./mc_image_test [out.ps2]
++// With an argument it also leaves a card with a test save there (to open in PCSX2 / mymc).
++#include "McImage.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++using namespace ps2_mc;
++
++static int g_fail = 0;
++#define CHECK(c)                                                         \
++    do                                                                   \
++    {                                                                    \
++        if (!(c))                                                        \
++        {                                                                \
++            std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c);     \
++            ++g_fail;                                                    \
++        }                                                                \
++    } while (0)
++
++static uint32_t sbU32(const Card &c, uint32_t o)
++{
++    uint32_t v;
++    std::memcpy(&v, &c.raw()[o], 4);
++    return v;
++}
++
++int main(int argc, char **argv)
++{
++    // ECC: single-byte blocks against PCSX2's column_parity_mask row 0 (MemoryCardFile.cpp, from mymc).
++    static const uint8_t mask0[16] = {0, 7, 22, 17, 37, 34, 51, 52, 52, 51, 34, 37, 17, 22, 7, 0};
++    for (int b = 0; b < 16; ++b)
++    {
++        uint8_t blk[128] = {}, ecc[3];
++        blk[0] = uint8_t(b);
++        computeEcc(blk, ecc);
++        CHECK(ecc[0] == uint8_t(0x77 ^ mask0[b]));
++    }
++    uint8_t zero[128] = {}, ecc[3];
++    computeEcc(zero, ecc);
++    CHECK(ecc[0] == 0x77 && ecc[1] == 0x7F && ecc[2] == 0x7F);
++    uint8_t one[128] = {};
++    one[5] = 1; // odd parity at line 5: lp0 ^= ~5, lp1 ^= 5
++    computeEcc(one, ecc);
++    CHECK(ecc[1] == ((0x7F ^ uint8_t(~5)) & 0x7F) && ecc[2] == (0x7F ^ 5));
++
++    Card card;
++    card.format();
++    CHECK(card.formatted());
++    CHECK(card.raw().size() == 16384u * 528u);
++    CHECK(std::memcmp(card.raw().data(), "Sony PS2 Memory Card Format 1.2.0.0", 35) == 0);
++    CHECK(sbU32(card, 0x30) == 8192 && sbU32(card, 0x34) == 41 && sbU32(card, 0x38) == 8135);
++    CHECK(sbU32(card, 0x40) == 1023 && sbU32(card, 0x44) == 1022 && sbU32(card, 0x50) == 8);
++    CHECK(card.raw()[0x150] == 2 && card.raw()[0x151] == 0x2B);
++    CHECK(card.freeClusters() == 8134);
++
++    Loc root;
++    CHECK(card.lookup("/", root) == kOk);
++    std::vector<Entry> rootList = card.list(root);
++    CHECK(rootList.size() == 2 && rootList[0].mode == 0x8427 && rootList[1].mode == 0xA426);
++
++    // A save like PoP's: a folder with icon.sys, an icon bigger than one cluster, and the save data.
++    CHECK(card.mkdir("/BASLUS-20743") == kOk);
++    CHECK(card.mkdir("/BASLUS-20743") == kOk); // existing folder: same answer as the old folder stub
++    CHECK(card.mkdir("/NOPE/SUB") == kNoEntry);
++    std::vector<uint8_t> icon(0xB3F8), save(0x838);
++    for (size_t i = 0; i < icon.size(); ++i)
++        icon[i] = uint8_t(i * 7 + 3);
++    for (size_t i = 0; i < save.size(); ++i)
++        save[i] = uint8_t(i ^ 0x5A);
++    Loc f;
++    CHECK(card.createFile("/BASLUS-20743/icon.ico", f) == kOk);
++    CHECK(card.write(f, 0, icon.data(), 1000) == 1000); // two writes crossing a cluster boundary
++    CHECK(card.write(f, 1000, icon.data() + 1000, uint32_t(icon.size() - 1000)) == int32_t(icon.size() - 1000));
++    CHECK(card.entry(f).length == icon.size());
++    CHECK(card.createFile("/BASLUS-20743/BASLUS-20743", f) == kOk);
++    CHECK(card.write(f, 0, save.data(), uint32_t(save.size())) == int32_t(save.size()));
++    for (int i = 0; i < 4; ++i) // grow the folder past several clusters
++    {
++        Loc x;
++        CHECK(card.createFile("/BASLUS-20743/extra" + std::to_string(i), x) == kOk);
++    }
++    const uint32_t freeBefore = card.freeClusters();
++
++    const char *path = argc > 1 ? argv[1] : "mc_image_test.ps2";
++    CHECK(card.save(path));
++    CHECK(!card.dirty());
++
++    Card back;
++    CHECK(back.load(path));
++    CHECK(back.formatted());
++    CHECK(back.raw() == card.raw());
++    // ECC of every non-erased page must match its data after a save.
++    int badEcc = 0;
++    for (uint32_t p = 0; p < 16384; ++p)
++    {
++        const uint8_t *pg = &back.raw()[size_t(p) * 528];
++        if (p / 16 == 1022)
++            continue;
++        for (int i = 0; i < 4; ++i)
++        {
++            computeEcc(pg + i * 128, ecc);
++            badEcc += std::memcmp(ecc, pg + 512 + i * 3, 3) != 0;
++        }
++    }
++    CHECK(badEcc == 0);
++
++    Loc r;
++    std::vector<uint8_t> got(icon.size());
++    CHECK(back.lookup("/BASLUS-20743/icon.ico", r) == kOk);
++    CHECK(back.read(r, 0, got.data(), uint32_t(got.size() + 50)) == int32_t(icon.size()));
++    CHECK(got == icon);
++    CHECK(back.read(r, 1020, got.data(), 10) == 10 && std::memcmp(got.data(), icon.data() + 1020, 10) == 0);
++    CHECK(back.lookup("/BASLUS-20743/BASLUS-20743", r) == kOk);
++    got.assign(save.size(), 0);
++    CHECK(back.read(r, 0, got.data(), uint32_t(save.size())) == int32_t(save.size()) && got == save);
++    Loc dir;
++    CHECK(back.lookup("/BASLUS-20743", dir) == kOk);
++    CHECK(back.list(dir).size() == 2 + 2 + 4);
++    CHECK(back.entry(dir).length == 8);
++    CHECK(back.lookup("/basLUS-20743", dir) == kNoEntry); // names are case-sensitive
++
++    // Delete and rename.
++    CHECK(back.remove("/BASLUS-20743") == kNotEmpty);
++    CHECK(back.remove("/BASLUS-20743/icon.ico") == kOk);
++    CHECK(back.lookup("/BASLUS-20743/icon.ico", r) == kNoEntry);
++    CHECK(back.freeClusters() == freeBefore + 45); // 0xB3F8 bytes = 45 clusters
++    Loc reused;
++    CHECK(back.createFile("/BASLUS-20743/new", reused) == kOk);
++    CHECK(reused.index == 2); // first deleted slot
++    CHECK(back.rename("/BASLUS-20743/new", "renamed") == kOk);
++    CHECK(back.lookup("/BASLUS-20743/renamed", r) == kOk);
++    CHECK(back.rename("/BASLUS-20743/renamed", "BASLUS-20743") == kDenied);
++    CHECK(back.truncate(r) == kOk && back.entry(r).length == 0);
++
++    // Card full.
++    Loc big;
++    CHECK(back.createFile("/big", big) == kOk);
++    std::vector<uint8_t> huge(9u << 20, 1);
++    const int32_t wrote = back.write(big, 0, huge.data(), uint32_t(huge.size()));
++    CHECK(wrote > 0 && wrote < int32_t(huge.size()));
++    CHECK(back.freeClusters() == 0);
++    CHECK(back.remove("/big") == kOk);
++
++    // A formatted card we cannot read is refused (never offered for formatting); a blank one is unformatted.
++    {
++        std::vector<uint8_t> img = card.raw();
++        const uint32_t badEnd = 9000; // alloc_end past the card's last cluster
++        std::memcpy(&img[0x38], &badEnd, 4);
++        const char *badPath = "mc_image_test_bad.ps2";
++        std::FILE *f = std::fopen(badPath, "wb");
++        std::fwrite(img.data(), 1, img.size(), f);
++        std::fclose(f);
++        Card bad;
++        CHECK(!bad.load(badPath));
++        std::vector<uint8_t> ff(img.size(), 0xFF);
++        f = std::fopen(badPath, "wb");
++        std::fwrite(ff.data(), 1, ff.size(), f);
++        std::fclose(f);
++        Card fresh;
++        CHECK(fresh.load(badPath) && !fresh.formatted());
++        std::remove(badPath);
++    }
++
++    Card blank;
++    blank.unformat();
++    CHECK(!blank.formatted());
++    CHECK(blank.lookup("/", r) == kNoFormat);
++
++    if (argc <= 1)
++        std::remove(path);
++    std::printf(g_fail ? "%d check(s) failed\n" : "all checks passed\n", g_fail);
++    return g_fail ? 1 : 0;
++}
+-- 
+2.54.0 (Apple Git-157)
+

@@ -74,6 +74,11 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
   path override allowed. Today's runtime writes loose files to `mc0/` beside the ELF (`Kernel/Stubs/MemoryCard.cpp`):
   the plan keeps those stubs and swaps their storage for a PS2 card file system (superblock, FAT, dirs, ECC; refs:
   PCSX2 GPL-3, ps2sdk mcman AFL), crash-safe write (tmp + flush + rename).
+  **Progress (5 Nov evening):** patch 49 = card file system (`McImage.*`, self-test
+  `ps2xRuntime/tests/mc_image_test.cpp`) under the existing libmc stubs; cards `Mcd001.ps2`/`Mcd002.ps2`; the old
+  `mc0/` folder is imported once (the PC's 10 saves S00-S09 import byte-identical, checked offline); a card that has the
+  magic but fails our checks is refused, never offered for formatting. Open: in-game save/load boot check (user, TV),
+  PCSX2 opening our card, SetFileInfo not applied (logged), import stamps today's date.
   **Pad (user, 5 Nov evening; replaces the morning's XInput choice):** SDL3 (zlib) on every platform: Xbox,
   DualShock 4/DualSense, Switch Pro and generic pads via its controller database, rumble on all of them, so no
   Windows-only exception and no separate 1.8 pad layer. Replaces raylib's gamepad read in `Kernel/Stubs/Pad.cpp`.
