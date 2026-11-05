@@ -350,3 +350,8 @@ mode boots the game check for an active display first, so a mistake like this ca
   so it compiles and runs on the Mac.
 - **PCSX2 never formats a card itself** (a new `.ps2` is all 0xFF; the BIOS formats it): fresh-card values come from
   mymc's `format()` (public domain), and PCSX2's `MemoryCardFile.cpp` ECC is ported from mymc.
+
+- **5 Nov: the Mac's `game/recomp-sotc/runtime-src` can lag the PC's patch stack** (patch 50 written on it lacked
+  patch 30 and conflicted). Write runtime patches against the PC's `C:\tools\PS2Recomp-sotc` HEAD, or check the
+  Mac clone's last commit first. A compile definition on `ps2_host_backend` (INTERFACE) recompiles all game code:
+  `-Fast` then takes ~35 min, not minutes.

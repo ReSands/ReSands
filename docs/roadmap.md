@@ -86,6 +86,11 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
   Reference: GT4Recomp's SDL3 layer (MIT).
   **Faithful rumble (user, 18 Oct; placed in 0.4 on 25 Oct, now 0.5):** the game's DualShock 2 motor commands (small
   on/off, large 0-255 via the pad library), ignored by the runtime today, passed to the pad's motors via SDL3 (large -> low-frequency, small -> high-frequency).
+  **Pad + rumble progress (5 Nov night):** patch 50 = SDL3 gamepads in `ps2_host_input.cpp` (port N = N-th pad, hotplug,
+  by position: south = Cross, triggers -> L2/R2 at 30/255; keyboard + mouse unchanged) and `scePadSetActDirect` -> motors
+  (PoP's only motor path: `INO_PadLowVibSet`/`HighVibSet`/`PafSet`/`PifSet` 0x48AD00-0x48AEC0, byte 0 small, byte 1 large,
+  aligned 0/1 in its pad state 7 at 0x48B000). Motors stop on state load and exit; the quick-save Select reads SDL too.
+  PC play build OK 5 Nov. **Not yet checked in game** (user: pad buttons, sticks, rumble on hits/traps, hotplug).
 - **0.6 = PAL and JP discs** (user, 5 Nov; was "some time"; the user is buying both discs). Each is a different
   ELF with different addresses; overrides hard-code retail US addresses. **From 5 Nov, new override code takes its
   addresses from one table per disc**; existing hard-coded addresses are converted at 0.6. PAL also brings 50 Hz and
