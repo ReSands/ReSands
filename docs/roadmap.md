@@ -61,8 +61,8 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
   FFmpeg:** the decoder has worked since 16 Oct (FFmpeg `ipu` behind `FullMovie` in `tools/overrides/pop_movies.cpp`,
   all 11 disc + 39 vision movies, PCM sound straight to the audio output; user watched them on the PC 16 Oct).
   GT3-revisited's MIT decoder not adopted: FFmpeg stays anyway (PS2Recomp's runtime links it, Bink at 1.2); revisit
-  only if the real PS2 shows a visible movie difference (`docs/movies.md` "Open question"). Re-check at 1.4: movies
-  at 60 fps (never watched since the 60 fps work).
+  only if the real PS2 shows a visible movie difference (`docs/movies.md` "Open question"). Movies also fine at 60 fps
+  (user, 5 Nov: watched throughout the 60 fps play-testing).
 - **0.5 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer
   (cheap, could come earlier) and SDL3 pad layer (`docs/reference.md` "GT4Recomp").
   **Memory card (user, 5 Nov):** the native card reads and writes PCSX2's plain 8 MB `.ps2` card image (raw pages
