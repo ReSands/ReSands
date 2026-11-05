@@ -331,3 +331,9 @@ mode boots the game check for an active display first, so a mistake like this ca
   sees. `POP_WATCH_RAM=<addr>` (patch 47) compares one word at every `dispatchGuestBranch` and names the call where it
   changed: three boots from symptom to cause. PS2Recomp stand-ins that write guest memory at fixed addresses are a
   suspect class of their own (`sceGsResetGraph` -> scratchpad + 0x100).
+- **LLM byte-matching misses are mostly missing facts, not hard code generation.** Of 29 "NEEDS HEADER CHANGE"
+  requests (DARE, 5 Nov) none needed the change asked for: the prompt lacked file-static types, callee names and
+  virtual-slot names. Of 24 near misses fixed by hand, nearly all were wrong meaning (wrong slot, argument, constant,
+  `||` vs two ifs), which a random permuter cannot reach. Check what the prompt states before adding rounds.
+- **decomp-permuter's random mode is C-only** (pycparser; C++ only through hand-written PERM macros) and does not run
+  on native Windows: for MWCC C++ a small text-level permuter on our own judge did the job (`tools/decomp/permute.py`).

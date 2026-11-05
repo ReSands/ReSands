@@ -61,8 +61,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 212/669 matched 5 Nov after run 12;
-  next: hand pass on near misses + header requests, see there). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test`
+- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 239/669 matched 5 Nov evening;
+  night job = Qwen + permuter lanes, see there). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test`
   exit 138 on the Mac): `docs/native_bugs.md` "Side jobs".
 
 ## Release roadmap (user; full text: `docs/roadmap.md`)

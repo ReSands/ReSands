@@ -4,15 +4,20 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (1 Nov evening; start here)
+## State (5 Nov evening; start here)
 
-- **212 of 669 matched** (5 Nov, after run 12). Run 12 stopped 5 Nov 18:54 (user). Every function up to 104
-  instructions has now been tried; the 78 untried are 107-810 (median 156), where run 12's pass rate (4% at
-  59-104) says Qwen alone will not get far. Next: a hand pass on the near misses and the header requests (runs 11
-  and 12, below) before more Qwen time; then decide between reopening misses with fixes and the big functions.
-  Still open from earlier: 2 header requests from run 6 (16b800
-  `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3 instruction misses
-  (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
+- **239 of 669 matched** (5 Nov evening: run 12's 212 + 24 hand matches + 1 by the permuter + 2 that matched
+  as they were once the header changed). Details: "5 Nov: fixes, hand pass, permuter" below. All 29 header
+  requests are answered (reopened), 136 functions are marked RETRY, 78 are untried (107-810 instructions).
+- **Night job from 5 Nov = two lanes** (same "Qwen DARE audio decomp" shortcut, `oct28.ps1`): Qwen on the GPU
+  (queue: RETRY first, closest miss first; then the big untried ones) and `permute.py --lane` on the CPU
+  (below-normal priority, 6 workers, 10 minutes per function; misses within 10 instructions, smallest gap first;
+  Qwen leaves those to it until it has had them). Logs: `game\jobs\qwen-night.log`, `permute-night.log`.
+- **Next:** the morning check below plus `permute-night.log` (lines `perm01: N differ`, `PASS by the permuter`);
+  after any header change run `qwen_match.py --rejudge` (every PASS against the new header). Open: 186dc0
+  `TImaAdpcm::Reset` stores words at +0x64/+0x68/+0x6c where POP1's `_ima_adpcm_header` has a byte and two shorts
+  (retail layout differs or struct copies; unchecked). Before 2.0: the judge masks call targets, so a MATCH does not
+  check the callee's name (194640 matched while calling `FUN_00195c80`; fixed by hand).
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
   (counts + 15 nearest misses) and `game\jobs\qwen-night.log` (one line per function: `[i/N] <addr> PASS in roundNN`
   or `no match after 4 more rounds`); for run 6 also the two checks at the end of "Prepared for run 6". For a miss, read `game\analysis\qwen\dare_<addr>\attempts\roundNN.report.txt`
@@ -308,6 +313,46 @@ the compiler check: `docs/roadmap.md` "2.0".
     (24-28).
   Folders copied to `game/analysis/qwen_pc/`.
 
+## 5 Nov: fixes, hand pass, permuter
+
+- **Header requests, all 29 checked:** none needed the change Qwen asked for. The real causes were gaps in what the
+  prompt says, fixed in general:
+  - **File statics had no types** (the prompt gave only "N bytes; declare it yourself"): `dare_header.py` writes
+    `statics.tsv` (161 DWARF declarations; the 5 `sndCList` statics get their template arguments from POP1's
+    `__sinit` constructor calls) and the prompt says "write `extern <decl>;`" and pulls the type into the excerpt
+    (158580/158e00/15ffc0 `g_d_pstTypeObjectSoundInfos` is a `tdstTypeObjectInfos*`; 173640, 18dd80/18db80/18e780).
+  - **More call targets and globals named:** `dare_callees.py` aligns the 322 functions whose call or global counts
+    differ (POP1's asserts) on the names already known: 406 -> 547 call targets, 234 -> 305 globals (85 of 87
+    checkable new names agree; a function's own retail address now wins over a vote). 0x199640 =
+    `SND_fn_vDisplayError` (67 votes), 0x183fc0 `SND_fn_szGetCurrentLangDirectory`, 0x161880 `CRenderer::operator
+    new` (by hand, `EXTRA_NAMES`). An address inside a named object gets name+offset (`gs_listMemoryCluster` +0).
+  - **Virtual calls named:** `vtables.tsv` (POP1 `__vt__`); `lw R,0(obj); lw R,OFF(R); jalr R` gets
+    "; = virtual slot N: Method (classes)". Three near misses had called the wrong slot's method.
+  - Constructors, destructors and operators shown as C++ (`CPath::operator new`, `RPS2::~RPS2`).
+  - **Header changes:** `SND_fn_vDisplayError(unsigned char, char *)` (retail and POP1 pass a struct member with
+    `lbu`; every other caller passes a constant); 14 methods static (`STATIC_METHODS`): `GetHwModuleId`,
+    `ASyncLoadBinaryResourceSample` by hand, 12 by a register test (the method reads its parameters from a0 on and
+    never the register its last parameter would be in with a `this`; `UpdateTrackVolumes`, which matched as a normal
+    method, passes the test as non-static). `--rejudge`: 224 of 225 PASS still matched; 1967c0's own conflicting
+    `SND_fn_vDisplayError` extern removed. Re-judging the top attempts of every miss: 2 more matched as they were.
+- **Prompt lessons added:** `if (a || b) return;` (two separate ifs compile differently: 183080, 16b740);
+  `(x != 0) ^ 1` for `sltu`+`xori` with no `andi 0xff` (`!x` adds it: 166b40, 167c00); `lui v0,0xffff` in a delay
+  slot = return -1.0 in 16.16 (18d3c0).
+- **Hand matches (24):** 18d3c0 18d340 162240 193a40 168dc0 194640 183a00 15c8c0 166b40 160a80 18f080 183080
+  189f40 16a380 167c00 169580 16b9c0 190940 194880 18eb80 16b180 16b800 16b1c0 16b740 (PASS = "hand (5 Nov)").
+  Nearly all were wrong meaning, not register allocation: a wrong virtual slot, a wrong argument or member, a
+  constant (-1 for -1.0), an `||`, a missing `else`. 18f080: retail 0x174100 takes one argument where POP1's
+  `fn_bGetMapsFileName` takes two. 16a380: the semaphore static at 0x4e8fa0 is retail-only (named
+  `gs_lWorkerSemaId` by us).
+- **`permute.py` (new):** decomp-permuter's random mode parses C only (its README: C++ only through hand-written
+  PERM macros) and it does not run on native Windows, so this is a small C++ version on `match.py`: 1-3 random
+  edits per candidate (move a statement, flip signedness, swap operands, invert an if/else, split/join an
+  initialised declaration, `__typeof__` temporary (mwccps2 takes it), ++ forms, merge/split `if (a || b) return`),
+  hill-climbing on differing instructions, N worker processes (~280 candidates/s on 14 workers). Matched 15b040 on
+  its 2nd candidate (Qwen freed before clearing members); the 8 others of the day run (3 minutes each) were
+  wrong-meaning misses it cannot fix. Improvements are written as `attempts/permNN.cpp` (Qwen resumes from them),
+  `PERMUTED` = start hash + minutes (one pass per start attempt).
+
 ## Fixes after run 1 (all done 28 Oct night)
 
 1. **Globals named.** DARE reaches every global as `lui at,hi` + `lw lo(at)` (851 accesses in 213 of 669
@@ -372,7 +417,7 @@ the compiler check: `docs/roadmap.md` "2.0".
 - Regenerate the working files on the Mac (`game/decomp/dare/`, git-ignored):
   `python3 tools/decomp/dare_units.py game/proto/disc/POP1/POP1.ELF game/proto/analysis/retail_names_from_proto.tsv game/decomp/dare/units.tsv`,
   `python3 tools/decomp/dare_header.py game/proto/disc/POP1/POP1.ELF game/decomp/dare/dare.h game/decomp/dare/protos.tsv`
-  (create an empty `dare_fix.h` beside it). Retail assembly and Ghidra C for the 669 functions: `analyzeHeadless`
+  (create an empty `dare_fix.h` beside it; it also writes `statics.tsv` and `vtables.tsv`: copy them to the PC with the header). Retail assembly and Ghidra C for the 669 functions: `analyzeHeadless`
   with `PoPDisasm.java` and `PoPDecompileTo.java` on `game/decomp/dare/addrs.txt` (outputs `asm/`, `ghidra_c/`).
   **Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`** (as in
   `tools/rebuild.sh`), or it fails with "Unable to prompt user for JDK path".
@@ -383,6 +428,8 @@ the compiler check: `docs/roadmap.md` "2.0".
   `attempts/`, `best.cpp` = most matching instructions, `PASS`, or `HEADER` when Qwen reports a header change is
   needed). `--prompt` prints the prompt (works on the Mac); `--try <file>` judges a file like a round. Needs
   `game/decomp/dare/` on the PC (copied 28 Oct; recopy after regenerating: `tar czf - -C game/decomp dare | ssh ...`).
+- `permute.py <addr> [--minutes 20] [--jobs 6]` / `--queue` / `--lane --until <unix>` (PC): the permuter (see 5 Nov).
+- `qwen_match.py --rejudge` (PC): every PASS's `best.cpp` against the current `dare.h`; run after any header change.
 - `game/decomp/dare/pccc.sh <file> [flags]`: copies `dare.h` + the file to the PC and compiles it (error check only).
 
 ## Numbers
