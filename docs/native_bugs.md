@@ -601,6 +601,27 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   picture, offline render) vs the GS-only grey; the 134636 save (native whiter than the GS picture). Next: a fresh slow
   (not from a save) in `-Mode gs` and in `-GsOff`, side by side by eye; a real-PS2 / video reference with N27.
 
+## Reported 4 Nov 19:38-20:59 (logged 5 Nov; play log `play_20261104_193820.log`; copies in `game/analysis/saves1104/`)
+
+Session in the default `play.ps1` mode (glitch notes say "late native 97 GS 0": native frames). Save names are
+`play_20261104_<hhmmss>`. Not yet triaged except where stated.
+
+- **N31 Prince's animation seems to speed up now and then (~19:45, save 194356).** Log: fps 48-52 before the save,
+  53-60 after. The game steps one tick per frame, so a dip plays as slow motion and the return to 60 looks like a
+  speed-up; likely the fight slowdown the user suspected. Not urgent (user); performance waits until fully native.
+- **N32 Prince's hair flaps too much in a cutscene (19:57, saves 195657 / 195728).** User asks whether, like the
+  bridges, the 60 fps patch is to blame. Next: same save at `POP_60FPS=0` vs default, by eye (needs a boot).
+- **N33 worst performance in a while (20:01, saves 200025 / 200110).** Log: 59 until 195954, then 29-46 for the
+  whole room. Keep as the performance stress-test save; waits until fully native.
+- **N34 light shafts (god rays) flicker (20:11, saves 201132 / 201135).**
+- **N35 screen goes black, back on a mouse wiggle, more than once (20:19, saves 201833 / 201850).** Cause: Windows
+  "turn off display after" is 900 s on the PC's High performance plan, and pad input does not reset the idle timer
+  (raylib/GLFW does not hold the display on). The log shows 59 fps right through: the game kept running. Fix with
+  the SDL3 pad (0.5): keep the screen saver disabled while the game runs (SDL's default once its video subsystem is
+  up; check it holds when only the gamepad subsystem is used).
+- **N36 distant wall flickers where a teeth trap clamps out of it (20:26, saves 202531 / 202650).**
+- **N37 the same flicker as N36 (20:44, saves 204316 / 204415).**
+
 ## Bridges: rope bridge too high at 60 fps, Prince stuck in it, bridges bob (3 Nov 21:35, save 213556) (fixed in override 4 Nov; user play check passed 4 Nov evening)
 
 Not a renderer bug: the save's own GS frame shows the bridge high too, and its collision moves with it.
