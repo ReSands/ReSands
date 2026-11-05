@@ -55,8 +55,12 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   step 4c point 7). Step 5 and the `-GsOff` default flip wait for it; its hardware questions (N27 halo flicker,
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile the DARE decomp runs overnight.
-- **5 Nov:** 0.4 closed with FFmpeg (decoder native since 16 Oct; `docs/roadmap.md` 0.4). Next candidate while
-  waiting for the PS2 and DARE: 0.5's independent parts (memory card `.ps2` image, SDL3 pad, rumble).
+- **5 Nov:** 0.4 closed with FFmpeg (decoder native since 16 Oct; `docs/roadmap.md` 0.4). Working on 0.5's
+  independent parts while waiting for the PS2 and DARE. **Memory card done (evening, patch 49, user-checked in game):**
+  PCSX2 `.ps2` image at `%USERPROFILE%\Saved Games\PoP Recomp\Mcd001.ps2`, old `mc0/` saves imported; open bits
+  in `docs/roadmap.md` 0.5 "Progress". **Next: SDL3 pad + faithful rumble** (replaces raylib's gamepad read in
+  `Kernel/Stubs/Pad.cpp`; `scePadSetActAlign`/`SetActDirect` are no-ops today; first a log pass of the game's motor
+  commands; check SDL3 beside raylib in the runtime build).
 - **4 Nov:** rope bridges fixed at any frame rate (fixed 1/30 s steps + extrapolation; user-checked), ropes look
   the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.4 re-check list in roadmap).
 - **0.1:** crash 1 closed 30 Oct (3b80b66). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).

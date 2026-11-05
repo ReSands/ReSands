@@ -337,3 +337,16 @@ mode boots the game check for an active display first, so a mistake like this ca
   `||` vs two ifs), which a random permuter cannot reach. Check what the prompt states before adding rounds.
 - **decomp-permuter's random mode is C-only** (pycparser; C++ only through hand-written PERM macros) and does not run
   on native Windows: for MWCC C++ a small text-level permuter on our own judge did the job (`tools/decomp/permute.py`).
+
+## 5 Nov 2026
+
+- **`RUNTIME_LOG` is compiled out of release builds** (`ps2_log.h`): a message the user must see in a play log
+  (card import, failed save) needs `std::cerr`. Debug-only per-call logs prove nothing about a release boot; check the
+  result itself instead (e.g. copy the card back and diff it against the old saves).
+- **The sotc runtime can be syntax-checked on the Mac** although it does not build there: `clang++ -std=c++20
+  -fsyntax-only -target x86_64-apple-macos13 -msse4.1` with `-I ps2xRuntime/include -I ps2xIOP/include
+  -I ps2xRuntime/src/lib -I ps2xRuntime/src/lib/Kernel -I build-mac/_deps/raylib-src/src`. Under zsh, a flag list in
+  one variable needs `${=VAR}` to split. Keep new logic in a dependency-free file with its own test (as `McImage.*`)
+  so it compiles and runs on the Mac.
+- **PCSX2 never formats a card itself** (a new `.ps2` is all 0xFF; the BIOS formats it): fresh-card values come from
+  mymc's `format()` (public domain), and PCSX2's `MemoryCardFile.cpp` ECC is ported from mymc.
