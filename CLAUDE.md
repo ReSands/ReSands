@@ -36,7 +36,8 @@ for Xbox addresses and Hor+ hooks.
   problem (`docs/ps2_projects.md`); general learnings to `docs/lessons.md`; one dated job script per night; optimise
   biggest win first. Shut the PC down after overnight work. The user gathers saves and does milestone checks; I work
   offline.
-- New native code stays portable: Vulkan within MoltenVK's base path, SDL-class libs, no Windows-only APIs, x86
+- New native code stays portable: Vulkan within MoltenVK's base path, SDL-class libs, no Windows-only APIs (one
+  exception, user 5 Nov: XInput for the 0.5 pad; Linux/macOS pad at 1.8), x86
   fast paths only with a portable fallback, AOT SPIR-V (`docs/reference.md` "Portability principle").
 
 ## Current status (1 Nov 2026; start here)
@@ -56,7 +57,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile the DARE decomp runs overnight.
 - **4 Nov:** rope bridges fixed at any frame rate (fixed 1/30 s steps + extrapolation; user-checked), ropes look
-  the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.2 re-check list in roadmap).
+  the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.4 re-check list in roadmap).
 - **0.1:** crash 1 closed 30 Oct (3b80b66). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
@@ -65,7 +66,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   night job = Qwen + permuter lanes, see there). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test`
   exit 138 on the Mac): `docs/native_bugs.md` "Side jobs".
 
-## Release roadmap (user; full text: `docs/roadmap.md`)
+## Release roadmap (user; renumbered 5 Nov; full text: `docs/roadmap.md`)
 
 ```
 0.1   Playable start to finish, emulated graphics + sound (crash 1 fixed; crash 2 watched)
@@ -73,12 +74,14 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 0.12  Native characters, translucents, shadows + particles
 0.13  Native effects: water (P6), sprites (P9), halos, light shafts, flashes (closed 30 Oct, user check)
 0.14  Native HUD, menus, loading screens, movie display
-0.2   Fully native graphics: GS off by default, judged frame by frame against the emulated GS
-0.3   Native sound (DARE/UbiSound, no IOP/SPU2) + native PS2 movie decoder (no IPU)
-0.4   Fully native: memory card, pad, faithful DualShock 2 rumble
-1.0   Clean-up, GS reference toggle; publish own code only; 30 fps like the original
-1.1   Widescreen Hor+ | 1.2 uncapped fps | 1.3 higher res + crisp HUD | 1.4 PC/Xbox assets
-1.5   Linux / macOS | 1.6 ray tracing toggles | 1.7 DualSense | -- PAL/JP discs | 2.0 (potential) byte-matching decomp
+0.2   Fully native graphics: GS off by default, judged frame by frame against the real PS2
+0.3   Native sound (DARE/UbiSound, no IOP/SPU2) | 0.4 native PS2 movie decoder (no IPU)
+0.5   Fully native: memory card (PCSX2 .ps2 image compatible), pad via XInput, faithful DualShock 2 rumble
+0.6   PAL / JP discs (address table per disc; new code uses it now) | 0.7 public playtest (publish own code)
+1.0   Clean-up, GS reference toggle, 30/60 switch, performance
+1.1   Launcher | 1.2 PC audio + movies | 1.3 widescreen Hor+ | 1.4 uncapped fps | 1.5 higher res + crisp HUD
+1.6   Modern enhancements, off by default (AO, shadows, fog, water, GI, emissive, smoke, sky) | 1.7 PC textures/meshes
+1.8   Linux / macOS | 2.0 byte-matching decomp (under way) | 3.0 ray tracing toggles (under PS2 postfx)
 ```
 
 ## Working reference (short; full version with every switch and tool: `docs/reference.md` "Working reference")

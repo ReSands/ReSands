@@ -100,7 +100,7 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
 - **VU1:** Killzone packages PCSX2's microVU ("KZVU", reused by SRWZ-native via `PS2X_VU1_KZVU=1`).
 - **Correctness tools:** NBA Street's `PS2X_VERIFY` (recompiled functions vs interpreter) and its fix list (SQRT.S ft, 64-bit branches, VRSQRT/VSQRT/VDIV, CVT.W.S, VCLIP, vf0; our SotC base already has SQRT.S and 64-bit branches); SRWZ/REO compare against PCSX2 via PINE.
 - Many projects state they were built with Claude Code or other AI agents.
-- **recomp.fyi** (checked 13 Oct 2026; ~1,944 projects, all platforms): 19 PS2 recomps not in the unbaked survey, READMEs in `game/analysis/recompfyi/readmes/` (3 repos gone). Most useful: **Waffle565/God-Of-War-Native-Port** (PS2Recomp fork, runtime on its `runtime` branch, GPL-3.0): replaces every hardware layer natively: VU1 microprograms AOT to C++, the game's 8 IRX modules AOT to C++ (boot 95 s -> 20 s), native sound engine driven by the game's LIBSD calls, FMV via libmpeg2 + that sound engine, native OpenGL render-target GS renderer (2x, 16:9, texture/CLUT store instead of a VRAM model), DMA packets handed straight to VU1/GS, 60 fps; read its `docs/native-port.md` and sound docs before our sound/IPU work. Also: nathanialf/ico-recomp, now **nathanialf/ico-pc** (MIT; rechecked 2 Nov 2026: became a full decomp compiled natively, own renderer `rd` records the game's GS register writes + VU1 chains and replays them on Vulkan/D3D12/GL; VU1 programs as shaders with C CPU oracles; no real-PS2 comparison, PCSX2-derived rows marked "to check" in `docs/port/DIVERGENCES.md`). Worth reading for: 1.1 widescreen (`VU1_PROGRAMS.md` "The region rule"/"The card test": triangles the VU1 region test drops on a wide frame; `TESTING.md` gate-b: centre columns of every aspect byte-equal to 4:3), 1.2 uncapped fps (`RENDER.md` "Camera blending", "Interpolation and presentation": draws paired by key/type/list/ordinal, bone slerp with turn memory, glow held per tick), blend precision (DIVERGENCES VD-7: float fixed-function LERP 1 level above the GS on ~50 % of channels, up to 5-6 accumulated; exact GS integers opt-in via destination read with a per-device self-test), 0.3 movies (`FMV.md`: Ittiam libmpeg2, Apache-2.0, PSS demux incl. Sony's SShd/SSbd audio header). Its sound is a software SPU2 (not our route). Do not read its `sce/` (its own rebuilt Sony libraries, said to be written from the shipped code; unverifiable, and we can derive the same libraries from our ELF); its `port/` code is fine as a reference. vs-sr-dev/pc-extermination (MIT `ps2kit`: Python GS/VU/IRX/PSS/ELF tools; meshes, skinned characters and rooms exported to glTF, a model for our offline mesh converter), Gui-Tora/dmc-recomp (PSS movies via FFmpeg HLE; found PS2Recomp's `sceGsSetDefDBuffDc` stub seeds disp[0]/draw FRAME with the Z-buffer address; check ours). King Kong (Xbox 360, Jade engine) port TekRantGaming/king-kong-recompiled: ReXGlue, emulated GPU, hooks at the GDI camera for FOV; not reusable code.
+- **recomp.fyi** (checked 13 Oct 2026; ~1,944 projects, all platforms): 19 PS2 recomps not in the unbaked survey, READMEs in `game/analysis/recompfyi/readmes/` (3 repos gone). Most useful: **Waffle565/God-Of-War-Native-Port** (PS2Recomp fork, runtime on its `runtime` branch, GPL-3.0): replaces every hardware layer natively: VU1 microprograms AOT to C++, the game's 8 IRX modules AOT to C++ (boot 95 s -> 20 s), native sound engine driven by the game's LIBSD calls, FMV via libmpeg2 + that sound engine, native OpenGL render-target GS renderer (2x, 16:9, texture/CLUT store instead of a VRAM model), DMA packets handed straight to VU1/GS, 60 fps; read its `docs/native-port.md` and sound docs before our sound/IPU work. Also: nathanialf/ico-recomp, now **nathanialf/ico-pc** (MIT; rechecked 2 Nov 2026: became a full decomp compiled natively, own renderer `rd` records the game's GS register writes + VU1 chains and replays them on Vulkan/D3D12/GL; VU1 programs as shaders with C CPU oracles; no real-PS2 comparison, PCSX2-derived rows marked "to check" in `docs/port/DIVERGENCES.md`). Worth reading for: 1.3 widescreen (`VU1_PROGRAMS.md` "The region rule"/"The card test": triangles the VU1 region test drops on a wide frame; `TESTING.md` gate-b: centre columns of every aspect byte-equal to 4:3), 1.4 uncapped fps (`RENDER.md` "Camera blending", "Interpolation and presentation": draws paired by key/type/list/ordinal, bone slerp with turn memory, glow held per tick), blend precision (DIVERGENCES VD-7: float fixed-function LERP 1 level above the GS on ~50 % of channels, up to 5-6 accumulated; exact GS integers opt-in via destination read with a per-device self-test), 0.4 movies (`FMV.md`: Ittiam libmpeg2, Apache-2.0, PSS demux incl. Sony's SShd/SSbd audio header). Its sound is a software SPU2 (not our route). Do not read its `sce/` (its own rebuilt Sony libraries, said to be written from the shipped code; unverifiable, and we can derive the same libraries from our ELF); its `port/` code is fine as a reference. vs-sr-dev/pc-extermination (MIT `ps2kit`: Python GS/VU/IRX/PSS/ELF tools; meshes, skinned characters and rooms exported to glTF, a model for our offline mesh converter), Gui-Tora/dmc-recomp (PSS movies via FFmpeg HLE; found PS2Recomp's `sceGsSetDefDBuffDc` stub seeds disp[0]/draw FRAME with the Z-buffer address; check ours). King Kong (Xbox 360, Jade engine) port TekRantGaming/king-kong-recompiled: ReXGlue, emulated GPU, hooks at the GDI camera for FOV; not reusable code.
 - **reSOT (FulGerNet/rePOP, checked 16 Oct 2026; MIT + LGPL-2.1 parts from xemu):** static recompilation of the **Xbox** SoT (E3 2003 demo ~60 fps, played to level 3; NTSC retail in bring-up) with xboxrecomp (x86 -> C). Rendering is emulated at the GPU boundary: the game's statically linked XDK D3D8 still writes NV2A pushbuffers, which the runtime executes on D3D11 (NV2A vertex programs -> HLSL, one pixel shader interpreting register combiners, 2x internal resolution). Sound on xemu's APU. Same engine, so its `docs/RECOMP.md` and per-target `target.h` are a source of Xbox addresses and Jade behaviour (useful for 1.4 cross-version assets), and its Hor+ projection/culling hooks a reference for 1.1.
   **Re-checked 30 Oct (v0.4.1):** its new "native" D3D12/Vulkan backends still translate NV2A pushbuffers (not the
   engine's calls), so the 22 Oct decision stands. Useful facts: Xbox retail's glow chain runs 640x480 down to 10x7 and
@@ -138,14 +138,14 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
     physics at a fixed 1/60 s per VBlank, PoP scales logic by real elapsed time (`TIM_Clock_Update`), so this fixes
     drift and crackle, not our "sound slows with the frame rate" bug by itself (that one is about where the sound
     engine's time comes from; measure first).
-  - **0.4 native memory card: crash-safe writes** (`native/memcard_store.hpp/.cpp` + fixture, ~100 lines). Write
+  - **0.5 native memory card: crash-safe writes** (`native/memcard_store.hpp/.cpp` + fixture, ~100 lines). Write
     `<card>.tmp`, flush to stable storage, rename over the card; a crash leaves the old or the new image, never half
-    of each. Its test simulates a crash half-way and before the rename. Cheap; worth taking even before 0.4 given the
+    of each. Its test simulates a crash half-way and before the rename. Cheap; worth taking even before 0.5 given the
     open combat freezes.
-  - **0.4 pad: SDL3 input layer** (`native/controls.*`, `pad_mapping.*`, `docs/INPUT-SDL3.md`, `docs/CONTROLS.md`).
+  - **0.5 pad: SDL3 input layer** (`native/controls.*`, `pad_mapping.*`, `docs/INPUT-SDL3.md`, `docs/CONTROLS.md`).
     Any controller mapped to the DualShock 2 layout, analog triggers with pressure, remapping, dead zones, fixtures.
     Reference for our pad work and the SDL rumble plan.
-  - **1.4 widescreen** (`docs/ULTRAWIDE-STUDY.md`, `ULTRAWIDE-NATIVE-STUDY.md`, `native/race_widescreen.*`,
+  - **1.3 widescreen** (`docs/ULTRAWIDE-STUDY.md`, `ULTRAWIDE-NATIVE-STUDY.md`, `native/race_widescreen.*`,
     `display_aspect.*`). Any aspect ratio (16:10 to 32:9): 3D widened Hor+/Vert+ inside the game's own projection,
     HUD kept centred at 16:9, menus/movies pillarboxed, internal resolution follows the output. Their list of what
     breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors, pixel-placed 2D) matches ours. Method worth
@@ -193,29 +193,29 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
   - **Recompiler: switchable patches** (`ps2xRecomp/src/lib/config_manager.cpp` ~164). `[[patches.conditional]]`
     (an instruction word compiled in both forms, chosen by a run-time flag) and `[[patches.hooks]]` (a host function
     run before or instead of one instruction, also flag-gated). Our overrides only work per function. This gives
-    mid-function patching for 1.2 (frame-rate fixes as toggles) and 1.1 (projection/culling words from the PCSX2 pnach,
+    mid-function patching for 1.4 (frame-rate fixes as toggles) and 1.3 (projection/culling words from the PCSX2 pnach,
     HUD vertex hooks). `direct_tail_calls = false` sends tail jumps through the dispatch table so an override reaches
     every caller (cf. our "self tail calls are internal jumps" rule).
-  - **1.2 frame-rate method (their 60 fps):** the PCSX2 "60 Fps" pnach became flag-gated patches, and every timer that ran double was
+  - **1.4 frame-rate method (their 60 fps):** the PCSX2 "60 Fps" pnach became flag-gated patches, and every timer that ran double was
     hunted down (roulette timer, HUD/menu animation, prompts). Tool: `counter_finder.cpp`
     (`GODHAND_FIND_COUNTERS=<fn>` takes three RAM snapshots 10 frames apart and lists every word that changed by the
     same step = the counter behind an on-screen animation). Cheap and useful for our 30 fps-assumption hunt.
-  - **1.1 widescreen HUD** (full plan, with the PCSX2 patch decoded against our ELF: `docs/widescreen.md`): `hud_layout.cpp` hooks the 2D drawers after their GS-coordinate conversion. HUD widget
+  - **1.3 widescreen HUD** (full plan, with the PCSX2 patch decoded against our ELF: `docs/widescreen.md`): `hud_layout.cpp` hooks the 2D drawers after their GS-coordinate conversion. HUD widget
     groups (found by caller return address) get an anchor from their x extent in the previous frame (a group narrower
     than 12% keeps its own centre; otherwise left/centre/right third). All other 2D (menus, text windows) is narrowed
-    to the middle 4:3. F6 logs every 2D primitive of one frame. Good model for PoP's HUD at 1.1.
-  - **1.3 post effects at higher resolution:** a blur/heat-haze option (PS2 resolution vs upscaled), and 1:1 copies
-    sampled exactly like the PS2 (else grid lines or edge bleed at 3x). The same traps await our haze/glow at 1.3.
+    to the middle 4:3. F6 logs every 2D primitive of one frame. Good model for PoP's HUD at 1.3.
+  - **1.5 post effects at higher resolution:** a blur/heat-haze option (PS2 resolution vs upscaled), and 1:1 copies
+    sampled exactly like the PS2 (else grid lines or edge bleed at 3x). The same traps await our haze/glow at 1.5.
   - **Button prompts** (`button_prompts.cpp`): the icon sheet is found by sha256 of the disc payload and redrawn with
     the bound key or Xbox letters, switching live between keyboard and pad. That covers the user's OpenJade complaint
-    (console icons, hard-coded WASD) for when we do input (0.4).
+    (console icons, hard-coded WASD) for when we do input (0.5).
   - **Mods at disc level** (`character_mods.cpp`): replacement files are written over the game's as the disc is read,
-    with the file table left unchanged (a changed size broke later files). Relevant to 1.5 if we ever swap whole files
+    with the file table left unchanged (a changed size broke later files). Relevant to 1.2/1.7 if we ever swap whole files
     rather than assets by key.
   - Also: `thread_policy.cpp` (host thread affinity/ideal cores by name; NVIDIA threaded-optimisation worker),
     `pc_sampler.cpp` (reads the guest pc without the scheduler's map: it once corrupted that map), a crash log with
     guest pc + function name, `logs/play_last.log` kept per session, an IPU emulator from the AC5 recomp (Apache-2.0,
-    `ps2xRuntime/src/lib/ipu/`; IPU emulation, so not our 0.3 route, though possibly a bitstream reference).
+    `ps2xRuntime/src/lib/ipu/`; IPU emulation, so not our 0.4 route, though possibly a bitstream reference).
 - **gow-native-pc (Vnnc1/gow-native-pc, GPL-3.0; read 26 Oct 2026 at its 25 Oct head).** A new repo (created 25 Oct),
   not one of the God of War projects already surveyed: it pins **YYOzcan/Tobiichi-Port @ 471c831** (which bundles
   ran-j + Waffle565 + KIexster) and adds 16 numbered runtime patches, a Qt launcher and an installer. Not our runtime
@@ -243,8 +243,24 @@ unbaked.games lists 178 PS2 games / 328 projects (116 with matching decomps, 66 
     `pop_profiler`). Their frame = one VU1 job (~14 ms) + ~3.5 ms of serial EE work (DMA wait, Flip); the lever they
     identified is letting frame N+1 start before FINISH, not faster VU1 code. More batching can be slower (merged
     batches left a fixed-function fast path).
-  - Placed by milestone (26 Oct): `docs/roadmap.md` (0.1, between 0.1 and 0.2, 1.2).
+  - Placed by milestone (26 Oct): `docs/roadmap.md` (0.1, between 0.1 and 0.2, 1.2; the 1.2 items moved to 1.0 on 5 Nov).
   - Not for us: launcher/installer, fan-translation handling, Waffle's GS batching commits (saturate the GPU queue).
+- **rac-rs (AsobiCodes/rac-rs, GPL-3.0-or-later; read 5 Nov 2026, README + CHANGELOG + docs/MODDING.md + file
+  tree only, no source).** Ratchet & Clank 1, static recomp in Rust with native graphics/sound/movies/input/saves;
+  Vulkan (DX12 optional on Windows; a vendored `wgpu-hal` suggests wgpu, unverified). Verification: test runs play
+  the same frames on both versions and compare game memory. Inspiration for roadmap 1.6 (modern enhancements): GI
+  (fires and shots as lights), AO, one sun per planet with sun shadows, volumetric fog + 3D clouds, stars, enhanced
+  water (reflections, ripples, caustics, foam, tides; ice told apart per planet), fire sprites + fire light,
+  volumetric smoke, fur, metal reflections, sun rays, frame smoothing, sharp HUD, FSR/DLSS 4.5, widescreen. **None of
+  the techniques are documented** (which AO/shadow/GI method, how water/fire/sky draws or light directions are found):
+  read the source when 1.6 starts (`rac-rs/src/engine/`: `render.rs`, `gfx.rs`, `shadowgeom.rs`, `dynlight.rs`,
+  `fire_option.rs`, `smoke_option.rs`, `metal_option.rs`, `splitview.rs`, `looks.rs`, `pcopts.rs`). Licence-compatible
+  with PS2Recomp (GPL-3.0). Design points taken into `docs/roadmap.md` (0.5 pad, 0.6 address caps, 1.0 shader cache,
+  1.1 launcher, 1.6): Classic/Enhanced umbrella with Off/Low/Medium/High rows + presets, measured speed-impact meter,
+  F10 split-screen original vs enhanced, effects the driver refuses switch themselves off, toggle round-trip state
+  leaks, shadow casters per area, widescreen culling (game checks only its own 4:3 view, v0.4.1), XInput + own
+  DualShock 4/DualSense on Windows, gilrs/evdev on Linux, `BOUNDARY_CAPS.txt` (counted game-address crossings, caps
+  only go down). Launcher in a separate repo (`AsobiCodes/rac-rs-launcher`, not read).
 - **To look into later (16 Oct 2026):** theclub654/ProjectCane, a native PC port (Windows/Linux) of Sly Cooper 1 (NTSC), rebuilt by reverse engineering; FFmpeg, shaders embedded at build time, a file extractor that reads the user's ISO. The README does not say how it renders models or handles sound, so read the code before step 5 (live native window) or the native sound mixer. **No licence named: read only, copy nothing.** Not Jade, so no format overlap. Also checked: lombyte-project/Lombyte (Ratchet & Clank matching decomp, GPL-3.0): not useful (matching-decomp route).
 
 ## Texture formats and the PC upgrade (12 Oct 2026)

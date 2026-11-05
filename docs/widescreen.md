@@ -1,6 +1,6 @@
-# Widescreen (roadmap 1.1; was 1.4 until 23 Oct): plan notes
+# Widescreen (roadmap 1.3; was 1.1 until 5 Nov, 1.4 until 23 Oct): plan notes
 
-Collected 23 Oct 2026 so the work can start from here when 1.1 comes up. Sources: our own attempt (16 Oct,
+Collected 23 Oct 2026 so the work can start from here when 1.3 comes up. Sources: our own attempt (16 Oct,
 `docs/history.md`), the PCSX2 widescreen patch for our disc, God Hand: Rearmed's any-aspect-ratio code (GPL-3.0,
 read at 4e63668; the user likes this approach), GT4Recomp (`docs/reference.md` "GT4Recomp"), rePOP's Xbox hooks.
 Nothing here has been built yet unless it says so.
@@ -36,7 +36,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
    replace=true` runs a host function instead of the `lui`/`ori` that loads the constant, and it sets `$at` to the computed
    float. The flag is read at run time, so 4:3 and wide are the same build (`ps2xSetPatchFlag("widescreen", wide)`).
    Their recompiler change: `ps2xRecomp/src/lib/config_manager.cpp` ~164 (+ the code generator). Porting this into
-   our PS2Recomp-sotc is the first job of 1.1; it also serves 1.2 (frame-rate fixes as toggles).
+   our PS2Recomp-sotc is the first job of 1.3; it also serves 1.4 (frame-rate fixes as toggles).
 3. **HUD anchoring** (`hud_layout.cpp`): hooks sit in every 2D drawer (God Hand: `Gp_draw_line/poly3/poly4/...`
    + sprite drawers + the glyph drawer), right after the vertices are converted to GS coordinates; the hook narrows the
    x of those vertices. Each HUD widget (player bar, radar, roulette, identified by the caller's return address or
@@ -55,7 +55,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
 
 ## How it maps onto PoP
 - **Our failed case (loading screen drawn once) fits point 4:** the 4:3 decision has to **latch** until the next
-  3D frame instead of being decided per frame from what was drawn. Same for movies: our native movie player (0.3)
+  3D frame instead of being decided per frame from what was drawn. Same for movies: our native movie player (0.4)
   knows when a movie is up, so pillarbox from that state, not from draw contents.
 - **Culling is the part God Hand did not need** (no culling code in Rearmed). PoP does: the pnach's "partial bb fix"
   shows objects popping at the edges. Leads (`FUN_0024D040` is the letterbox setter, not culling): the world->clip matrix at graphics object
@@ -67,7 +67,7 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
   in the new strips (only modelled for 4:3); GT4Recomp's list of what breaks (edge culling/LOD, shadow and reflection sizes, HUD anchors,
   pixel-placed 2D).
 - **The native renderer changes step 1:** once the world is native (0.2), it can draw the wider frame directly
-  instead of anamorphic 4:3, at the output resolution (1.3). Until then, with the emulated GS on, it is the same
+  instead of anamorphic 4:3, at the output resolution (1.5). Until then, with the emulated GS on, it is the same
   as God Hand: a 4:3 frame shown wide. The camera constant and the culling change are needed either way.
 - **PoP's 2D path still has to be found:** which functions draw the HUD (health/sand tanks, sword prompts), menus,
   subtitles and the loading-screen medallion, and where each converts to GS coordinates. A PoP version of their F6
@@ -76,8 +76,8 @@ Files: `src/godhand/widescreen.cpp` (124 lines), `src/godhand/hud_layout.cpp` (5
   original words; the meanings still need checking in Ghidra).
 
 ## Order when 1.1 starts (proposal)
-1. Port switchable instruction hooks into PS2Recomp-sotc (shared with 1.2, uncapped frame rate).
+1. Port switchable instruction hooks into PS2Recomp-sotc (shared with 1.4, uncapped frame rate).
 2. The pnach's gameplay + rfix constants as hooks computed from A; check the camera at 16:9 and 21:9.
 3. Culling: find the edge test (not 0x24D040: that is the letterbox), widen it with A; play through to find edge pop-in.
 4. 2D primitive log -> HUD groups and anchors; menus and loading screen latched to 4:3; movies pillarboxed.
-5. Cutscene framing check (CLAUDE.md roadmap 1.1).
+5. Cutscene framing check (CLAUDE.md roadmap 1.3).

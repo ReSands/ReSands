@@ -637,7 +637,7 @@ clamps dt to 1/30, 3 Normalize passes 0x409640, Collision 0x4094C0) plus a force
 (0x408440, 960 * dt). Boot of save 214828 (Prince on a rope in the cistern, R1 held, 31 shots 0.1 s apart) at 60 and
 at a real 30 fps (`POP_60FPS=0` now writes the ELF's 2 vsyncs per frame): rope shape, swing width and half-period
 look the same (`game/analysis/rope1104/pairs.png`, `rope_60_vs_30.gif`). No fix; the user's eye is the judge.
-Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.2): `CRope2D`, `GAO_ModifierRope_*`.
+Other Verlet/rope code to check for the same 30 fps assumption (roadmap 1.4): `CRope2D`, `GAO_ModifierRope_*`.
 
 ## Storage of captures (agreed with the user 24 Oct)
 

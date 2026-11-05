@@ -3,6 +3,11 @@
 Set by the user on 22 Oct 2026 (replaces the 15/16 Oct numbering); post-1.0 order revised 23 Oct; vibration and
 the clean-up placed on 25 Oct (DualShock 2 rumble -> 0.4, DualSense -> 1.7, clean-up = part of 1.0). Moved out of
 CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
+**Renumbered 5 Nov 2026 (user):** movie decoder split from 0.3 into 0.4, fully native -> 0.5, PAL/JP discs -> 0.6,
+public playtest at 0.7 (first publish of our code, was 1.0), launcher 1.1, PC audio + movies 1.2, widescreen 1.1 ->
+1.3, uncapped 1.2 -> 1.4, higher res 1.3 -> 1.5, modern graphical enhancements (new, after rac-rs) 1.6, PC
+textures/meshes 1.7, Linux/macOS 1.5 -> 1.8, ray tracing 1.6 -> 3.0; Xbox assets deprioritised, DualSense haptics
+off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
 
 ## 0.x: playable, then native part by part
 
@@ -28,8 +33,9 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   halos, light shafts, flashes) **-> 0.14 native HUD, menus, loading screens, movie display.** (User, 30 Oct: the
   full-screen fades move to 0.14: they are drawn in the 2D pass (+0xB8) and need the same post-effects 2D layer as the
   HUD; 0.13's flashes are the after-effects, Pinch first.) 0.13 closed 30 Oct night by the user's in-motion check; `-NativeLate` is the default.
-- **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the emulated GS output
-  of the same build (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats
+- **0.2 = fully native graphics:** GS emulation off by default, judged frame by frame against the original PS2 (the
+  real console via the hardware reference below; user, 5 Nov; the emulated GS output of the same build stays the
+  day-to-day check) (target: visually indistinguishable; bit-exact pixels are unrealistic because VU1 and host floats
   differ, so residual differences must be measured and explained). Plan and progress: `docs/gs_off.md`.
 - **Hardware reference (idea, user 25 Oct 2026; tool for 0.2, not investigated yet; groundwork: `docs/gs_off.md` "Step 4c plan"):** a real PS2 as ground truth for
   "is this original?" and as the true reference for `tools/livecmp.py`. Not whole save states (emulator snapshots
@@ -48,22 +54,44 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   I/O chipset, reportedly "Deckard", known game compatibility problems; no known GS rendering differences,
   unverified; late 9000x may need OpenTuna instead of FreeMcBoot). Readback stays on ethernet (user plans to buy a console, 26 Oct). First step: survey PS2 homebrew GS test tools (none found on 25 Oct beyond PCSX2's own
   dump replay), then try (a) on save 145139 (save point pop).
-- **0.3 = native sound + native PS2 movie decoder:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2
-  emulation); a **native decoder for the PS2 movie files** behind the game's own player (no IPU emulation; replaces
-  the 13 Oct plan to adapt ps2-web-recomp's IPU). Reference: GT4Recomp's frame pacing + audio rate control
-  (`docs/reference.md` "GT4Recomp"). GT3-revisited (MIT, read 1 Nov): an own MPEG-2/IPU decoder in ~1.5k lines
-  (`docs/movies.md` "Open question") and an SPU2 reverb + Gaussian/ADSR voice mixer as the native mixer's
-  reference (`docs/native_renderer.md` sound step 3).
-- **0.4 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer
+- **0.3 = native sound:** sound from the engine's DARE/UbiSound calls (no IOP/SPU2 emulation). Reference:
+  GT4Recomp's frame pacing + audio rate control (`docs/reference.md` "GT4Recomp"). GT3-revisited (MIT, read 1 Nov):
+  an SPU2 reverb + Gaussian/ADSR voice mixer as the native mixer's reference (`docs/native_renderer.md` sound step 3).
+- **0.4 = native PS2 movie decoder** behind the game's own player (no IPU emulation; replaces the 13 Oct plan to
+  adapt ps2-web-recomp's IPU). Reference: GT3-revisited's own MPEG-2/IPU decoder in ~1.5k lines (`docs/movies.md`
+  "Open question").
+- **0.5 = fully native,** incl. memory card, pad and rumble. References: GT4Recomp's crash-safe memory-card writer
   (cheap, could come earlier) and SDL3 pad layer (`docs/reference.md` "GT4Recomp").
-  **Faithful rumble (user, 18 Oct; placed in 0.4 on 25 Oct):** the game's DualShock 2 motor commands (small on/off,
-  large 0-255 via the pad library), ignored by the runtime today, passed through a portable library (SDL rumble:
-  DualSense, Xbox, ...).
+  **Memory card (user, 5 Nov):** the native card reads and writes PCSX2's plain 8 MB `.ps2` card image (raw pages
+  + ECC), so the same card works in PCSX2 and here; still native (the game's save bytes go straight into the
+  file, no emulated card controller). PCSX2's folder memory cards are not supported.
+  **Pad (user, 5 Nov):** XInput on Windows, so Xbox controllers work (a deliberate exception to the no-Windows-only-API
+  rule; the Linux/macOS alternative is decided at 1.8; rac-rs uses gilrs/evdev with SDL's controller database there).
+  XInput does not cover PlayStation pads (rac-rs adds DualShock 4/DualSense support of its own on Windows).
+  **Faithful rumble (user, 18 Oct; placed in 0.4 on 25 Oct, now 0.5):** the game's DualShock 2 motor commands (small
+  on/off, large 0-255 via the pad library), ignored by the runtime today, passed to the XInput motors.
+- **0.6 = PAL and JP discs** (user, 5 Nov; was "some time"; the user is buying both discs). Each is a different
+  ELF with different addresses; overrides hard-code retail US addresses. **From 5 Nov, new override code takes its
+  addresses from one table per disc**; existing hard-coded addresses are converted at 0.6. PAL also brings 50 Hz and
+  its language versions. Idea from rac-rs (`BOUNDARY_CAPS.txt` + `boundary_tests.rs`): a test counts the places our
+  code touches raw game addresses outside the table, with a cap that may only go down. rac-rs checked "every
+  PAL-to-USA memory address ... on all 19 planets" (its CHANGELOG v0.4.3).
+- **0.7 = public playtest** (user, 5 Nov; first publish moved here from 1.0): announce, publish our own code on the
+  1.0 terms below (no game data, users build from their own disc), and take bug reports from anyone who wants to
+  play-test.
 
-## 1.0: clean up and publish
+## 1.0: clean up, performance
 
-- **1.0 = cleaned up, human readable, GS reference toggle; publish.** Plays exactly like the original release, at
-  the original 30 fps.
+- **1.0 = cleaned up, human readable, GS reference toggle, performance optimised, simple 30/60 fps switch** (user,
+  5 Nov; 30 = the original release's rate). Otherwise plays exactly like the original.
+- **Performance (user, 5 Nov; all performance work waits until fully native, i.e. after 0.5).** Candidates borrowed
+  from gow-native-pc (`docs/reference.md` "gow-native-pc"; placed 26 Oct under uncapped fps): **"register locals"
+  code generation** (guest registers in C++ locals; -22 % game-thread time there; changes every generated function)
+  and **frame overlap** (start frame N+1 before the GS FINISH of frame N; their ~3.5 ms serial gap per frame),
+  designed on the native renderer's frame structure. Profile first. Not taken: their batched SPU2 mixer (0.3
+  replaces SPU2 emulation) and VU1 clean operands (native ports replace the emulated VU1 programs); revisit only if
+  a profile says otherwise. rac-rs: first start "pauses for about 8 seconds ... while shaders compile (once)": ship
+  a pipeline cache.
 - **Clean-up (user, 18 Oct; part of 1.0):** a final housekeeping pass over our own code (overrides, native renderer,
   tools, runtime patches; not the generated code) for human readability, possibly with a stronger model (e.g. Fable).
   Before it: write a short style guide (naming, file size, comment style, hook layout), with id Software's GPL Doom 3
@@ -79,14 +107,21 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   again within a frame or two after switching, since PoP re-uploads its textures each frame); a "comparison mode"
   setting keeps feeding it every frame for instant switching (costs the VU1 + GS work). Possibly a split-screen view.
   So Stage D step 16 means "GS emulation off by default", not removed.
-- **Publish at 1.0** (user, 15 Oct), as a base for the community; 1.1 onwards follow as updates. Publishing is
+- **Publish** (user, 15 Oct: at 1.0; moved to the 0.7 playtest on 5 Nov), as a base for the community; later
+  versions follow as updates. Publishing is
   limited to our own code (overrides, tools, runtime patches under their licences, PS2Recomp is GPL-3.0); users supply
   their own disc and build it. Never ship game data, generated code or prototype-derived material (GT4Recomp ships its
   translated code; we do not copy that, only its launcher/manifest ideas).
 
 ## 1.x: upgrades on top
 
-- **1.1 = widescreen (Hor+**, 4:3 stays the default): wider projection, widened game culling (findings from the PCSX2
+- **1.1 = launcher** (user, 5 Nov): a small settings launcher; at first only 30/60 fps and GS vs Vulkan rendering,
+  then it grows with each later version (widescreen, resolution, enhancements, asset sources). Reference: rac-rs's
+  separate launcher repo (`AsobiCodes/rac-rs-launcher`, not read yet: presets, profiles, backup before update).
+- **1.2 = audio and pre-rendered movies from the PC version** (user, 5 Nov; was part of 1.4), substituted by asset
+  key, optional (the PS2 disc alone stays complete). PC movies are probably Bink (unverified; FFmpeg's Bink decoder is
+  LGPL and portable). Xbox (highest movie bitrate, 5.1) deprioritised.
+- **1.3 = widescreen (Hor+**, 4:3 stays the default): wider projection, widened game culling (findings from the PCSX2
   widescreen patch; reSOT's Xbox projection/culling hooks as a reference), HUD anchored, movies/loading screen
   pillarboxed; check cutscene framing and edge pop-in by playing through. Plan: `docs/widescreen.md` (God Hand:
   Rearmed's method: constants computed from the aspect ratio via instruction hooks, HUD groups anchored, menus/loading
@@ -94,7 +129,7 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   (`docs/reference.md` "GT4Recomp"). ICO-pc (2 Nov, `docs/reference.md` "ico-pc"): VU1 region test drops edge
   triangles on a wide frame (its `VU1_PROGRAMS.md` "The region rule"; check whether PoP's VU1 programs do the same);
   its gate-b test (centre columns at every aspect byte-equal to 4:3) as our widescreen check.
-- **1.2 = uncapped frame rate** (30 and 60 stay available as caps). Basis: the engine is variable-timestep
+- **1.4 = uncapped frame rate** (30 and 60 stay available as caps). Basis: the engine is variable-timestep
   (`TIM_Clock_Update` scales logic by real elapsed time) and the PCSX2 one-word patch (`POP_60FPS=1`) already gives
   59.9 fps on the PC (16 Oct). Work: play-test at several rates (60, 120, 144+) for fixed-rate assumptions (physics,
   animation, sound, cutscenes, sand rewind, timers that count frames) and fix them; frame pacing. Saves to re-check
@@ -105,32 +140,40 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
   `docs/reference.md` "Renderer and DLSS notes") (estimate: needs only the native renderer's draw lists). Worked
   design for that fallback: ICO-pc's `RENDER.md` "Camera blending" / "Interpolation and presentation" (draws paired
   by key/type/list/ordinal, bone slerp with turn memory, unmoved scenery re-based on the blended camera, glow per tick).
-  Borrowed for 1.2 (from gow-native-pc, `docs/reference.md` "gow-native-pc"; placed 26 Oct): **"register locals" code generation** (guest registers in C++ locals; -22 % game-thread
-  time there; changes every generated function), earlier only if a fight profile shows the game thread limits fps;
-  **frame overlap** (start frame N+1 before the GS FINISH of frame N; their ~3.5 ms serial gap per frame), designed
-  on the native renderer's frame structure. Not taken: their batched SPU2 mixer (0.3 replaces SPU2 emulation) and
-  VU1 clean operands (native ports replace the emulated VU1 programs); revisit only if a profile says otherwise.
-- **1.3 = native higher resolution + crisp HUD.** Mostly render-target size once everything is native
+  Performance candidates placed here 26 Oct (register locals, frame overlap) moved to 1.0 on 5 Nov.
+- **1.5 = native higher resolution + crisp HUD.** Mostly render-target size once everything is native
   (2D/post-processing must scale too). HUD sprites drawn at output resolution, with upscaled or redrawn HUD textures.
-- **1.4 = assets from the PC and Xbox versions** (both owned by the user; GameCube dropped from the plan 23 Oct),
-  substituted by asset key (same keys on all platforms), in order: **textures, static meshes, skinned meshes,
-  audio/sound effects/music/voice, movies** (Xbox Bink: highest bitrate, 5.1). Mesh swaps go through the native
+- **1.6 = modern graphical enhancements** (user, 5 Nov, after rac-rs; `docs/reference.md` "rac-rs"). Rasterised,
+  no new assets, each its own toggle, **off by default** (the PS2 look stays the default) and drawn **before** the
+  PS2 post-processing so the haze stays on top. In order:
+  - **1.61 ambient occlusion (GTAO):** contact shading from the native renderer's depth (normals rebuilt from depth).
+  - **1.62 improved dynamic shadows:** scene-aware shadow maps in place of the crude overhead shadows (0.12), baked
+    environment shadows kept. The game probably has no usable sun direction: likely set by hand per level
+    (estimate). rac-rs: casters must be chosen per shadow area; texture-pack lamp posts cast "only a floating head".
+  - **1.63 fog and atmospheric scattering:** height fog, better distance fog, light shafts (the game already draws
+    its own light shafts, 0.13: decide enhance vs add when we get there).
+  - **1.64 reflective water and procedural waves:** water is already its own draw path (P6, 0.13).
+  - **1.65 global illumination:** screen-space or light probes (the ray-traced version is 3.0).
+  - **1.66 dynamic emissive lighting:** flickering light from fire and other glowing effects; candidates are the
+    particle/sprite draws (P9, 0.13).
+  - **1.67 volumetric smoke** generated around existing emitters.
+  - **1.68 procedural clouds and stars:** the sky draws are not identified yet.
+  Watch-outs: the lighting is largely baked into vertex colours, so AO/GI on top can darken corners twice (tune
+  each against the original). From rac-rs (CHANGELOG): a Classic/Enhanced umbrella with Off/Low/Medium/High rows and
+  presets, a measured speed-impact meter per row, a split-screen original vs enhanced view (we plan one for the GS
+  toggle anyway), effects that the driver refuses switch off instead of crashing, and state leaks when switching
+  back to Classic (fog stayed faded; water effects stayed off): test every toggle round trip.
+- **1.7 = more assets from the PC version: textures, static meshes, skinned meshes** (optional), substituted by
+  asset key (same keys on all platforms). Was 1.4 "PC and Xbox assets"; split 5 Nov (audio + movies -> 1.2), Xbox
+  deprioritised (user: PC copies are cheap and easy to buy; encourage people to buy the game). Mesh swaps go through the native
   renderer; they need a decoder for the Xbox/PC D3D vertex buffers, and skinned meshes only swap if the bone layout
   matches; collision is separate data, so visual swaps do not change gameplay. Unverified: whether Xbox/PC meshes are
   more detailed (compare vertex counts per geometry key first; Xbox may be the better source). A per-category selector
   (texture source, mesh source, ...). The PS2 disc alone must still give the full game.
-- **1.5 = Linux / macOS** (the portability rules in CLAUDE.md apply from now on, so this stays cheap).
-- **1.6 = ray tracing:** shadows on select objects, ambient occlusion, reflections, diffuse GI, modern atmospheric
-  effects, full path tracing. Each a separate toggle, drawn **before** the PS2 post-processing so the PS2 haze stays
-  on top (see the RTX Remix notes in `docs/reference.md` for one route).
-- **1.7 = DualSense haptics and adaptive triggers** (user, 18 Oct; placed at 1.7 on 25 Oct), optional, mapped to game
-  events, designed with Jellybit's DualSense Haptic Designer (MIT; https://github.com/Jellybit/DualSense-Haptic-Designer;
-  outputs 4-channel WAV for the grip motors and raw trigger bytes; full haptics need USB, Bluetooth only experimental).
-- **PAL and JP discs (some time):** each is a different ELF with different addresses; overrides hard-code retail US
-  addresses, so new code should take addresses from one table per disc. PAL also brings 50 Hz and its language
-  versions.
+- **1.8 = Linux / macOS** (was 1.5; the portability rules in CLAUDE.md apply from now on, so this stays cheap;
+  includes the pad layer that replaces XInput there).
 
-## 2.0: decomp for historical study (potential, user 25 Oct 2026; not investigated yet)
+## 2.0: byte-matching decomp for historical study (user 25 Oct 2026; under way since 27 Oct, DARE first)
 
 - **2.0 = a byte-matching decompilation alongside the recomp,** as a side quest for historical study. It does not
   clash with the recomp: a separate source tree (own folder or private repo) sharing the Ghidra project, the
@@ -215,9 +258,23 @@ CLAUDE.md on 25 Oct 2026; CLAUDE.md keeps the one-line-per-version table.
     decomps' notices first, possibly ask a lawyer. Until then the rule stays. The leaked-code rule is separate
     (provenance) and applies either way.
 
+## 3.0: ray tracing
+
+- **3.0 = ray tracing** (user, 5 Nov; was 1.6): shadows on select objects, ambient occlusion, reflections, diffuse GI, modern atmospheric
+  effects, full path tracing. Each a separate toggle, drawn **before** the PS2 post-processing so the PS2 haze stays
+  on top (see the RTX Remix notes in `docs/reference.md` for one route).
+
+## Some time (not on the roadmap)
+
+- **DualSense haptics and adaptive triggers** (user, 18 Oct; was 1.7, taken off the roadmap 5 Nov: less interest), optional, mapped to game
+  events, designed with Jellybit's DualSense Haptic Designer (MIT; https://github.com/Jellybit/DualSense-Haptic-Designer;
+  outputs 4-channel WAV for the grip motors and raw trigger bytes; full haptics need USB, Bluetooth only experimental).
+- **DLSS / FSR / XeSS** (dropped 23 Oct, was the old 1.3; back as "some time" 5 Nov, user: not urgent, low
+  interest). Dropped because these temporal upscalers and frame generation only work inside a 3D renderer (jittered
+  frames + depth + motion vectors, HUD drawn afterwards), not on finished 2D images; after 0.2 our renderer is native
+  with depth, so only motion vectors are missing. rac-rs ships FSR + DLSS 4.5 this way (`docs/reference.md`
+  "rac-rs"). Higher resolution itself comes from rendering natively at it (1.5).
+
 ## Dropped
 
-- **DLSS / FSR / XeSS (user, 23 Oct; was the old 1.3).** These temporal upscalers and frame generation only work
-  inside a 3D renderer (jittered frames + depth + motion vectors, HUD drawn afterwards), not on finished 2D images.
-  Higher resolution comes from rendering natively at it (1.3).
 - **GameCube assets (23 Oct).**

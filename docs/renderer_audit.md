@@ -172,7 +172,7 @@ the native renderer's own (see item 9); **fixed 27 Oct night** against GS-only f
 
 ## Migration work (not defects)
 
-14. The final picture is still the GS's, fixed 640x448 (`kWidth`/`kHeight`, fbw check): blocks 1.3 and ray tracing,
+14. The final picture is still the GS's, fixed 640x448 (`kWidth`/`kHeight`, fbw check): blocks 1.5 and ray tracing,
    as expected; `present()` + GPU post effects already exist for GS-off. HUD/2D/post must go native first.
 15. Lighting baked into vertex colours on the CPU (`pop_native_live.cpp:828-837`), no normals in `Vertex`, point
    lights ambient only. Fine for the baseline; for ray tracing, kept meshes with stable keys + world-space posed

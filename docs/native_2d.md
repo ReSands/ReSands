@@ -15,7 +15,7 @@ screen drawn once, the God Hand 2D primitive log).
 **Hook each 2D producer at its source** (STR glyph emitters FUN_0046A980 / FUN_0046AA80, FUN_004B4580 rectangles,
 the GFX bar geometry, the movie picture, whatever the survey adds) and take position, size, texture and colour as
 plain values; the original's GS packet building is skipped. No GIF parsing in the 2D path, so nothing PS2-shaped
-stays in the final product. Each draw carries its producer, which 1.1 (HUD anchoring) and 1.3 (crisp HUD at output
+stays in the final product. Each draw carries its producer, which 1.3 (HUD anchoring) and 1.5 (crisp HUD at output
 resolution) build on. Cost: one hook per producer: 4 new ones (survey below). Performance is not a factor: a few
 hundred quads per frame either way. Rejected: capturing the 2D code's GS packets (the P5 pattern), because it keeps a
 GS-format translation layer.
@@ -48,7 +48,7 @@ present, drawn only when visible); TransitionFade 0x19 x1; 0x1A x4.
 
 **Other projects:** nothing to reuse. OpenRatchet has no native HUD, menus or movies yet (stub, "Phase 17");
 ProjectCane's 2D code is not visible from its public pages (no licence, read only anyway). God Hand Rearmed's HUD
-anchoring is a 1.1 reference (`docs/widescreen.md`).
+anchoring is a 1.3 reference (`docs/widescreen.md`).
 
 **New saves (30 Oct evening, `game/analysis/saves1030b/`):** 192020 / 192024 title menu (a normal 3D frame: STR text
 kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading screen, 192106 a movie (letterboxed).
@@ -149,4 +149,4 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
 Boots needed: steps 2, 3, 4 (one short stnative job each, user asked first) and 5. Step 1 is offline.
 
 ## Not in 0.14
-Crisp HUD at output resolution (1.3), widescreen anchoring (1.1), movie sound / the rest of 0.3, performance.
+Crisp HUD at output resolution (1.5), widescreen anchoring (1.3), movie sound / the rest of 0.3-0.4, performance.
