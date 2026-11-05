@@ -1,4 +1,4 @@
-From 82744a7af5e847ea4523a2258cc1cb759ff53ede Mon Sep 17 00:00:00 2001
+From b6f6eaadedbfb0214c8d69c13be3fefb3bf34cab Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Thu, 5 Nov 2026 21:22:52 +0000
 Subject: [PATCH] input: pads through SDL3, DualShock 2 rumble from
@@ -21,7 +21,7 @@ Claude-Session: https://claude.ai/code/session_012y1nSfv93fXvHwE3EdxcbN
  7 files changed, 192 insertions(+), 14 deletions(-)
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 1fc621f..bafd7b4 100644
+index e7842d0..dc6c307 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -239,6 +239,19 @@ else()
@@ -80,7 +80,7 @@ index a681c7c..3e9d84c 100644
      }
  
 diff --git a/ps2xRuntime/src/lib/ps2_host_input.cpp b/ps2xRuntime/src/lib/ps2_host_input.cpp
-index 0715da3..32d29fe 100644
+index 416b7e6..bdd3f31 100644
 --- a/ps2xRuntime/src/lib/ps2_host_input.cpp
 +++ b/ps2xRuntime/src/lib/ps2_host_input.cpp
 @@ -17,6 +17,10 @@
@@ -310,22 +310,22 @@ index 0715da3..32d29fe 100644
      {
          g_mouseStickEnabled.store(enabled, std::memory_order_relaxed);
 diff --git a/ps2xRuntime/src/lib/ps2_host_input.h b/ps2xRuntime/src/lib/ps2_host_input.h
-index 9fdc3b1..c6b7f47 100644
+index 5ffe21b..14cca72 100644
 --- a/ps2xRuntime/src/lib/ps2_host_input.h
 +++ b/ps2xRuntime/src/lib/ps2_host_input.h
-@@ -12,5 +12,7 @@ namespace ps2_host_input
-     void setFieldCounter(const std::atomic<uint64_t> *counter);
-     void sample();
-     void releaseMouse();
+@@ -16,5 +16,7 @@ namespace ps2_host_input
+     // lock hides it on its own.
+     void updatePointer(bool hide);
+     void setPointerNeeded(bool needed);
 +    void setRumble(uint32_t port, uint8_t small, uint8_t large); // any thread; applied by sample()
 +    void shutdown();                                              // main thread, after the game thread stopped
      [[nodiscard]] ps2x::iop::PadInputState padState(uint32_t port);
  }
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 6fce9a1..c3c478b 100644
+index 0fbbfec..7944822 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
-@@ -2780,6 +2780,7 @@ void PS2Runtime::run()
+@@ -3055,6 +3055,7 @@ void PS2Runtime::run()
          UnloadTexture(frameTex);
      GSSharedPresent::ShutdownHost();
      ps2_host_input::releaseMouse();
@@ -334,7 +334,7 @@ index 6fce9a1..c3c478b 100644
  
      RUNTIME_LOG("[run] exiting loop");
 diff --git a/ps2xRuntime/src/lib/ps2_save_state.cpp b/ps2xRuntime/src/lib/ps2_save_state.cpp
-index 01e9eae..069ceac 100644
+index d82d05f..77ea0cb 100644
 --- a/ps2xRuntime/src/lib/ps2_save_state.cpp
 +++ b/ps2xRuntime/src/lib/ps2_save_state.cpp
 @@ -8,6 +8,7 @@
@@ -345,7 +345,7 @@ index 01e9eae..069ceac 100644
  
  #include <atomic>
  #include <chrono>
-@@ -755,6 +756,9 @@ bool EeScheduler::serviceStateRequests()
+@@ -756,6 +757,9 @@ bool EeScheduler::serviceStateRequests()
          return true;
      }
      publishSnapshotNow();
@@ -356,5 +356,5 @@ index 01e9eae..069ceac 100644
      return true;
  }
 -- 
-2.54.0 (Apple Git-157)
+2.55.0.windows.5
 
