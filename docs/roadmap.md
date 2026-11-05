@@ -68,11 +68,18 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
   **Memory card (user, 5 Nov):** the native card reads and writes PCSX2's plain 8 MB `.ps2` card image (raw pages
   + ECC), so the same card works in PCSX2 and here; still native (the game's save bytes go straight into the
   file, no emulated card controller). PCSX2's folder memory cards are not supported.
-  **Pad (user, 5 Nov):** XInput on Windows, so Xbox controllers work (a deliberate exception to the no-Windows-only-API
-  rule; the Linux/macOS alternative is decided at 1.8; rac-rs uses gilrs/evdev with SDL's controller database there).
-  XInput does not cover PlayStation pads (rac-rs adds DualShock 4/DualSense support of its own on Windows).
+  **Card storage (user, 5 Nov evening):** one `.ps2` image for all saves (no per-save files or readable save
+  names: PCSX2 compatibility wins), kept in the user's folder, not beside the game: Windows
+  `%USERPROFILE%\Saved Games\PoP Recomp\`, macOS `~/Library/Application Support/`, Linux `~/.local/share/`;
+  path override allowed. Today's runtime writes loose files to `mc0/` beside the ELF (`Kernel/Stubs/MemoryCard.cpp`):
+  the plan keeps those stubs and swaps their storage for a PS2 card file system (superblock, FAT, dirs, ECC; refs:
+  PCSX2 GPL-3, ps2sdk mcman AFL), crash-safe write (tmp + flush + rename).
+  **Pad (user, 5 Nov evening; replaces the morning's XInput choice):** SDL3 (zlib) on every platform: Xbox,
+  DualShock 4/DualSense, Switch Pro and generic pads via its controller database, rumble on all of them, so no
+  Windows-only exception and no separate 1.8 pad layer. Replaces raylib's gamepad read in `Kernel/Stubs/Pad.cpp`.
+  Reference: GT4Recomp's SDL3 layer (MIT).
   **Faithful rumble (user, 18 Oct; placed in 0.4 on 25 Oct, now 0.5):** the game's DualShock 2 motor commands (small
-  on/off, large 0-255 via the pad library), ignored by the runtime today, passed to the XInput motors.
+  on/off, large 0-255 via the pad library), ignored by the runtime today, passed to the pad's motors via SDL3 (large -> low-frequency, small -> high-frequency).
 - **0.6 = PAL and JP discs** (user, 5 Nov; was "some time"; the user is buying both discs). Each is a different
   ELF with different addresses; overrides hard-code retail US addresses. **From 5 Nov, new override code takes its
   addresses from one table per disc**; existing hard-coded addresses are converted at 0.6. PAL also brings 50 Hz and
@@ -177,7 +184,7 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
   more detailed (compare vertex counts per geometry key first; Xbox may be the better source). A per-category selector
   (texture source, mesh source, ...). The PS2 disc alone must still give the full game.
 - **1.8 = Linux / macOS** (was 1.5; the portability rules in CLAUDE.md apply from now on, so this stays cheap;
-  includes the pad layer that replaces XInput there).
+  the pad already works there via SDL3 from 0.5).
 
 ## 2.0: byte-matching decomp for historical study (user 25 Oct 2026; under way since 27 Oct, DARE first)
 

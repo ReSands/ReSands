@@ -36,8 +36,7 @@ for Xbox addresses and Hor+ hooks.
   problem (`docs/ps2_projects.md`); general learnings to `docs/lessons.md`; one dated job script per night; optimise
   biggest win first. Shut the PC down after overnight work. The user gathers saves and does milestone checks; I work
   offline.
-- New native code stays portable: Vulkan within MoltenVK's base path, SDL-class libs, no Windows-only APIs (one
-  exception, user 5 Nov: XInput for the 0.5 pad; Linux/macOS pad at 1.8), x86
+- New native code stays portable: Vulkan within MoltenVK's base path, SDL-class libs (SDL3 for the pad), no Windows-only APIs, x86
   fast paths only with a portable fallback, AOT SPIR-V (`docs/reference.md` "Portability principle").
 
 ## Current status (1 Nov 2026; start here)
@@ -57,7 +56,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile the DARE decomp runs overnight.
 - **5 Nov:** 0.4 closed with FFmpeg (decoder native since 16 Oct; `docs/roadmap.md` 0.4). Next candidate while
-  waiting for the PS2 and DARE: 0.5's independent parts (memory card `.ps2` image, XInput pad, rumble).
+  waiting for the PS2 and DARE: 0.5's independent parts (memory card `.ps2` image, SDL3 pad, rumble).
 - **4 Nov:** rope bridges fixed at any frame rate (fixed 1/30 s steps + extrapolation; user-checked), ropes look
   the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.4 re-check list in roadmap).
 - **0.1:** crash 1 closed 30 Oct (3b80b66). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
@@ -78,7 +77,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 0.14  Native HUD, menus, loading screens, movie display
 0.2   Fully native graphics: GS off by default, judged frame by frame against the real PS2
 0.3   Native sound (DARE/UbiSound, no IOP/SPU2) | 0.4 native PS2 movie decoder (no IPU; closed 5 Nov, FFmpeg)
-0.5   Fully native: memory card (PCSX2 .ps2 image compatible), pad via XInput, faithful DualShock 2 rumble
+0.5   Fully native: memory card (PCSX2 .ps2 image compatible), pad via SDL3, faithful DualShock 2 rumble
 0.6   PAL / JP discs (address table per disc; new code uses it now) | 0.7 public playtest (publish own code)
 1.0   Clean-up, GS reference toggle, 30/60 switch, performance
 1.1   Launcher | 1.2 PC audio + movies | 1.3 widescreen Hor+ | 1.4 uncapped fps | 1.5 higher res + crisp HUD
