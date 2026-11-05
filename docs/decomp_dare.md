@@ -6,8 +6,11 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (1 Nov evening; start here)
 
-- **209 of 669 matched** (4 Nov, after run 11). Run 11 stopped 4 Nov ~18:05 (user). Next: the fixes listed under
-  "Run 11" below, then the shortcut again. Still open from earlier: 2 header requests from run 6 (16b800
+- **212 of 669 matched** (5 Nov, after run 12). Run 12 stopped 5 Nov 18:54 (user). Every function up to 104
+  instructions has now been tried; the 78 untried are 107-810 (median 156), where run 12's pass rate (4% at
+  59-104) says Qwen alone will not get far. Next: a hand pass on the near misses and the header requests (runs 11
+  and 12, below) before more Qwen time; then decide between reopening misses with fixes and the big functions.
+  Still open from earlier: 2 header requests from run 6 (16b800
   `GetHwModuleId` static?, 18b640 `CRenderer::ASyncLoadResBinary` 3 vs 4 arguments) and the 1-3 instruction misses
   (18d3c0 1 off; 18f040, 186dc0, 16b180, 183080 3 off) for a hand pass.
 - **Morning check (when the user asks for progress):** on the PC, `python -I tools\decomp\qwen_match.py --summary`
@@ -282,6 +285,27 @@ the compiler check: `docs/roadmap.md` "2.0".
     `eFmt`, `lNumberOfElementsOpt`; pointer-to-member conversions). Not a new pattern.
   - **Nearest misses (hand pass):** 18f080 `CASyncBankLoader::OpenBank` 2 off (48 of 49 in the summary),
     1821c0 `SND_fn_vStopSxdWave` 4 off, 182e40 `SND_fn_vResetTimer` 5 off, 15a780 `IsAssoDynamic` 6 off.
+  Folders copied to `game/analysis/qwen_pc/`.
+
+- **Run 12 (4 Nov 21:49 - 5 Nov 18:54, stopped by me at the user's request): 3 of 70 matched (4%)**, 9 NEEDS
+  HEADER CHANGE, 58 misses; ~15 min per function. Now **212 of 669** (29 need a header change, 350 tried without a
+  match, 78 untried). The queue had moved on to untried functions of 59-104 instructions (median 80; run 11's were
+  mostly under 50) and only one same-size: the drop is size, not a regression. 187 of 489 rounds did not compile.
+  - **Passed:** 18c0c0 `SndManager::UpdateTrackVolumes`, 1912c0 `CAsyncTransfer::SynchroTransfer` (round 1),
+    18ee40 `CASyncBankLoader::Synchro` (104 instructions, round 2).
+  - **The mfc0 rule works:** 160680 `SND_fn_rGetRandomSnd` compiled in every round once it used
+    `SND_fn_ulGetCount()` (rounds 7-10), best 4 off; it still wasted rounds 1-6 on its own spellings first.
+  - **Header requests (unchecked):** 1975c0 `TAdpcm` ctor (2-argument `SND_fn_pvMallocSnd` again: ruled out 4 Nov),
+    180f00 (`_SoundParam::Freq` as a pointer), 158e00 (`_SND_tdstTypeObjectSoundInfo` missing, as 158580 in run 11),
+    18dd80 and 18db80 (`_tdstMemoryCluster` member types; `_tdstSoundMemoryAllocatorCluster` size 12 not 8),
+    191f80 (`std` namespace), 196540 (`SND_fn_vFreeSnd` return type), 169b40 (placement `CRenderer::operator new`),
+    173640 (`_tdstMTTChannelElement` missing `stMTTrackVolume`). 158e00 + run 11's 158580 and 18dd80 + 18db80 +
+    run 11's 18e780 are two repeat themes worth checking first.
+  - **Nearest misses (hand pass):** 15b040 `KillAndDestroyAsso` and 183a00 `fn_bGeneratePath` 1 off; 17f5c0
+    `SND_fn_rDopplerPitch` and 17c180 `SND_fn_hASyncLoadResBinarySnd` 3 off; 16d280 `TMultiTrack` ctor 4 off,
+    160680 4 off.
+  - **Far misses:** 158e00 (7 of 80), 188e80 (8 of 89), 180f00 (13), 191100 (14), 181040, 190100, 17e500, 17e000
+    (24-28).
   Folders copied to `game/analysis/qwen_pc/`.
 
 ## Fixes after run 1 (all done 28 Oct night)
