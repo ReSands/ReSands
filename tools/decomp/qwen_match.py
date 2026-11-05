@@ -85,6 +85,13 @@ Original local variable names: {locals}
   - Locking with a call to (file string, line number) between = EnterCriticalSectionTool_(); MouchardThreadTool(
     __FILE__, <line>); ... QuitCriticalSectionTool(); (the SND_fn_v...ThreadSnd functions the same way).
   - Assigning a number to an enum member or variable needs a cast to the enum type: m_eState = (_SND_tdeState)0.
+  - Two tests that lead to the same return, with a `b` over the second return or the second test inverted (`bne`
+    where you have `beq`) = one condition with ||: `if (a == 0 || a == -2) return;` (separate ifs compile
+    differently).
+  - `sltu v0,zero,v0` then `xori v0,v0,1` with no `andi v0,v0,0xff` after it = `(x != 0) ^ 1`: `!x` and `x == 0`
+    add the andi (a bool converted to int).
+  - A value returned on one path only through a branch delay slot (`lui v0,0xffff` = -0x10000 = -1.0 in 16.16
+    fixed point) is a return value: SND real numbers are 16.16 fixed point.
   - slt / slti / sltu / sltiu: the first two are signed compares, the last two unsigned: make the compared
     variables int or unsigned to match (a mismatch here is a type, not a logic, difference).
 - Write the complete file in ONE ```cpp code block.
@@ -166,6 +173,9 @@ def cpp_name(m):
             cls = '%s<%s>' % (t, ', '.join(a('') for a in demangle_params(args.rstrip('>').replace(',', ''))))
         except (IndexError, ValueError):
             pass
+    if cls:  # operators, constructors and destructors by their C++ spelling (5 Nov: Qwen read CPath::__nw as missing)
+        short = cls.split('<')[0].split('::')[-1]
+        base = {'__nw': 'operator new', '__dl': 'operator delete', '__ct': short, '__dt': '~' + short}.get(base, base)
     return '%s::%s' % (cls, base) if cls else base
 
 
@@ -233,12 +243,22 @@ def callee_names():
     # callees.tsv (dare_callees.py): retail call target -> POP1 name, kept only when it outvotes all other names
     p = os.path.join(DARE, 'callees.tsv')
     rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
-    return {int(a, 16): n for a, n, v, other in rows if int(v) > int(other) and int(a, 16) not in WRONG_NAMES}
+    names = {int(a, 16): n for a, n, v, other in rows if int(v) > int(other) and int(a, 16) not in WRONG_NAMES}
+    # a DARE function's own retail address (units.tsv) beats a vote (5 Nov: 2 of 87 one-vote names disagreed)
+    names.update(EXTRA_NAMES)
+    names.update((int(f[3], 16), f[1]) for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+                 if f[3] != '-')
+    return names
 
 
 # one-vote callee names the prototype contradicts (game/ghidra/headless_dare_names_1vote.log "Differs", 29 Oct)
 WRONG_NAMES = {0x15f240, 0x160b40, 0x1613c0, 0x162940, 0x164a40, 0x16a840, 0x1733c0, 0x17c540, 0x180600, 0x180680,
                0x180740, 0x182e40, 0x183780, 0x184180, 0x18acc0, 0x18bd40}
+
+
+# call targets named by hand (5 Nov): 0x161880 = j SND_fn_pvMallocSnd like the other operator new stubs, between
+# CTool.cpp and CSource.cpp, called with sizeof(RPS2) before the RPS2 constructor
+EXTRA_NAMES = {0x161880: '__nw__9CRendererFUi'}
 
 
 def name_callees(asm, ghidra):
@@ -263,10 +283,20 @@ def annotate(asm, ghidra, addr, size):
     p = os.path.join(DARE, 'globals.tsv')
     rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
     gl = {int(a, 16): (n, int(sz)) for a, n, sz, v, other in rows if int(v) > int(other)}
+    # an address inside a named object (its base from any name+0xK): name+offset (5 Nov: gs_listMemoryCluster
+    # was named only at +0x8, so its +0 head pointer showed as a raw address)
+    bases = {a - int(n.split('+')[1], 0): (n.split('+')[0], sz) for a, (n, sz) in gl.items() if '+' in n}
+    bases.update((a, (n, sz)) for a, (n, sz) in gl.items() if '+' not in n)
+
+    def inside(t):
+        b = max((a for a in bases if a <= t < a + bases[a][1]), default=None)
+        return None if b is None else (bases[b][0] + ('+0x%x' % (t - b) if t > b else ''), bases[b][1])
     elf = open(match.ELF, 'rb').read()
     word = lambda a: struct.unpack_from('<I', elf, a - 0x100000 + 0x100)[0]
     notes, used = {}, {}
     for ia, t in data_refs(word, addr, size):
+        if t not in gl and inside(t):
+            gl[t] = inside(t)
         if t in gl:
             note, desc = global_note(gl[t][0], t, gl[t][1], elf)
             notes[ia] = note
@@ -327,6 +357,39 @@ def examples(file, addr):
             '\n\n'.join(out) + '\n```\n\n') if out else ''
 
 
+def statics():
+    # statics.tsv (dare_header.py): file statics with their DWARF declarations
+    p = os.path.join(DARE, 'statics.tsv')
+    return dict(l.rstrip('\n').split('\t') for l in open(p)) if os.path.exists(p) else {}
+
+
+def virtual_notes(asm, header):
+    # lw R,0(obj); lw R,OFF(R); ... jalr R = a virtual call: name the methods at that slot in the classes the excerpt
+    # shows (5 Nov: 162240 and 168dc0 called the wrong slot's method, Qwen counts slots by hand)
+    p = os.path.join(DARE, 'vtables.tsv')
+    if not os.path.exists(p):
+        return asm
+    vt = {}
+    for c, i, m in (l.rstrip('\n').split('\t') for l in open(p)):
+        vt.setdefault(int(i), []).append((c, m))
+    shown = set(re.findall(r'^(?:template <[^>]*> )?struct (\w+)', header, re.M))
+    L = asm.splitlines()
+    for k, line in enumerate(L):
+        m = re.match(r'([0-9a-f]{8})  lw (\w+),(0x[0-9a-f]+|\d+)\((\w+)\)', line)
+        if not m or m.group(2) != m.group(4) or not any(re.search(r' lw %s,0x0\(' % m.group(2), x) for x in L[max(0, k - 3):k]) or \
+                not any(re.search(r'jalr %s\b' % m.group(2), x) for x in L[k + 1:k + 4]):
+            continue
+        slot = (int(m.group(3), 0) - 8) // 4
+        by = {}
+        for c, mm in vt.get(slot, []):
+            if c in shown and mm != '?':
+                by.setdefault(cpp_name(mm).split('::')[-1], []).append(c)
+        if by:
+            L[k] += '   ; = virtual slot %d: %s' % (slot, '; '.join('%s (%s)' % (n, ', '.join(cs[:4]) + (', ...' if len(cs) > 4 else ''))
+                                                          for n, cs in sorted(by.items())))
+    return '\n'.join(L)
+
+
 def prompt(mangled, addr, size, file):
     proto = next((l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'protos.tsv'))
                   if l.split('\t')[0] == mangled), [mangled, file, '?', '', ''])
@@ -334,11 +397,15 @@ def prompt(mangled, addr, size, file):
     ghidra = open(os.path.join(DARE, 'ghidra_c', '%08x.c' % addr)).read().strip()
     asm, ghidra, callees = name_callees(asm, ghidra)
     asm, ghidra, used = annotate(asm, ghidra, addr, size)
-    header, cls = header_for(mangled, ' '.join(proto[2:]), asm + ' ' + callees + ' ' + ' '.join(used), ghidra)
+    st = statics()
+    header, cls = header_for(mangled, ' '.join(proto[2:]), asm + ' ' + callees + ' ' + ' '.join(used) + ' ' +
+                             ' '.join(st[n] for n in used if n in st), ghidra)
     globs = '\n'.join('- %s (%d bytes)' % (desc, sz) if desc else
                       '- %s (%d bytes; %s)' % (n, sz, 'declared in dare.h' if re.search(r'\b%s\b' % n, header)
+                                              else 'a file static, not in dare.h: write `extern %s;`' % st[n] if n in st
                                               else 'not in dare.h: declare it yourself')
                       for n, (sz, desc) in sorted(used.items())) or 'none'
+    asm = virtual_notes(asm, header)
     how = 'as %s::<name>' % cpp_name(mangled).rsplit('::', 1)[0] if cls else 'a C function: dare.h declares it extern "C"'
     return TASK.format(name=mangled, size=size, addr=addr, file=file, decl=proto[2], params=proto[3] or 'none',
                        locals=(proto[4] if len(proto) > 4 else '') or 'none', asm=asm, ghidra=ghidra,
@@ -408,12 +475,37 @@ def attempt(url, messages, att, tag, check, say, out):
     return res
 
 
+def best_diffs(path):
+    # differing instructions of a function's best attempt so far (None = no compiling attempt)
+    att = os.path.join(path, 'attempts')
+    ds = [match_diffs(open(os.path.join(att, f)).read()) for f in os.listdir(att) if f.endswith('.report.txt')] \
+        if os.path.isdir(att) else []
+    ds = [d for d in ds if d is not None]
+    return min(ds) if ds else None
+
+
+def match_diffs(report):
+    if report.startswith('MATCH'):
+        return 0
+    m = re.match(r'(\d+) of \d+ instructions differ', report)
+    return int(m.group(1)) if m else None
+
+
+PERMUTE_FIRST = 10  # permute.py's lane takes misses this close before Qwen gets them again
+
+
 def queue():
-    # functions not yet PASS / HEADER: RETRY-marked first (reopened after a header or prompt fix), then untried, then the same-size ones (most likely to match POP1's layouts), smallest first
+    # functions not yet PASS / HEADER: RETRY-marked first (reopened after a header or prompt fix; closest miss
+    # first), then untried, then the same-size ones (most likely to match POP1's layouts), smallest first.
+    # A miss within PERMUTE_FIRST instructions that the permuter has not had yet is left to it (5 Nov).
     rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
     at = lambda r, f: os.path.exists(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16), f))
-    rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (not at(r, 'RETRY'), at(r, 'attempts'), r[5] != '1', int(r[4]), r[3]))
-    done = lambda r: at(r, 'PASS') or at(r, 'HEADER')
+    gap = {r[3]: best_diffs(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16))) for r in rows if r[3] != '-'}
+    rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (
+        not at(r, 'RETRY'), gap[r[3]] if at(r, 'RETRY') and gap[r[3]] is not None else 10 ** 6,
+        at(r, 'attempts'), r[5] != '1', int(r[4]), r[3]))
+    done = lambda r: at(r, 'PASS') or at(r, 'HEADER') or (
+        gap[r[3]] is not None and gap[r[3]] <= PERMUTE_FIRST and not at(r, 'PERMUTED'))
     return [r[3] for r in rows if not done(r)]
 
 
@@ -439,6 +531,25 @@ def summary():
         print('  near miss: %d of %d instructions  %s' % (best, n, name))
 
 
+def rejudge():
+    # every PASS's best.cpp against the current dare.h (after a header change): prints the ones that no longer match
+    elf, bad, n = open(match.ELF, 'rb').read(), [], 0
+    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+             if f[3] != '-'}
+    for d in sorted(os.listdir(QWEN)):
+        p = os.path.join(QWEN, d)
+        if not d.startswith('dare_') or not os.path.exists(os.path.join(p, 'PASS')) or int(d[5:], 16) not in units:
+            continue
+        u = units[int(d[5:], 16)]
+        ok, _n, text = judge(os.path.join(p, 'best.cpp'), u[1], int(u[3], 16), int(u[4]), elf)
+        n += 1
+        if not ok:
+            bad.append(d)
+            print('%s %s: %s' % (d, u[1], text.splitlines()[0][:120]))
+    print('%d of %d PASS still match' % (n - len(bad), n))
+    return 1 if bad else 0
+
+
 def selftest():
     c = cpp_name('RemoveHead__55sndCList<P18_tdstMemoryCluster,RCP18_tdstMemoryCluster>Fv')
     assert c.startswith('sndCList<_tdstMemoryCluster *, ') and c.endswith('>::RemoveHead') and '18' not in c, c
@@ -447,6 +558,7 @@ def selftest():
     assert cpp_name('RemoveHead__71sndCList<Q213CThemeChannel11_stPartInfo,Q213CThemeChannel11_stPartInfo>Fv') == \
         'sndCList<CThemeChannel::_stPartInfo, CThemeChannel::_stPartInfo>::RemoveHead', 'NESTED type keeps its class'
     assert cpp_name('SND_fn_bInitSourceMemoryModule__Fv') == 'SND_fn_bInitSourceMemoryModule'
+    assert cpp_name('__nw__5CPathFUi') == 'CPath::operator new' and cpp_name('__dt__4RPS2Fv') == 'RPS2::~RPS2'
     assert cpp_name('gs_CallBackRequestList__10SndManager') == 'SndManager::gs_CallBackRequestList'
     assert 'static local clock of SND_ClockNative::GetInstance()' == \
         global_note('clock$localstatic3$GetInstance__15SND_ClockNativeFv', 0, 4, b'')[0]
@@ -489,6 +601,8 @@ def main(argv):
     if argv[0] == '--selftest':
         selftest()
         return 0
+    if argv[0] == '--rejudge':
+        return rejudge()
     if argv[0] == '--summary':
         summary()
         return 0

@@ -4,7 +4,7 @@
 # functions pick the name. Columns: retail addr (hex), mangled name, votes, votes for other names.
 # globals.tsv: the same for absolute data addresses (lui rX,hi then a load/store/addiu off rX: DARE is built
 # with -sdatathreshold 0, so every global is reached this way); name = POP1 data symbol [+offset], its size.
-import sys, os, struct
+import difflib, sys, os, struct
 from collections import Counter, defaultdict
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dare_header import symbols
@@ -62,26 +62,48 @@ def main(pop1, retail_elf, units, out, out_globals=None):
         return None, 0
     votes, skipped = defaultdict(Counter), 0
     gvotes, gsize = defaultdict(Counter), {}
+    pairs = []  # (retail addr, size, POP1 addr, size) of every DARE function in both
     for line in open(units):
         f = line.rstrip('\n').split('\t')
-        if f[3] == '-' or f[1] not in funcs:
-            continue
-        ra, rs = int(f[3], 16), int(f[4])
-        pa, ps = funcs[f[1]]
+        if f[3] != '-' and f[1] in funcs:
+            pairs.append((int(f[3], 16), int(f[4])) + funcs[f[1]])
+
+    def gname(y):
+        n, sz = obj_name(y)
+        if n:
+            gsize[n.split('+')[0]] = sz
+        return n
+    for ra, rs, pa, ps in pairs:
         a, b = jals(rword, ra, rs), jals(pword, pa, ps)
         if len(a) != len(b):
             skipped += 1
-            continue
-        for x, y in zip(a, b):
-            if y in names:
-                votes[x][names[y]] += 1
+        else:
+            for x, y in zip(a, b):
+                if y in names:
+                    votes[x][names[y]] += 1
         a, b = [t for _, t in data_refs(rword, ra, rs)], [t for _, t in data_refs(pword, pa, ps)]
         if len(a) == len(b):
             for x, y in zip(a, b):
-                n, sz = obj_name(y)
-                if n:
-                    gvotes[x][n] += 1
-                    gsize[n.split('+')[0]] = sz
+                if gname(y):
+                    gvotes[x][gname(y)] += 1
+    # second pass (5 Nov) over functions whose counts differ (POP1's extra asserts): align the two sequences on the
+    # names the first pass found; inside an equal-length run of differences, pair the unnamed retail entries
+    first = {x: c.most_common(1)[0][0] for x, c in votes.items()}
+    gfirst = {x: c.most_common(1)[0][0] for x, c in gvotes.items()}
+    for ra, rs, pa, ps in pairs:
+        for ra_l, pb_l, known, vt, nm in (
+                (jals(rword, ra, rs), jals(pword, pa, ps), first, votes, names.get),
+                ([t for _, t in data_refs(rword, ra, rs)], [t for _, t in data_refs(pword, pa, ps)], gfirst, gvotes,
+                 gname)):
+            if len(ra_l) == len(pb_l):
+                continue
+            ka = [known.get(x, '?%x' % x) for x in ra_l]
+            kb = [nm(y) or '-' for y in pb_l]
+            for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ka, kb, autojunk=False).get_opcodes():
+                if tag == 'replace' and i2 - i1 == j2 - j1:
+                    for x, n in zip(ra_l[i1:i2], kb[j1:j2]):
+                        if x not in known and n != '-':
+                            vt[x][n] += 1
     # self-check: a pairing checked by hand on 28 Oct (OneShotSAMPLEPath::GetPos calls BranchPath::GetPos)
     assert votes[0x163100].most_common(1)[0][0] == 'GetPos__10BranchPathFv', votes[0x163100]
     with open(out, 'w') as o:

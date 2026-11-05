@@ -7,6 +7,9 @@
 #      rounds each; a function with PASS or HEADER is never queued again;
 #   3. ends after the pass, at -Until, or on "Stop Qwen"; writes qwen_match.py --summary to the log, stops
 #      llama-server and shuts the PC down (5 minutes' notice: `shutdown /a` in a console cancels).
+# From 5 Nov a second lane runs beside it on the CPU: tools\decomp\permute.py --lane (random source edits judged by
+# the compiler, below-normal priority, -PermuteJobs worker processes). It takes the misses within 10 instructions
+# (Qwen leaves those to it until it has had them, so it always runs) and logs to game\jobs\permute-night.log.
 # Cancelling, at any time: the desktop shortcut "Stop Qwen" (tools\windows\qwen-stop.ps1: ends this job and
 # llama-server, frees the GPU, never shuts down). Nothing done is lost: every round is on disk as it finishes, and
 # the next run resumes. Needs game\decomp\dare\ on this PC (copied from the Mac; see docs/decomp_dare.md).
@@ -15,7 +18,8 @@
 # -Until HH:mm: no new round after that time. -NoShutdown keeps the PC on. -Shortcut: (re)make the desktop shortcut.
 # -AddrsFile <file>: only the functions listed in it (one hex address per line; a test run), in this order. A file, not
 # a list argument: through start-job.ps1 a list arrived space-joined and 17e140 as the number 1.7E+141 (1 Nov).
-param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut, [string]$AddrsFile = '')
+param([string]$Until = '', [switch]$NoShutdown, [int]$Rounds = 4, [switch]$Shortcut, [string]$AddrsFile = '',
+      [ValidateRange(1, 16)][int]$PermuteJobs = 6, [int]$PermuteMinutes = 10)
 $Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $Root
 
@@ -25,7 +29,7 @@ if ($Shortcut) {
     $lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     $lnk.WorkingDirectory = $Root
-    $lnk.Description = 'Qwen byte-matches DARE sound functions (oct28.ps1, resumes the queue; log game\jobs\qwen-night.log). Cancel: Stop Qwen.'
+    $lnk.Description = 'Qwen + permuter byte-match DARE sound functions (oct28.ps1, resumes the queue; logs game\jobs\qwen-night.log, permute-night.log). Cancel: Stop Qwen.'
     $lnk.Save()
     "shortcut: $desk\Qwen DARE audio decomp.lnk"
     # Stop Qwen ends this job too (qwen-stop.ps1 knows qwen_match.py)
@@ -91,6 +95,11 @@ try {
         $queue = @(& $Python -I $Match --queue)
         if ($LASTEXITCODE -ne 0) { throw "qwen_match.py --queue failed: $($queue -join ' ')" }
     }
+    $lane = Start-Process $Python -ArgumentList '-I', "$Root\tools\decomp\permute.py", '--lane', '--until', "$(if ($untilUnix) { $untilUnix } else { 0 })", '--minutes', "$PermuteMinutes", '--jobs', "$PermuteJobs" `
+        -WorkingDirectory $Root -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput "$Root\game\jobs\permute-night.log" -RedirectStandardError "$Root\game\jobs\permute-night.err"
+    $lane.PriorityClass = 'BelowNormal'
+    Say "permuter lane started (process $($lane.Id), $PermuteJobs jobs, $PermuteMinutes minutes per function)"
     Ensure-Llama
     Say "llama-server up; $($queue.Count) functions queued"
     $ErrorActionPreference = 'Continue'
@@ -111,6 +120,7 @@ try {
     $finished = ((Get-Date) - $started).TotalMinutes -gt 15
     if (-not $finished) { Say 'error soon after the start: no shutdown' }
 } finally {
+    if ($lane -and -not $lane.HasExited) { taskkill /T /F /PID $lane.Id | Out-Null; Say 'permuter lane stopped' }
     Say 'stopping llama-server'
     & "$Root\tools\windows\llama-serve.ps1" -Stop | Out-Null
     if (-not $finished) { Say 'interrupted: no shutdown' }

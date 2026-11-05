@@ -43,14 +43,30 @@ SNDCLIST_ARGS = {('CTheme', 'm_PartList'): 'CThemePart *, CThemePart *',
                  ('CThemeChannel', 'm_OldThemeList'): 'CTheme *, CTheme *',
                  ('CThemeChannel', 'm_PartSentList'): '_stPartInfo, _stPartInfo',
                  ('CThemeManager', 'm_ThemeChannelList'): 'CThemeChannel *, CThemeChannel *',
-                 (None, 'gs_CallBackRequestList'): 'stCallBackRequest_, stCallBackRequest_'}
+                 (None, 'gs_CallBackRequestList'): 'stCallBackRequest_, stCallBackRequest_',
+                 # file statics (statics.tsv), from the constructor calls in POP1's __sinit_sndldbnk.c / sndspumem.c
+                 (None, 'gs_BankList'): '_tdstBankElement *, _tdstBankElement *const &',
+                 (None, 'gs_ASyncBankSetRequestList'): '_tdstBinBankSetElement *, _tdstBinBankSetElement *const &',
+                 (None, 'gs_ASyncBankRequestList'): '_tdstASyncBankRequest, const _tdstASyncBankRequest &',
+                 (None, 'gs_DeferedASyncBankSetRequestList'):
+                     '_tdstDeferredASyncBankSetRequest, const _tdstDeferredASyncBankSetRequest &',
+                 (None, 'gs_listMemoryCluster'): '_tdstMemoryCluster *, _tdstMemoryCluster *const &'}
 TEMPLATED = {'sndCList', 'sndCNode'}
 # types the source nests in a class (DWARF puts them at top level): retail mangles Q213CThemeChannel11_stPartInfo
 # (195380, 1952c0: run 9-10 header requests)
 NESTED = {'_stPartInfo': 'CThemeChannel'}
 # methods retail calls without 'this' (DWARF does not mark static)
 STATIC_METHODS = {('SndManager', 'GetLengthSample'), ('SndManager', 'AddCallBack'), ('RPS2', 'GetResLength'),
-                  ('SndManager', 'GetRendererRate'), ('SndManager', 'Renderer')}  # 0x189180 / 0x189cc0 never read a0 (31 Oct, 1 Nov)
+                  ('SndManager', 'GetRendererRate'), ('SndManager', 'Renderer'),
+                  ('RPS2', 'GetHwModuleId'),  # 0x16b800 reads uRes from a0 (5 Nov)
+                  ('SndManager', 'ASyncLoadBinaryResourceSample'),  # 0x18b640: 4 arguments in a0-a3, no this (5 Nov)
+                  # 5 Nov, register test: retail reads its parameters from a0 on and never reads the register a last
+                  # parameter would be in with a this (0x16b180 GetResNbChannels: lw 0x4(a0) = pstBRMem->eType)
+                  ('RPS2', 'GetResNbChannels'), ('RPS2', 'IsResLooping'), ('RPS2', 'IsResPlayedByTools'),
+                  ('RPS2', 'Play'), ('RPS2', 'ThreadWorker'), ('SndManager', 'ConvertResDiskToMemMultiTrack'),
+                  ('SndManager', 'GetResourceNbChannelMultiTrack'), ('SndManager', 'LoadBinaryResourceMultiTrack'),
+                  ('SndManager', 'LoadBinaryResourceSilence'), ('SndManager', 'UnloadResourceBinary'),
+                  ('SndManager', 'UnloadResourceMultiTrack'), ('SndManager', 'UnloadResourceSample')}  # 0x189180 / 0x189cc0 never read a0 (31 Oct, 1 Nov)
 # C functions whose parameters POP1's DWARF lost (retail passes __FILE__, __LINE__)
 # called by DARE but with no DWARF in POP1 (the PS2 OS layer at 0x199xxx, libc): argument counts read from the retail
 # bodies (a char argument where the body masks it with andi 0xff); Sony kernel / sif calls are left to the prompt
@@ -59,7 +75,8 @@ NO_DWARF = ['extern "C" {'] + [d + ';' for d in (
     'void *SND_fn_pvReAllocSnd(void *p, unsigned int size)', 'int SND_fn_bInitMallocSnd(void)',
     'void SND_fn_vMemCopySnd(void *dest, const void *src, unsigned int size)',
     'void SND_fn_vMemsetSnd(void *dest, unsigned char value, unsigned int size)',
-    'void SND_fn_vDisplayError(int error, char *text)', 'void SND_fn_vDisplayErrorEx(int error, char *text, int value)',
+    # unsigned char: retail and POP1 pass _tdstDisplayErrorIOP::ulErrorNum with lbu (0x1608c0, 5 Nov)
+    'void SND_fn_vDisplayError(unsigned char error, char *text)', 'void SND_fn_vDisplayErrorEx(int error, char *text, int value)',
     'void SND_fn_vInitErrorSnd(void)', 'int SND_fn_vDesInitErrorSnd(void)', 'char SND_fn_cGetDirectorySeparator(void)',
     'void *SND_fn_hOpenFileReadSnd(char *name)', 'void SND_fn_vCloseFileSnd(void *file)',
     'unsigned int SND_fn_ulReadFileSnd(void *file, void *buffer, unsigned int size)',
@@ -339,7 +356,7 @@ def main(elf_path, out_h, out_tsv=None):
 
     # one definition per name: the most common layout (warn on others)
     defs = defaultdict(list)
-    enums, typedefs, globals_, funcs = {}, {}, {}, {}
+    enums, typedefs, globals_, funcs, statics = {}, {}, {}, {}, {}
     for cu in g.cus:
         for k in cu.children:
             x = t[k]
@@ -351,6 +368,8 @@ def main(elf_path, out_h, out_tsv=None):
                 typedefs.setdefault(x.attrs['name'], x)
             elif x.tag == 'global_variable' and x.attrs.get('name'):
                 globals_.setdefault(x.attrs['name'], (x, cu))
+            elif x.tag == 'local_variable' and x.attrs.get('name'):  # a file static (not in dare.h)
+                statics.setdefault(x.attrs['name'], x)
             elif x.tag in ('global_subroutine', 'subroutine') and x.attrs.get('name'):
                 funcs.setdefault(x.attrs.get(0x200, x.attrs['name']), (x, cu))
     records, conflicts = {}, []
@@ -629,6 +648,17 @@ def main(elf_path, out_h, out_tsv=None):
         L = [l.replace('(%s)' % n, '(%s::%s)' % (outer, n)).replace('DARE_OFS(%s,' % n, 'DARE_OFS(%s::%s,' % (outer, n))
              if l.startswith('DARE_CHECK') else l for l in L]
     open(out_h, 'w').write('\n'.join(L) + '\n')
+    # vtables.tsv: class, slot, mangled method (POP1 __vt__ symbols; the prompt names virtual calls with it, 5 Nov)
+    with open(os.path.join(os.path.dirname(os.path.abspath(out_h)), 'vtables.tsv'), 'w') as o:
+        for c, slots in sorted(vt.items()):
+            for i, m in enumerate(slots):
+                o.write('%s\t%d\t%s\n' % (c, i, m))
+    # statics.tsv: name, declaration of each file static (5 Nov: the prompt gave only sizes; Qwen guessed the types)
+    with open(os.path.join(os.path.dirname(os.path.abspath(out_h)), 'statics.tsv'), 'w') as o:
+        for n, x in sorted(statics.items()):
+            if n not in globals_:
+                o.write('%s\t%s\n' % (n, 'sndCList<%s> %s' % (SNDCLIST_ARGS[None, n], n) if (None, n) in SNDCLIST_ARGS
+                                       else g.render(x.attrs, n)))
     print('%d records, %d enums, %d typedefs, %d methods, %d C functions, %d globals, %d vtables -> %s' % (
         len(records), len(enums), len(typedefs), sum(map(len, methods.values())), len(cfuncs) + len(cxxfuncs), len(globals_),
         len(vt), out_h))
