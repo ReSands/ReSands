@@ -158,12 +158,15 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      gives up past 8 fields of lag, so in a long slowdown IOP time (180 Hz timer, `DelayThread`, IOP vblank,
      SPU2 output) fell behind real time: the "sound slows with the frame rate" bug.
    - Change: in host mode the EE's cycles only decide when the IOP gets a turn (every 8192 EE cycles, as
-     before); the target is `anchor + wall seconds x 36.864 MHz`. Ahead of the PC (inline RPC servers, patch 17's
-     background cycles) it waits; after a PC stall at most 0.1 s is replayed. One change point, so every
+     before; inline IOP time is no longer an EE-cycle debt); the target is `anchor + wall seconds x 36.864 MHz`.
+     Ahead of the PC (inline RPC servers, patch 17's background cycles) it waits up to a frame, then re-anchors
+     (review 6 Nov: 5000 fast polls put it 0.28 s ahead and it stalled that long); after a PC stall at most
+     0.1 s is replayed. One change point, so every
      IOP-cycle timer and delay becomes real time, interpreted or native. Works with the emulated SPU2 too, so
      it can be judged in game before the native mixer exists.
    - Check: `iop_native_check <elf> --clock` (1 s wall with EE cycles fed at a third of the rate -> 1.000 s IOP;
-     a 0.5 s stall replays 0.109 s). The default-mode differential check is unchanged (identical).
+     a 0.5 s stall replays 0.108 s; after 5000 inline RPCs the IOP keeps real time, 0.647 s in 0.654 s). The
+     default-mode differential check is unchanged (identical).
    - **In-game check needed (user, TV on):** a fight or a known slow spot with `PS2X_IOP_CLOCK=host`, A/B against
      the default: music/effects pitch and speed steady when the frame rate drops; no new stutter or desync
      (the Prince-Farah dialogue sync bug in step 8 is a candidate to change either way).
@@ -171,8 +174,8 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      (a vsync wait) IOP work comes in bursts afterwards (several 180 Hz updates at once). Fine for the
      emulated SPU2 (it renders by IOP time); for the native mixer (c) the stream buffers must cover a frame or
      so, else the IOP needs its own host thread. EE code that polls IOP results in tight RPC loops still gets
-     patch 17's 2048 background cycles per call, so the IOP can run ahead of real time during load polling
-     (as before; it waits afterwards).
+     patch 17's 2048 background cycles per call, so during load polling the IOP runs faster than real time
+     (the emulated SPU2 renders that time early); it no longer stalls afterwards.
    - Left for (b): nothing else found in the kernel HLE that counts time outside `totalCycles` (timrman, vblank,
      DelayThread/`delayCurrentUntil`, SIF DMA and CDVD completions all use it). Revisit only if the in-game check
      shows a timing problem.

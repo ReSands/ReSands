@@ -5,7 +5,8 @@
 //
 //   iop_native_check <SLUS_207.43> [EE seconds, default 2]
 //   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
-//       rate must still move the IOP clock by 1 s (within 2 %), and a 0.5 s stall must be skipped, not replayed.
+//       rate must still move the IOP clock by 1 s (within 2 %), a 0.5 s stall must be skipped, not replayed, and
+//       after 5000 fast inline RPCs (run ahead) the IOP must keep real time, not wait for the PC to catch up.
 //
 // Build (ps2xIOP from the pop-sotc tree with patch 51; <gen> = the generated *_iop.cpp, game material, not in git):
 //   c++ -std=c++20 -O2 -I<sotc>/ps2xIOP/include -I<sotc>/ps2xIOP/src tools/iop/iop_native_check.cpp <gen>/*.cpp
@@ -218,7 +219,32 @@ namespace
         feed(0.01);
         const double replayed = double(iop.cycles() - c1) / 36'864'000.0;
         std::printf("after a 0.5 s stall: %.3f s replayed (cap 0.1 s + the 10 ms fed)\n", replayed);
-        const bool ok = result.loaded && iopSeconds > wall * 0.98 && iopSeconds < wall * 1.02 && replayed < 0.13;
+        // DARE polls RPC 9 (bank upload done?) in a loop while loading: each inline call adds IOP time.
+        const auto p0 = clock::now();
+        const uint64_t c2 = iop.cycles();
+        RpcRequest poll;
+        poll.sid = 0x12345678u;
+        poll.function = 5u;
+        for (int i = 0; i < 5000; ++i)
+        {
+            (void)iop.handleRpc(poll);
+            iop.runEeCycles(2'000u);
+        }
+        const double pollWall = std::chrono::duration<double>(clock::now() - p0).count();
+        std::printf("5000 polls: %.3f s wall -> %.3f s IOP\n", pollWall, double(iop.cycles() - c2) / 36'864'000.0);
+        // EE cycles now at the real rate (294.912 MHz): 2 ms of wall time per 589,824 EE cycles.
+        const uint64_t c3 = iop.cycles();
+        const auto a0 = clock::now();
+        for (int i = 0; i < 250; ++i)
+        {
+            iop.runEeCycles(589'824u);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        const double afterWall = std::chrono::duration<double>(clock::now() - a0).count();
+        const double afterIop = double(iop.cycles() - c3) / 36'864'000.0;
+        std::printf("then %.3f s wall at the real EE rate: %.3f s IOP (no stall: >= 90 %%)\n", afterWall, afterIop);
+        const bool ok = result.loaded && iopSeconds > wall * 0.98 && iopSeconds < wall * 1.02 && replayed < 0.13 &&
+                        afterIop >= afterWall * 0.9;
         std::printf("%s\n", ok ? "clock ok" : "CLOCK WRONG");
         return ok ? 0 : 4;
     }
