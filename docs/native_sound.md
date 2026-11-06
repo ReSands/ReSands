@@ -144,7 +144,10 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      bases, runs the start routines, RPCs 0 (init, version string "UbiSound_Driver"), 3, 2, 5, 6, 7 and ~3 s of
      IOP time, interpreted and native: **IOP RAM, clock and 7 threads identical (215,690 instructions)**;
      breaking one instruction of the native update thread is caught. Not covered: bank uploads (RPC 8/9) and
-     real command stacks (need step 1's command table or a recorded run).
+     real command stacks (need step 1's command table or a recorded run). **Re-run it after any change to
+     `iop_emulator.cpp`, the IOP kernel/imports or the generated code** (exit 0 = identical, 3 = different), and
+     rebuild the check's object files against the new `libps2_iop.a` first. Save states run the IOP interpreted
+     (patch 51 clears native entries on state load).
    - PC (when available): copy `game/analysis/iop/gen/*_iop.cpp` to the PC's `game\analysis\iop\gen`, then
      `rebuild.ps1 -Play -Fast -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative game\analysis\iop\gen`
      (after `git am` of patch 51); boot with `PS2X_IOP_NATIVE=1` and look for the two `[IOP] native:` lines.

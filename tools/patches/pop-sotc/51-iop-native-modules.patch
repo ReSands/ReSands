@@ -1,4 +1,4 @@
-From c40cb4625269c332f3b716d34e00a010ee203b7f Mon Sep 17 00:00:00 2001
+From f285dcd58f27bdfe687c930920c9e6629ecc702b Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Fri, 6 Nov 2026 11:30:24 +0000
 Subject: [PATCH] iop: recompiled IRX modules run natively (PS2X_IOP_NATIVE=1);
@@ -13,12 +13,12 @@ stays interpreted. The runner builds src/iop_generated/*.cpp if present. Off by 
 Checked offline (PoP tools/iop/iop_native_check.cpp): libsd + sdrdrv + UbiSound_Driver at the game's
 bases, start routines plus init/config/query RPCs and ~3 s of IOP time: IOP RAM, clock and threads
 identical interpreted vs native (215,690 instructions); a one-instruction mutation is caught.
-Not restored from save states (native entries are made at module load; states run interpreted).
+Loading a save state clears the native entries (made at module load from the file hash): states run interpreted.
 ---
- ps2xIOP/include/ps2x/iop/iop_native.h | 163 ++++++++++++++++++
- ps2xIOP/src/emulator/iop_emulator.cpp | 239 ++++++++++++++++++++++++++
+ ps2xIOP/include/ps2x/iop/iop_native.h | 163 +++++++++++++++++
+ ps2xIOP/src/emulator/iop_emulator.cpp | 246 ++++++++++++++++++++++++++
  ps2xRuntime/CMakeLists.txt            |  14 ++
- 3 files changed, 416 insertions(+)
+ 3 files changed, 423 insertions(+)
  create mode 100644 ps2xIOP/include/ps2x/iop/iop_native.h
 
 diff --git a/ps2xIOP/include/ps2x/iop/iop_native.h b/ps2xIOP/include/ps2x/iop/iop_native.h
@@ -191,7 +191,7 @@ index 0000000..6a8bfc4
 +    }
 +}
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
-index 6cbb377..c84c0f9 100644
+index 6cbb377..f9cbfe5 100644
 --- a/ps2xIOP/src/emulator/iop_emulator.cpp
 +++ b/ps2xIOP/src/emulator/iop_emulator.cpp
 @@ -18,17 +18,54 @@
@@ -500,6 +500,20 @@ index 6cbb377..c84c0f9 100644
              imports.eraseRange(it->second.base, it->second.size);
              modules.erase(it);
              kernel.cleanupDeadThreads();
+@@ -875,6 +1114,13 @@ namespace ps2x::iop::detail
+             using namespace ps2x::state;
+             if constexpr (!Ar::kLoading)
+                 accountEeCycles();
++            if constexpr (Ar::kLoading)
++            {
++                // Native entries are made at module load from the file hash; a state brings its own modules, so
++                // they run interpreted (stale entries could point into other code).
++                nativeEntries.clear();
++                std::fill(nativeBits.begin(), nativeBits.end(), 0u);
++            }
+             ar.section(fourcc("IOPE"));
+             fields(ar, modules, pendingDmaInterrupts, pendingGuestCallbacks, nextModuleId, moduleCursor, totalCycles, totalInstructions,
+                    eeCycleCarry, secrMcCommandHandler, secrMcDevIdHandler, checkKelfPathCallback);
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
 index dc6c307..84ea509 100644
 --- a/ps2xRuntime/CMakeLists.txt
