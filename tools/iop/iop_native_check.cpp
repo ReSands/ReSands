@@ -10,7 +10,10 @@
 //       looping ADPCM voice on core 0 (all 5 filters) keyed on and off, a PCM block input, a voice with exponential
 //       envelope and a volume sweep, and UbiSound's reverb set-up (hall, echo, echo with effects switched off at the key off); writes pcsx2.wav, native.wav
 //       and emulated.wav; passes when native matches PCSX2 in shape (correlation >= 0.999) and level (2 %) per
-//       section. PCSX2 is the reference short of the real PS2 (docs/native_sound.md 8b).
+//       section. PCSX2 is the reference short of the real PS2 (docs/native_sound.md 8b). Also runs the native
+//       script with the IOP saved and reloaded after every step: the output must be identical (exit 6 if not).
+//   iop_native_check <SLUS_207.43> --state <file.state> <out dir> [seconds, default 5]   a save state's IOP alone
+//       (no EE) on the emulated SPU2: level per 0.5 s, state.wav.
 //   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
 //       rate must still move the IOP clock by 1 s (within 2 %), a 0.5 s stall must be skipped, not replayed, and
 //       after 5000 fast inline RPCs (run ahead) the IOP must keep real time, not wait for the PC to catch up.
@@ -274,24 +277,34 @@ namespace
 
     // PCSX2: the real libsd on PCSX2's SPU2 core (the reference); Native: PS2X_NATIVE_AUDIO=1; Emulated: the real
     // libsd on the runtime's own SPU2 model (what playtests used so far; for information only).
-    enum class Path { Pcsx2, Native, Emulated };
+    // NativeRoundTrip: Native, with the IOP saved to a state and loaded into a fresh emulator after every step (the
+    // output must not change).
+    enum class Path { Pcsx2, Native, Emulated, NativeRoundTrip };
 
     SoundRun soundRun(const std::vector<uint8_t> &elf, Path path)
     {
         SoundRun run;
-        const bool nativeAudio = path == Path::Native;
+        const bool nativeAudio = path == Path::Native || path == Path::NativeRoundTrip;
         setenv("PS2X_NATIVE_AUDIO", nativeAudio ? "1" : "0", 1);
         ElfHost host(elf);
-        IopEmulator iop(host);
+        auto iop = std::make_unique<IopEmulator>(host);
         const std::unique_ptr<ps2x::iop::Spu2Backend> pcsx2 = path == Path::Pcsx2 ? pop::makePcsx2Spu2Backend() : nullptr;
-        iop.setSpu2Backend(pcsx2.get());
+        iop->setSpu2Backend(pcsx2.get());
         Result result;
         const char *label = path == Path::Pcsx2 ? "pcsx2" : nativeAudio ? "native" : "emulated";
-        loadSoundModules(iop, result, label);
+        loadSoundModules(*iop, result, label);
         auto runFor = [&](double seconds)
         {
             for (uint64_t done = 0, cycles = uint64_t(seconds * 294912000.0); done < cycles; done += 294912u)
-                iop.runEeCycles(294912u);
+                iop->runEeCycles(294912u);
+            if (path == Path::NativeRoundTrip)
+            {
+                ps2x::state::Writer out;
+                iop->saveState(out);
+                iop = std::make_unique<IopEmulator>(host);
+                ps2x::state::Reader in(out.data().data(), out.data().size());
+                iop->loadState(in);
+            }
         };
         constexpr uint32_t kSend = 0x7F0000u, kReceive = 0x7F8000u;
         auto sd = [&](uint32_t command, std::initializer_list<uint32_t> args)
@@ -306,7 +319,7 @@ namespace
             request.function = command;
             request.send = {kSend, sizeof(words)};
             request.receive = {kReceive, 16u};
-            (void)iop.handleRpc(request);
+            (void)iop->handleRpc(request);
             uint32_t reply = 0;
             (void)host.readGuest(kReceive, &reply, 4u);
             runFor(0.002);
@@ -317,8 +330,8 @@ namespace
                           kClearEffectWorkArea = 0x8150 };
         // Output frame n is IOP cycle n * 768 on both paths.
         size_t sectionStart = 0;
-        auto begin = [&] { sectionStart = size_t(iop.cycles() / 768u); };
-        auto end = [&](const char *name) { run.sections.emplace_back(name, sectionStart, size_t(iop.cycles() / 768u)); };
+        auto begin = [&] { sectionStart = size_t(iop->cycles() / 768u); };
+        auto end = [&](const char *name) { run.sections.emplace_back(name, sectionStart, size_t(iop->cycles() / 768u)); };
         sd(kInit, {0u});
         runFor(0.05);
 
@@ -336,8 +349,8 @@ namespace
                 block[2u + i / 2u] |= uint8_t(nibble << ((i & 1u) * 4u));
             }
         }
-        const uint32_t iopSample = iop.allocateMemory(uint32_t(adpcm.size()), 64u);
-        (void)iop.writeMemory(iopSample, adpcm.data(), adpcm.size());
+        const uint32_t iopSample = iop->allocateMemory(uint32_t(adpcm.size()), 64u);
+        (void)iop->writeMemory(iopSample, adpcm.data(), adpcm.size());
         constexpr uint32_t kSpuSample = 0x5000u;
         const uint32_t sent = sd(kVoiceTrans, {0u, 0u, iopSample, kSpuSample, uint32_t(adpcm.size())});
         runFor(0.02);
@@ -370,8 +383,8 @@ namespace
         for (uint32_t block = 0; block < 4u; ++block)
             for (uint32_t i = 0; i < 256u; ++i)
                 pcm[block * 512u + i] = int16_t(((block * 256u + i) / 24u) % 2u ? 6000 : -6000);
-        const uint32_t iopStream = iop.allocateMemory(uint32_t(pcm.size() * 2u), 64u);
-        (void)iop.writeMemory(iopStream, pcm.data(), pcm.size() * 2u);
+        const uint32_t iopStream = iop->allocateMemory(uint32_t(pcm.size() * 2u), 64u);
+        (void)iop->writeMemory(iopStream, pcm.data(), pcm.size() * 2u);
         sd(kSetParam, {0x0F80u, 0x7FFFu}); // BVOLL core 0
         sd(kSetParam, {0x1080u, 0x7FFFu}); // BVOLR
         begin();
@@ -459,6 +472,18 @@ namespace
         const SoundRun refRun = soundRun(elf, Path::Pcsx2), nativeRun = soundRun(elf, Path::Native),
                        emuRun = soundRun(elf, Path::Emulated);
         const std::vector<int16_t> &ref = refRun.audio, &native = nativeRun.audio, &emu = emuRun.audio;
+        // Save states on the native path: saving and loading the IOP between every step must not change a sample.
+        const std::vector<int16_t> roundTrip = soundRun(elf, Path::NativeRoundTrip).audio;
+        if (roundTrip != native)
+        {
+            size_t at = 0;
+            while (at < std::min(roundTrip.size(), native.size()) && roundTrip[at] == native[at])
+                ++at;
+            std::printf("STATE ROUND TRIP DIFFERS: %zu vs %zu samples, first difference at frame %zu\n", roundTrip.size(),
+                        native.size(), at / 2u);
+            return 6;
+        }
+        std::printf("state round trip: native output identical (%zu frames)\n", native.size() / 2u);
         std::filesystem::create_directories(outDir);
         writeWav(outDir + "/pcsx2.wav", ref);
         writeWav(outDir + "/native.wav", native);
@@ -512,6 +537,52 @@ namespace
     }
 }
 
+namespace
+{
+    // A save state's IOP alone (no EE): EE RAM from EMEM, the IOP from its IOPE section, run for seconds on the
+    // emulated SPU2 (the path the states were saved with); the level per 0.5 s and state.wav in outDir.
+    int stateCheck(const std::vector<uint8_t> &elf, const std::string &statePath, const std::string &outDir, double seconds)
+    {
+        std::ifstream in(statePath, std::ios::binary);
+        const std::vector<uint8_t> state((std::istreambuf_iterator<char>(in)), {});
+        auto find = [&](const char *tag, size_t from)
+        {
+            const auto it = std::search(state.begin() + from, state.end(), tag, tag + 4);
+            return it == state.end() ? state.size() : size_t(it - state.begin());
+        };
+        const size_t emem = find("EMEM", 0u), eiop = find("EIOP", 0u), iope = find("IOPE", eiop);
+        if (emem + 4u + (32u << 20) > state.size() || iope >= state.size())
+        {
+            std::printf("not a state with EMEM and IOPE\n");
+            return 1;
+        }
+        setenv("PS2X_NATIVE_AUDIO", "0", 1);
+        ElfHost host(elf);
+        host.guest.assign(state.begin() + emem + 4, state.begin() + emem + 4 + (32u << 20));
+        IopEmulator iop(host);
+        ps2x::state::Reader reader(state.data() + iope, state.size() - iope);
+        iop.loadState(reader);
+        std::printf("loaded: IOP cycle %llu, %u modules, %u threads\n", (unsigned long long)iop.cycles(),
+                    iop.loadedModuleCount(), iop.threadCount());
+        const uint64_t steps = uint64_t(seconds / 0.001);
+        for (uint64_t i = 0; i < steps; ++i)
+            iop.runEeCycles(294912u); // 1 ms of EE time
+        const std::vector<int16_t> &a = host.audio;
+        for (size_t at = 0; at < a.size(); at += 48000u) // 0.5 s of stereo
+        {
+            double sum = 0;
+            int peak = 0;
+            const size_t n = std::min<size_t>(48000u, a.size() - at);
+            for (size_t i = at; i < at + n; ++i)
+                sum += double(a[i]) * a[i], peak = std::max(peak, std::abs(int(a[i])));
+            std::printf("%5.1f s: rms %7.1f peak %5d\n", at / 96000.0, std::sqrt(sum / n), peak);
+        }
+        std::filesystem::create_directories(outDir);
+        writeWav(outDir + "/state.wav", a);
+        return 0;
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2)
@@ -523,6 +594,8 @@ int main(int argc, char **argv)
     const std::vector<uint8_t> elf((std::istreambuf_iterator<char>(in)), {});
     if (argc > 3 && std::string(argv[2]) == "--sound")
         return soundCheck(elf, argv[3]);
+    if (argc > 4 && std::string(argv[2]) == "--state")
+        return stateCheck(elf, argv[3], argv[4], argc > 5 ? std::atof(argv[5]) : 5.0);
     if (argc > 2 && std::string(argv[2]) == "--clock")
         return clockCheck(elf);
     const double seconds = argc > 2 ? std::atof(argv[2]) : 2.0;

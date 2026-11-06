@@ -1,0 +1,130 @@
+From f12fd1bb11cb9adc3eafdcb7f3165283c4a9c5fa Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 6 Nov 2026 15:53:04 +0000
+Subject: [PATCH] iop: native audio in save states (libsd settings, mixer
+ playback, transfer interrupts due)
+
+PS2X_NATIVE_AUDIO=1 writes an INAU section after the IOP's imports; states without it (SPU2 path) load with the
+native mixer silent, as before.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012y1nSeB5ALWKBgL9yiuaYc
+---
+ .../src/emulator/devices/iop_native_mixer.h   | 17 ++++++++++++++
+ ps2xIOP/src/emulator/imports/iop_libsd.h      | 10 +++++++++
+ ps2xIOP/src/emulator/iop_emulator.cpp         | 22 ++++++++++++++++++-
+ 3 files changed, 48 insertions(+), 1 deletion(-)
+
+diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.h b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+index f05961c..35d1a39 100644
+--- a/ps2xIOP/src/emulator/devices/iop_native_mixer.h
++++ b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+@@ -23,6 +23,8 @@
+ //
+ // Not done yet: noise, pitch modulation.
+ 
++#include "ps2x/state_io.h"
++
+ #include <cstddef>
+ #include <cstdint>
+ #include <functional>
+@@ -103,6 +105,21 @@ namespace ps2x::audio
+         // stderr: key ons, bytes uploaded, input halves played, the loudest sample, voices playing.
+         void render(int16_t *out, size_t frames);
+ 
++        // States: sound memory, every group's playback and the output sample count; each input's buffer as an offset
++        // into ram, the IOP RAM it plays from.
++        template <typename Ar>
++        void serialize(Ar &ar, const uint8_t *ram)
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            uint64_t inputAt[kGroups] = {};
++            for (int g = 0; g < kGroups; ++g)
++                inputAt[g] = m_groups[g].input.memory ? uint64_t(m_groups[g].input.memory - ram) : ~uint64_t{0};
++            ps2x::state::fields(ar, m_memory, m_groups, inputAt, m_samples);
++            if constexpr (Ar::kLoading)
++                for (int g = 0; g < kGroups; ++g)
++                    m_groups[g].input.memory = inputAt[g] == ~uint64_t{0} ? nullptr : ram + inputAt[g];
++        }
++
+     private:
+         struct Volume
+         {
+diff --git a/ps2xIOP/src/emulator/imports/iop_libsd.h b/ps2xIOP/src/emulator/imports/iop_libsd.h
+index 945700a..81a5b42 100644
+--- a/ps2xIOP/src/emulator/imports/iop_libsd.h
++++ b/ps2xIOP/src/emulator/imports/iop_libsd.h
+@@ -4,6 +4,8 @@
+ // (ps2xIOP/src/native_libsd.cpp, GPL-3.0); pop-sotc: an HLE import library like timrman, per emulator instead of
+ // global, transfer interrupts through the emulator's guest callbacks.
+ 
++#include "ps2x/state_io.h"
++
+ #include <cstdint>
+ #include <functional>
+ #include <unordered_map>
+@@ -31,6 +33,14 @@ namespace ps2x::iop::detail
+         // caller then runs the loaded libsd module's own code (sceSdNote2Pitch / Pitch2Note are plain math).
+         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu);
+ 
++        // States: the settings kept here and the drivers' callbacks (the mixer is saved by its owner).
++        template <typename Ar>
++        void serialize(Ar &ar)
++        {
++            ps2x::state::fields(ar, m_params, m_switches, m_addresses, m_coreAttributes, m_effectEnd, m_transCallback,
++                                m_transHandler, m_blockBuffer, m_blockSize, m_effect, m_irqCallback);
++        }
++
+     private:
+         struct Callback
+         {
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 0030ea6..2f819a5 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -1162,11 +1162,13 @@ namespace ps2x::iop::detail
+             spu2.serialize(ar);
+             ar.section(fourcc("IIMP"));
+             imports.serialize(ar);
++            // PS2X_NATIVE_AUDIO=1 adds the native path's sound (libsd's settings, the mixer's playback, transfer
++            // interrupts due). A state without it (saved on the SPU2 path) loads with the native mixer silent.
++            constexpr uint32_t nativeTag = fourcc("INAU");
+             if constexpr (Ar::kLoading)
+             {
+                 eeSyncCycle = totalCycles;
+                 hostAnchored = false;
+-                // The native mixer's state is not in a state (states run the SPU2 path's libsd): start it clean.
+                 libsd.reset();
+                 libsdCalls.clear();
+                 mixerCycle = totalCycles;
+@@ -1176,9 +1178,27 @@ namespace ps2x::iop::detail
+                 servicingDmaInterrupts = false;
+                 servicingGuestCallbacks = false;
+                 callDepth = 0u;
++                if (ar.nextSectionIs(nativeTag))
++                {
++                    ar.section(nativeTag);
++                    serializeNativeAudio(ar);
++                }
++            }
++            else if (nativeAudio)
++            {
++                ar.section(nativeTag);
++                serializeNativeAudio(ar);
+             }
+         }
+ 
++        template <typename Ar>
++        void serializeNativeAudio(Ar &ar)
++        {
++            libsd.serialize(ar);
++            mixer.serialize(ar, memory.ram().data());
++            ps2x::state::fields(ar, libsdCalls, mixerCycle, mixerOut);
++        }
++
+         IopHost &host;
+         IopMemory memory;
+         IopSysmem sysmem;
+-- 
+2.54.0 (Apple Git-157)
+

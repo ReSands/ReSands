@@ -222,7 +222,7 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      1. Wake the PC (`docs/reference.md`), check the user's game is closed (`tasklist`).
      2. Mac: `git bundle create game/jobs/pop.bundle main`, copy it to the PC's `game\jobs\`, then on the PC
         `git pull --ff-only game\jobs\pop.bundle main`.
-     3. PC: `git am` patches 51-54 (`tools\patches\pop-sotc\`) on `C:\tools\PS2Recomp-sotc`, then check out
+     3. PC: `git am` patches 51-55 (`tools\patches\pop-sotc\`) on `C:\tools\PS2Recomp-sotc`, then check out
         that HEAD in `game\recomp-sotc\runtime-src` (the build reads that clone).
      4. Copy the generated IOP modules `game/analysis/iop/gen/*_iop.cpp` (game material, scp, never git) to the
         same path on the PC.
@@ -241,6 +241,28 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      7 command stack, 8 start bank upload {_, src, dst, size; byte 0 = mode}, 9 test upload.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
+   **6 Nov, offline (Mac):**
+   - **Emulated SPU2 path: the IOP side keeps playing after a load.** `iop_native_check <elf> --state <state>
+     <out dir> [seconds]` loads a state's EE RAM (EMEM) and IOP (IOPE onwards) and runs the IOP alone on the
+     emulated SPU2: `play_20261104_194356` plays on at a steady level (rms ~2,400, no short repeat), with ~190 KB/s
+     of stream (AutoDMA) input (`PS2X_SPU2_STATS=1`). Not saved in states, but harmless here: the SPU2's queued
+     AutoDMA input and the DMA progress used for `sceSdBlockTransStatus` (refilled on the next transfer). So if
+     save-state boots are still silent in game, the cause is outside the IOP: the EE side or the runtime's audio
+     output. Not checked in game since 12 Oct ("a short crackle at the load, then silence"), which predates the
+     stream patches 19/23: it may already work. Check on the next PC boot with `PS2X_AUDIO_DUMP=<wav>` +
+     `PS2X_SPU2_STATS=1` (a dump with sound = the output side; silent = the EE stops feeding).
+   - **Native path (route A): fixed, patch 55.** The native libsd and mixer were reset on every load (states held
+     only the SPU2 path), so native sound was always silent after a load. With `PS2X_NATIVE_AUDIO=1`, states now add
+     an `INAU` section after the IOP's imports: libsd's settings and callbacks, the mixer (sound memory, voices,
+     reverb, input as an offset into IOP RAM, sample count), the queued transfer interrupts and unsent output.
+     Check: `iop_native_check --sound` also runs the native script with the IOP saved and loaded into a fresh
+     emulator after every step and requires identical output (229,680 frames identical; without patch 55 it
+     goes silent at frame 4801, exit 6). ps2xIOP tests: same failures before and after (spu2 x2, known;
+     emulator_tests "IOP RPC work advanced audio outside the EE clock budget", also there before).
+   - **Open:** states saved on the SPU2 path (all saves so far) still load silent with native audio on. Converting
+     them means mapping the SPU2 registers to libsd's settings and the mixer (reverb registers -> preset mode),
+     and reading the real libsd's transfer callbacks and block buffer out of its data in IOP RAM. Only worth it if
+     the old saves are needed with native sound; new saves made with native audio on keep it.
 5. **Swap PCSX2's SPU2 core into the runtime, then record (boots: ask first, TV on).** Replace our SPU2 model
    behind the same register/DMA interface (SPU2 registers, core DMA, AutoDMA, the IRQ back to the IOP), with a
    switch back to the old model for A/B. Then one run per save logs every command and stream refill with
