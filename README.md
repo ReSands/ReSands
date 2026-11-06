@@ -27,6 +27,16 @@ encounters, and the native Vulkan-based renderer occasionally produces graphical
 give the project a go then I'd absolutely love you to, just know that at the moment you'd be serving as a beta
 tester.
 
+## Trying it today
+
+There's no ready-to-play download yet: ReSands only exists as source code, and you'd have to build it yourself.
+That's possible, but rough for now. You'll need a Windows PC, your own copy of the game, and an afternoon: the
+build pulls in Visual Studio's C++ tools, CMake, Python, Java and Ghidra (`tools/windows/setup.ps1` installs most
+of them), applies the patches in `tools/patches/pop-sotc/` to [PS2Recomp](https://github.com/ran-j/PS2Recomp),
+then recompiles the whole game, which takes up to an hour the first time (`tools/windows/rebuild.ps1`). The scripts
+are written for my own machine, so expect to adjust some paths. A proper step-by-step guide and downloadable
+builds will come with the first public playtest.
+
 Please note that this is a bring-your-own-disc project, and no original game data is included in this repository
 or its downloads. You'll have to provide your own ISO of the NTSC version of the game (US, SLUS-20743; support for
 PAL and JP versions is planned for the future). The project is also not affiliated with, nor endorsed by Ubisoft or
@@ -38,7 +48,7 @@ More of an Xbox person? Check out [rePOP](https://github.com/FulGerNet/rePOP), w
 
 If you're interested in contributing to ReSands, here's how you can help:
 
-1. **Playtesting.** Download the recomp and give it a play. If you encounter any crashes, glitches, or anything that
+1. **Playtesting.** Once builds are up (or if you build it yourself, see above), give the recomp a play. If you encounter any crashes, glitches, or anything that
    simply doesn't look, sound, or feel right, please report it. ReSands currently has a save state feature built
    into it and accessible via the Select button (unused in the original game). Hit the button when you encounter a
    bug and it'll generate a log file which you can include in your report to help me hunt down whatever bug you're
