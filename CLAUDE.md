@@ -55,6 +55,10 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   step 4c point 7). Step 5 and the `-GsOff` default flip wait for it; its hardware questions (N27 halo flicker,
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile the DARE decomp runs overnight.
+- **6 Nov: 0.3 native sound started; plan `docs/native_sound.md` (start at step 1, offline).** Decided: 0.3 does not
+  wait on the DARE byte-match (it keeps DARE's EE code as recompiled and replaces the IOP driver + SPU2 under it);
+  no outside decomp helps. DARE decomp paused at 248/669 (run 13); its desktop shortcut stays for nights the user
+  wants it.
 - **5 Nov:** 0.4 closed with FFmpeg (decoder native since 16 Oct; `docs/roadmap.md` 0.4). Working on 0.5's
   independent parts while waiting for the PS2 and DARE. **Memory card done (evening, patch 49, user-checked in game):**
   PCSX2 `.ps2` image at `%USERPROFILE%\Saved Games\PoP Recomp\Mcd001.ps2`, old `mc0/` saves imported; open bits
@@ -66,8 +70,8 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.
-- **Side tracks:** DARE decomp for 0.3/2.0 (`docs/decomp_dare.md`, 239/669 matched 5 Nov evening;
-  night job = Qwen + permuter lanes, see there). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test`
+- **Side tracks:** DARE decomp for 2.0 (`docs/decomp_dare.md`, 248/669 after run 13, 6 Nov; night job = Qwen +
+  permuter lanes from the desktop shortcut, only when the user starts it). Small open items (`POP_NATIVE_SKIP` ignored, `pop_world_test`
   exit 138 on the Mac): `docs/native_bugs.md` "Side jobs".
 
 ## Release roadmap (user; renumbered 5 Nov; full text: `docs/roadmap.md`)
@@ -91,7 +95,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 ## Working reference (short; full version with every switch and tool: `docs/reference.md` "Working reference")
 
 - **Where to look first:** grep `docs/` before re-deriving a fact. Topic docs: `roadmap`, `native_renderer`,
-  `native_bugs`, `native_2d`, `gs_off`, `postfx`, `movies`, `llm_jobs`, `vu1_scheduling`, `upstream_ps2recomp`, `decomp_dare`, `lessons`.
+  `native_bugs`, `native_2d`, `gs_off`, `postfx`, `movies`, `native_sound`, `llm_jobs`, `vu1_scheduling`, `upstream_ps2recomp`, `decomp_dare`, `lessons`.
 - **PC access:** `ssh 10.0.0.202` (ping blocked; wake-on-LAN), repo `C:\dev\PoP_Decomp`. The PC can't pull from the
   Mac: git bundle to `game\jobs\pop.bundle`, then `git pull --ff-only`. PowerShell over SSH via `-EncodedCommand`;
   complex env strings in a wrapper under `game\jobs\`. Windowed jobs need the desktop session:

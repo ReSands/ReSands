@@ -4,7 +4,23 @@ Started the night of 27-28 Oct 2026. Goal: set up Qwen to byte-match the DARE so
 with what 0.3 (native sound) needs. Byte matching was chosen over a readable decomp (user, 27 Oct). Background and
 the compiler check: `docs/roadmap.md` "2.0".
 
-## State (5 Nov evening; start here)
+## State (6 Nov; start here)
+
+- **Paused for 0.3 (user, 6 Nov):** 0.3 native sound goes ahead without the byte match (`docs/native_sound.md`).
+  The "Qwen DARE audio decomp" shortcut stays and resumes the queue whenever the user starts it.
+- **Run 13 (5 Nov 22:07 - 6 Nov 07:22, stopped by me at the user's request): 248 of 669** (+9). Qwen 6 of 47
+  (173340 176c80 173880 174b00 1952c0 173800; 176c80 likely from the permuter's file, which matched it 7 minutes
+  earlier), ~12 min per function; the permuter lane 4 of 61 passes (191680 176c80 18f440 15c400; every match
+  started within 9 instructions). One header request (182bc0, 2-argument `SND_fn_pvMallocSnd`: ruled out 4 Nov,
+  reopen). Nearest misses: 17c180 `SND_fn_hASyncLoadResBinarySnd` and `CVirtualPlayer::DelVirtualVoice` 1 off,
+  `SND_fn_vStopSxdWave` 2 off. Folders not yet copied to the Mac.
+- **Outlook (6 Nov, estimate):** Qwen has matched nothing over 104 instructions (0 of 9 tried above 120) and 152 of
+  its 183 matches came in rounds 1-3. Local work likely tops out near 300-320 of 669; the 145 functions of 80+
+  instructions (21.6k of the 33k unmatched instructions; `TAdder`, `OneShotMULTITRACKPath`, `CVirtualPlayer`,
+  `TMultiTrack`, `CThemeChannel`, `RPS2`, ...) need Opus drafts, ideally with Qwen + permuter closing the last
+  instructions overnight.
+
+## State (5 Nov evening)
 
 - **239 of 669 matched** (5 Nov evening: run 12's 212 + 24 hand matches + 1 by the permuter + 2 that matched
   as they were once the header changed). Details: "5 Nov: fixes, hand pass, permuter" below. All 29 header
