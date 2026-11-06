@@ -77,6 +77,19 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
 8. **Known audio bugs, checked against the PCSX2 core (and the full program if still there):** quiet/missing fight track, Prince-Farah in-engine dialogue out of
    sync, sound slows with the frame rate (`docs/history.md`), and crash 2 (only watched, emulated-sound related?)
    should go away with the IOP.
+8b. **Optional: real PS2 as the hardware reference** (user, 6 Nov; reuses the real PS2 + ethernet pipeline of
+   `docs/gs_off.md` step 5). Use it to check the PCSX2 core once on a few scenes, to settle disagreements (instead
+   of the full PCSX2 program), and for what emulators get roughly right: reverb, interpolation, IOP timing.
+   - **Capture** the PS2's optical S/PDIF out with a USB S/PDIF receiver on the PC (48 kHz PCM; that it carries the
+     SPU2 mix unaltered is unverified; check the user's model has the port). Not over ethernet: the SPU2 can write
+     some taps to its own RAM, but not clearly the final mix with reverb, and reading it back through the IOP
+     disturbs the timing. Ethernet (ps2link) is for loading programs and sending logs.
+   - **(a) The real game:** the same in-game save from the shared `.ps2` card, recorded. All real hardware, but
+     not aligned with our run: compare per scene with a tolerance. Needs only the cable and receiver.
+   - **(b) Log replay:** a ps2sdk homebrew loads the game's own `DARE_RT.IRX` on the real IOP and replays step 5's
+     logged bank uploads, commands and stream refills timed by vsync, standing in for the EE side the driver
+     expects. Gives hardware output for exactly the input the native mixer and the PCSX2 core get. Real work:
+     only if the PCSX2 core turns out wrong somewhere that matters.
 9. **Close:** native sound on by default in `play.ps1` (the PCSX2-core path kept as the reference switch), user
    listening check on the TV (never over Moonlight).
 
