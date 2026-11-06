@@ -54,7 +54,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **Next (user, 1 Nov): set up the real PS2 and the pipeline to test on it** (`docs/gs_off.md` step 5 /
   step 4c point 7). Step 5 and the `-GsOff` default flip wait for it; its hardware questions (N27 halo flicker,
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
-  Meanwhile the DARE decomp runs overnight.
+  Meanwhile: 0.3 native sound (below).
 - **6 Nov: 0.3 native sound started; plan `docs/native_sound.md` (start at step 1, offline).** Decided: 0.3 does not
   wait on the DARE byte-match (it keeps DARE's EE code as recompiled and replaces the IOP driver + SPU2 under it);
   no outside decomp helps. DARE decomp paused at 248/669 (run 13); its desktop shortcut stays for nights the user
