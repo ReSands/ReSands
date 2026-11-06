@@ -1,0 +1,110 @@
+From a775cfb6e8badf608098ba2292967d2b7fb2a9e3 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 6 Nov 2026 11:43:55 +0000
+Subject: [PATCH] iop: PS2X_IOP_CLOCK=host, the IOP's clock follows the PC's
+ clock
+
+Default unchanged: the IOP runs the EE's estimated cycles / 8, which fall behind real time in a long
+slowdown (EE host pacing gives up past 8 fields), so IOP timers, DelayThread, vblank and SPU2 output
+slowed with the frame rate. With PS2X_IOP_CLOCK=host the EE's cycles only decide when the IOP gets a
+turn; the target cycle is anchored to std::chrono::steady_clock, so every IOP-cycle timer and delay
+(PoP: UbiSound's 5.555 ms hard timer and its DelayThreads) is a real-time wait. Ahead of the PC clock
+(RPC servers run inline from the EE) the IOP waits; after a PC stall at most 0.1 s is replayed and the
+rest skipped. Re-anchored on reset and state load.
+
+Checked offline (PoP tools/iop/iop_native_check.cpp --clock): 1 s of wall time fed with EE cycles at a
+third of the real rate moves the IOP 1.000 s; a 0.5 s stall replays 0.109 s.
+---
+ ps2xIOP/src/emulator/iop_emulator.cpp | 48 +++++++++++++++++++++++++++
+ 1 file changed, 48 insertions(+)
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index f9cbfe5..87a4068 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -24,6 +24,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cctype>
++#include <chrono>
+ #include <cstddef>
+ #include <unordered_map>
+ #include <vector>
+@@ -194,6 +195,7 @@ namespace ps2x::iop::detail
+             totalInstructions = 0;
+             eeCycleCarry = 0;
+             eeSyncCycle = 0;
++            hostAnchored = false;
+             activeCpu = nullptr;
+             lastError.clear();
+             servicingDmaInterrupts = false;
+@@ -1148,6 +1150,7 @@ namespace ps2x::iop::detail
+             if constexpr (Ar::kLoading)
+             {
+                 eeSyncCycle = totalCycles;
++                hostAnchored = false;
+                 host.resetAudio();
+                 activeCpu = nullptr;
+                 servicingDmaInterrupts = false;
+@@ -1183,6 +1186,44 @@ namespace ps2x::iop::detail
+         uint64_t totalInstructions = 0;
+         int64_t eeCycleCarry = 0;
+         uint64_t eeSyncCycle = 0;
++
++        // PS2X_IOP_CLOCK=host: the IOP's clock follows the PC's, so its timers (UbiSound's 180 Hz update),
++        // DelayThread, vblank and SPU2 output run in real time whatever the EE's estimated cycles do (default: the
++        // EE's cycles / 8, which fall behind real time in a long slowdown: sound slowed with the frame rate). The
++        // EE's cycles still decide when the IOP gets a turn; the PC clock decides how far it runs.
++        const bool hostClock = []
++        {
++            const char *value = std::getenv("PS2X_IOP_CLOCK");
++            return value && std::string_view(value) == "host";
++        }();
++        bool hostAnchored = false;
++        std::chrono::steady_clock::time_point hostAnchorTime;
++        uint64_t hostAnchorCycle = 0;
++        // Longest stretch replayed after a PC stall (loading, a debugger): beyond it the gap is skipped, not replayed.
++        static constexpr uint64_t kHostMaxCatchUp = kIopClockHz / 10u;
++
++        void runToHostTime()
++        {
++            const auto now = std::chrono::steady_clock::now();
++            if (!hostAnchored)
++            {
++                hostAnchored = true;
++                hostAnchorTime = now;
++                hostAnchorCycle = totalCycles;
++                return;
++            }
++            const double seconds = std::chrono::duration<double>(now - hostAnchorTime).count();
++            const uint64_t target = hostAnchorCycle + static_cast<uint64_t>(seconds * static_cast<double>(kIopClockHz));
++            if (target <= totalCycles)
++                return; // ahead (RPC servers run inline from the EE): wait for the PC clock
++            const uint64_t lag = target - totalCycles;
++            runCycles(std::min(lag, kHostMaxCatchUp));
++            if (lag > kHostMaxCatchUp)
++            {
++                hostAnchorTime = now;
++                hostAnchorCycle = totalCycles;
++            }
++        }
+         CpuState *activeCpu = nullptr;
+         std::string lastError;
+         bool servicingDmaInterrupts = false;
+@@ -1226,6 +1267,13 @@ namespace ps2x::iop::detail
+         m_impl->eeCycleCarry += static_cast<int64_t>(eeCycles);
+         if (m_impl->eeCycleCarry < static_cast<int64_t>(kIopBatchCycles * 8u))
+             return;
++        if (m_impl->hostClock)
++        {
++            m_impl->runToHostTime();
++            m_impl->eeCycleCarry = 0;
++            m_impl->eeSyncCycle = m_impl->totalCycles;
++            return;
++        }
+         m_impl->runCycles(static_cast<uint64_t>(m_impl->eeCycleCarry) / 8u);
+         m_impl->accountEeCycles();
+     }
+-- 
+2.54.0 (Apple Git-157)
+

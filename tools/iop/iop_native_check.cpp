@@ -4,6 +4,8 @@
 // all of IOP RAM, the IOP clock and every thread's state. Exit 0 = identical.
 //
 //   iop_native_check <SLUS_207.43> [EE seconds, default 2]
+//   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
+//       rate must still move the IOP clock by 1 s (within 2 %), and a 0.5 s stall must be skipped, not replayed.
 //
 // Build (ps2xIOP from the pop-sotc tree with patch 51; <gen> = the generated *_iop.cpp, game material, not in git):
 //   c++ -std=c++20 -O2 -I<sotc>/ps2xIOP/include -I<sotc>/ps2xIOP/src tools/iop/iop_native_check.cpp <gen>/*.cpp
@@ -11,7 +13,9 @@
 #include "emulator/iop_emulator.h"
 #include "ps2x/iop/iop_host.h"
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -103,12 +107,8 @@ namespace
         bool loaded = true;
     };
 
-    Result run(const std::vector<uint8_t> &elf, bool native, double seconds)
+    void loadSoundModules(IopEmulator &iop, Result &result, const char *label)
     {
-        setenv("PS2X_IOP_NATIVE", native ? "1" : "0", 1);
-        ElfHost host(elf);
-        IopEmulator iop(host);
-        Result result;
         // First-fit heap: fill everything below each module and hold its slot, then free a slot just before its
         // module loads, so each lands where the game has it and the start routines' allocations go above them all.
         uint32_t slots[std::size(kLoads)] = {};
@@ -126,9 +126,18 @@ namespace
         {
             (void)iop.freeMemory(slots[i]);
             const ModuleLoadResult loaded = iop.loadModuleBuffer(kLoads[i].eeSource, nullptr, 0u);
-            std::printf("  %s %s: id %d start %d\n", native ? "native" : "interp", kLoads[i].name, loaded.moduleId, loaded.startResult);
+            std::printf("  %s %s: id %d start %d\n", label, kLoads[i].name, loaded.moduleId, loaded.startResult);
             result.loaded &= loaded.moduleId > 0;
         }
+    }
+
+    Result run(const std::vector<uint8_t> &elf, bool native, double seconds)
+    {
+        setenv("PS2X_IOP_NATIVE", native ? "1" : "0", 1);
+        ElfHost host(elf);
+        IopEmulator iop(host);
+        Result result;
+        loadSoundModules(iop, result, native ? "native" : "interp");
         const uint64_t eeCycles = static_cast<uint64_t>(seconds * 294912000.0);
         auto runFor = [&](uint64_t cycles)
         {
@@ -169,6 +178,50 @@ namespace
         result.threads = iop.describeThreads();
         return result;
     }
+
+    // PS2X_IOP_CLOCK=host: the IOP's clock follows wall time, not the EE cycles it is fed.
+    int clockCheck(const std::vector<uint8_t> &elf)
+    {
+        setenv("PS2X_IOP_CLOCK", "host", 1);
+        ElfHost host(elf);
+        IopEmulator iop(host);
+        Result result;
+        loadSoundModules(iop, result, "host");
+        RpcRequest init;
+        init.sid = 0x12345678u;
+        static const char kVersion[16] = "UbiSound_Driver";
+        (void)host.writeGuest(0x7F0000u, kVersion, sizeof(kVersion));
+        init.send = {0x7F0000u, sizeof(kVersion)};
+        (void)iop.handleRpc(init); // starts the 180 Hz timer and the update thread
+
+        using clock = std::chrono::steady_clock;
+        // EE cycles at a third of the real rate (a slowdown): 2 ms of wall time per 0.68 ms of EE cycles.
+        auto feed = [&](double wallSeconds)
+        {
+            const auto end = clock::now() + std::chrono::duration<double>(wallSeconds);
+            while (clock::now() < end)
+            {
+                iop.runEeCycles(200'000u);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        };
+        feed(0.05); // anchor
+        const uint64_t c0 = iop.cycles();
+        const auto t0 = clock::now();
+        feed(1.0);
+        const double wall = std::chrono::duration<double>(clock::now() - t0).count();
+        const double iopSeconds = double(iop.cycles() - c0) / 36'864'000.0;
+        std::printf("host clock: %.3f s wall -> %.3f s IOP (%.1f %%)\n", wall, iopSeconds, 100.0 * iopSeconds / wall);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // a PC stall: nothing feeds the IOP
+        const uint64_t c1 = iop.cycles();
+        feed(0.01);
+        const double replayed = double(iop.cycles() - c1) / 36'864'000.0;
+        std::printf("after a 0.5 s stall: %.3f s replayed (cap 0.1 s + the 10 ms fed)\n", replayed);
+        const bool ok = result.loaded && iopSeconds > wall * 0.98 && iopSeconds < wall * 1.02 && replayed < 0.13;
+        std::printf("%s\n", ok ? "clock ok" : "CLOCK WRONG");
+        return ok ? 0 : 4;
+    }
 }
 
 int main(int argc, char **argv)
@@ -180,6 +233,8 @@ int main(int argc, char **argv)
     }
     std::ifstream in(argv[1], std::ios::binary);
     const std::vector<uint8_t> elf((std::istreambuf_iterator<char>(in)), {});
+    if (argc > 2 && std::string(argv[2]) == "--clock")
+        return clockCheck(elf);
     const double seconds = argc > 2 ? std::atof(argv[2]) : 2.0;
 
     const Result interp = run(elf, false, seconds);
