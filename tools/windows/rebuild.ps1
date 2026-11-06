@@ -15,7 +15,7 @@
 #        game\patches\SLUS-20743_7F6EB3D0.pnach (code patches only; see tools/pnach.py)
 param([switch]$Fast, [switch]$Setup, [switch]$Play, [switch]$Release, [switch]$SkipGhidra,
       [string]$RecompSrc = 'C:\tools\PS2Recomp', [string]$Out = 'game\recomp', [string]$Vu1 = '',
-      [string]$Pnach = '')
+      [string]$Pnach = '', [string]$IopNative = '')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
@@ -267,6 +267,17 @@ if ($Vu1) {
     Get-Content "$R\vu1_recomp.log" -Tail 3
     "images: $((Get-ChildItem "$Vu1\vu1_*.bin").Count), generated files: $((Get-ChildItem "$RT\ps2xRuntime\src\vu1_generated\*.cpp").Count)"
     if (Invoke-Logged "$R\vu1_configure.log" cmake @('-S', $RT, '-B', $buildDir, '-DPS2X_BUILD_TEST=OFF')) { 'VU1 RECONFIGURE FAILED'; exit 1 }
+}
+# -IopNative <dir>: the recompiled IOP modules (*_iop.cpp from tools/iop/iop_recomp.py, made on the Mac:
+# docs/native_sound.md step 3) into src\iop_generated, built into the runner (pop-sotc patch 51); they run
+# only with PS2X_IOP_NATIVE=1. Game-derived code: keep it under game\.
+if ($IopNative) {
+    Stage 'Copy recompiled IOP modules'
+    $gen = "$RT\ps2xRuntime\src\iop_generated"
+    New-Item -ItemType Directory -Force $gen | Out-Null
+    Remove-Item "$gen\*.cpp" -ErrorAction SilentlyContinue
+    Copy-Item "$IopNative\*_iop.cpp" $gen
+    "IOP modules: $((Get-ChildItem "$gen\*.cpp").Count) files"
 }
 # PS2X_RUNNER_EXTRA_LIBS (patch 38) in the build's cache; linked privately, so no recompile. Also
 # switches PS2X_BUILD_TEST back off if an interrupted -Vu1 step left it on (19 Oct: ps2xTest then fails

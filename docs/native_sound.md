@@ -123,6 +123,36 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      (threads stay cooperative; the 180 Hz timer and `DelayThread` become real-time waits); (c) native libsd
      from the fork's `native_libsd.cpp`/`native_mixer.cpp` + the four unknown ordinals. (a) and (b) can be done
      and checked against today's interpreted IOP before the mixer exists.
+
+   **(a) done offline (6 Nov), not yet built or run on the PC.**
+   - Runtime: pop-sotc **patch 51** (`51-iop-native-modules.patch`): the fork's `iop_native.h` (trimmed), registry,
+     `NativeEnv`/`runNative` in `iop_emulator.cpp`, `PS2X_IOP_DUMP_MODULES`; the runner builds
+     `src/iop_generated/*.cpp`. A module runs natively only if its file hash **and load base** match the
+     generated code, and only with `PS2X_IOP_NATIVE=1` (off by default). The generated code keeps the
+     interpreter's clock (one tick per instruction), so behaviour and timing match the interpreter; (b) changes
+     the clock, not this.
+   - Bases (from the 16-17 Oct PC logs, identical in 3 runs): sio2man 0x11a00, padman 0x23a00, mcman 0x45d00,
+     mcserv 0x6cf00, libsd 0x77700, **sdrdrv 0x7f100, UbiSound 0x88f00**. If the PC log ever shows
+     `[IOP] native: ... recompiled at base X but loaded at Y`, redo the dump with the new bases.
+   - Redo (Mac): build ps2xIOP from `~/tools/PS2Recomp-sotc` (`cmake -S ps2xIOP -B <b> -G Ninja`; not the stale
+     `game/recomp-sotc/runtime-src` copy, which lacks most patches), build `tools/iop/iop_dump_modules.cpp`
+     (command in its header), then
+     `iop_dump_modules game/ps2/disc/SLUS_207.43 game/analysis/iop/dump sdrdrv:0x55a700:0x7f100 ubisound:0x55c6c0:0x88f00`
+     and `python3 tools/iop/iop_recomp.py game/analysis/iop/dump/<m>.json --out game/analysis/iop/gen`.
+     UbiSound: 67 functions, sdrdrv: 13, none left to the interpreter.
+   - Check: `tools/iop/iop_native_check.cpp` (build line in its header) loads libsd + sdrdrv + UbiSound at those
+     bases, runs the start routines, RPCs 0 (init, version string "UbiSound_Driver"), 3, 2, 5, 6, 7 and ~3 s of
+     IOP time, interpreted and native: **IOP RAM, clock and 7 threads identical (215,690 instructions)**;
+     breaking one instruction of the native update thread is caught. Not covered: bank uploads (RPC 8/9) and
+     real command stacks (need step 1's command table or a recorded run).
+   - PC (when available): copy `game/analysis/iop/gen/*_iop.cpp` to the PC's `game\analysis\iop\gen`, then
+     `rebuild.ps1 -Play -Fast -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative game\analysis\iop\gen`
+     (after `git am` of patch 51); boot with `PS2X_IOP_NATIVE=1` and look for the two `[IOP] native:` lines.
+   - Correct decompiles (Ghidra with `-processor MIPS:LE:32:default`; the default picked MIPS64 R6 and broke
+     jump tables): `game/analysis/iop/ubisound_decomp.c`, `sdrdrv_decomp.c`. UbiSound RPC functions: 0 init
+     (version check, SFX init, stack thread), 1 shutdown, 2 voices wished, 3 post-init config {reverb on,
+     biggest reverb, IOP stream voices}, 4 post-shutdown, 5 free IOP memory, 6 voice status (+ optional stack),
+     7 command stack, 8 start bank upload {_, src, dst, size; byte 0 = mode}, 9 test upload.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
 5. **Swap PCSX2's SPU2 core into the runtime, then record (boots: ask first, TV on).** Replace our SPU2 model

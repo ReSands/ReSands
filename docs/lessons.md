@@ -355,3 +355,15 @@ mode boots the game check for an active display first, so a mistake like this ca
   patch 30 and conflicted). Write runtime patches against the PC's `C:\tools\PS2Recomp-sotc` HEAD, or check the
   Mac clone's last commit first. A compile definition on `ps2_host_backend` (INTERFACE) recompiles all game code:
   `-Fast` then takes ~35 min, not minutes.
+
+## 6 Nov 2026
+
+- **The Mac's patched runtime is `~/tools/PS2Recomp-sotc`, not `game/recomp-sotc/runtime-src`** (the latter had
+  only 5 of 50 patches; an offline tool linked against it loaded IOP modules at the wrong addresses because patch
+  10 was missing). Bring the worktree up with `git am` of the missing `tools/patches/pop-sotc/` files first; its
+  `ps2xIOP` builds and tests on the Mac on its own (the rest of the sotc runtime does not).
+- **Ghidra headless on an IRX: pass `-processor MIPS:LE:32:default`.** Left to itself it picked MIPS64 R6 and
+  every jump table and many returns decoded as bad data.
+- **Check a differential test can fail:** after "identical", break one generated instruction on the path you
+  care about and make sure the check reports it (the first IOP check ran only 367 instructions until RPCs were
+  added).

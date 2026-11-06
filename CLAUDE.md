@@ -104,7 +104,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   closed (`taskkill /f /pid`, check `tasklist`).
 - **Builds:** PC `tools\windows\rebuild.ps1 -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc`
   with `-Fast` (override/runtime-only) or `-SkipGhidra` (recompiler/runtime headers, 30-50 min). Runtime patches:
-  `tools/patches/pop-sotc/` (up to 49, all applied on the PC; after `git am` also check out its HEAD in `game\recomp-sotc\runtime-src`, the build reads that clone). Mac builds the `pop` branch only
+  `tools/patches/pop-sotc/` (up to 51; 51 not yet on the PC; Mac: `~/tools/PS2Recomp-sotc` has all 51, `game/recomp-sotc/runtime-src` on the Mac is stale; after `git am` also check out its HEAD in `game\recomp-sotc\runtime-src`, the build reads that clone). Mac builds the `pop` branch only
   (`tools/rebuild.sh`); native tools via CMake in `tools/native` -> `game/native-build`.
 - **Test loop:** edit -> bundle -> `game\jobs\stnative.ps1` (45 s save boots, R1 held). User bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`. Offline: `pop_state_frame`, `tools/native/score_saves.sh`.
