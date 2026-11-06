@@ -87,6 +87,42 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
    - Fallback if the plumbing can't be made right: route B, the EE-side cut (override each UbiSound RPC command
      and the RPS2 / `sceSdRemote` calls; driver logic rewritten from `ubisound.irx`).
    Step 1 still matters: the command table tells us what each refill and wake-up should look like when checking.
+
+   **First job done (6 Nov, offline): what the sound modules import and how the driver is woken.**
+   Tool: `tools/irx_imports.py <SLUS_207.43 | .irx>` (splits the 7 IRXes embedded in the ELF, names imports from
+   ps2sdk's `exports.tab` files kept in `game/analysis/iop/ps2sdk_tabs/`, counts call sites). Decompiled driver
+   (headless Ghidra, unstripped, 114 functions): `game/analysis/iop/ubisound_decomp.c`.
+   - **What's already native today:** the runtime's `ps2xIOP` implements every IOP kernel import (threads,
+     semaphores, event flags, timers, SIF RPC) as host code (HLE, `iop_emulator.cpp` dispatch). Only the R3000
+     CPU is interpreted, and **everything is timed in counted IOP cycles** (`timrman`, `vblank` and SIF DMA
+     callbacks take `totalCycles`). That's the root of the timing bugs: IOP time advances only while the IOP
+     interpreter runs (patches 16/17 hand it time after RPC calls).
+   - **How UbiSound is woken:** `fn_vCreateTimer` (0x19e4) takes hardware timer `AllocHardTimer(1, 0x20, 1)`
+     with compare `USec2SysClock(5555 µs)`: an interrupt **every 5.555 ms (180 Hz)**. The handler
+     `fn_vTimerFunc` only does `iSignalSema(gs_ThreadSema)`; `fn_iUpdateThread` then runs
+     `SPUDMAManager_Update` (bank uploads, polling `sceSdVoiceTransStatus`), `fn_vUpdateBuffersState` and
+     `fn_vStartTransfer` (IOP-side ADPCM stream refills into SPU2 memory). Native stand-in: a host timer at
+     5.555 ms of real time that signals the semaphore. No timer registers are touched directly.
+   - **Other threads:** `fn_iUbiIOPLoop` (RPC server, id 0x12345678, `SND_fn_pvRPC_IOPServerFunc`),
+     `fn_iStackThread` (runs the EE's batched command stack; woken by `WakeupThread`, polls with
+     `DelayThread(10)`), plus `DelayThread(42 µs)` busy-waits in voice handling and `DelayThread(1000)` in
+     `SPUDMAManager`. Delays must be real time, not IOP cycles.
+   - **Imports per module** (call sites in brackets where >1):
+
+     | Module | libsd | kernel |
+     |---|---|---|
+     | `UbiSound_Driver` (33.5 KB) | Init, SetParam (25), SetSwitch (9), GetSwitch (6), SetAddr (3), GetAddr (5), SetCoreAttr (3), VoiceTrans, VoiceTransStatus (2), SetEffectAttr, ClearEffectWorkArea | thbase (Create/Delete/Start/Terminate/Sleep/WakeupThread, DelayThread ×7, USec2SysClock), thsemap (6 calls incl. `iSignalSema`), timrman (the 180 Hz timer), sysmem (Alloc/Free/QueryMaxFree), sifcmd (RPC server), intrman (EnableIntr ×3, CpuSuspend/Resume), FlushDcache |
+     | `sdrdrv` (8 KB; the EE's `sceSdRemote` server) | all of 4-27 + ordinals 30-33 (newer libsd entries not in ps2sdk's table; the fork's native libsd stops at 27 too: find what they are) | thbase incl. `iWakeupThread` ×3 from interrupt callbacks, sifcmd server **and client** (`sceSifBindRpc`/`CallRpc`: calls back to the EE, e.g. transfer-done) |
+     | `libsd` (28.6 KB) | (the library itself: replaced whole by the native mixer) | intrman (SPU2/DMA interrupts), sifman, thevent |
+
+   - **IOP recompiler exists:** TheBozos/PS2Recomp `tools/iop_recomp.py` (525 lines, GPL-3.0) recompiles an IRX
+     to C++ from the image the IOP loaded (`PS2X_IOP_DUMP_MODULES`); functions from the entry, export tables, JAL
+     targets and code pointers. Copy in `game/analysis/recompfyi/2026-11-06/`. Our base has no IOP recompiler.
+   - **Next:** (a) port `iop_recomp.py` + the module dump to our runtime and recompile `UbiSound_Driver` and
+     `sdrdrv`; (b) move the IOP kernel HLE's timers, delays and wake-ups from `totalCycles` to the host clock
+     (threads stay cooperative; the 180 Hz timer and `DelayThread` become real-time waits); (c) native libsd
+     from the fork's `native_libsd.cpp`/`native_mixer.cpp` + the four unknown ordinals. (a) and (b) can be done
+     and checked against today's interpreted IOP before the mixer exists.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
 5. **Swap PCSX2's SPU2 core into the runtime, then record (boots: ask first, TV on).** Replace our SPU2 model
