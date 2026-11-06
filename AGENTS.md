@@ -2,7 +2,7 @@
 
 You are helping rebuild part of *Prince of Persia: The Sands of Time* (PS2, US, SLUS-20743) as C++ source that
 compiles to **exactly** the original machine code, one function at a time. We start with the game's sound engine,
-**DARE** (Ubisoft's sound engine; 669 functions). A function counts as done when `tools/decomp/match.py` prints
+**DARE** (Ubisoft's sound engine; 669 functions); the rest of the game comes later. A function counts as done when `tools/decomp/match.py` prints
 `MATCH` for it.
 
 This file is for outside contributors. `CLAUDE.md` holds the maintainer's private working notes (their PC, their

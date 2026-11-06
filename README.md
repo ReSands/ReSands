@@ -1,30 +1,83 @@
 # ReSands
 
-A work-in-progress PC version of *Prince of Persia: The Sands of Time* (Ubisoft Montreal, 2003), built by
-statically recompiling the PS2 release (via [PS2Recomp](https://github.com/ran-j/PS2Recomp)) and replacing the
-PS2 hardware at the engine level: a native Vulkan renderer, native sound, native movie decoding, memory card
-and pad. The aim is to keep the PS2 look (haze, post-processing) while running natively on PC.
+ReSands is a static recompilation of Ubisoft Montreal's *Prince of Persia: The Sands of Time* for the
+PlayStation 2, originally released in 2003. The goal for the 1.0 release is a pixel-perfect reproduction of the
+original PS2 game, running natively on PC at 60fps, with zero emulation. Quality of life features like support for
+widescreen, uncapped framerates, and native rendering resolutions up to 4K are planned for version 2.0.
 
-**Status:** early and unfinished. Playable start to finish; native graphics on by default; native sound under way.
-See [`docs/roadmap.md`](docs/roadmap.md) for the release plan.
+Yes, The Sands of Time already exists natively for PC thanks to a port that was released the same year as its PS2
+version. But this version has issues on modern hardware that require fixes from
+[GOG](https://www.gog.com/blog/preserving-sands-of-time/) or projects like
+[OpenJade](https://github.com/dekamaru/openjade). Even with these fixes, problems such as hardcoded keyboard
+controls displayed in in-game tutorials remain. Personally I don't like how clean the PC game looks compared to the
+hazy, dreamlike PS2 original.
 
-## What is (and isn't) here
+So the aim here isn't to produce the best-looking version of Sands of Time, but the most PS2 accurate one possible
+on modern hardware. So far, while building my native Vulkan renderer, I've been using emulated PS2 graphics as a
+source of truth, but the eventual goal is to set up real PS2 hardware and compare the output of its graphics and
+sound chips directly against what my reimplementation produces.
 
-This repository holds our own tooling, runtime patches and notes, plus the hand-written decomp sources under
-`decomp/`. It contains **no game data, executables, disc images, disassembly or recompiled output**, and none will
-be distributed. *Prince of Persia: The Sands of
-Time* belongs to Ubisoft; you need your own copy of the game (US PS2 disc, SLUS-20743).
+Only once version 1.0 is complete will I think about adding quality of life improvements to the game, including
+support for higher resolutions, framerates, and widescreen, the ability to import higher quality assets and audio
+from the PC version of the game, and modern graphical enhancements like support for dynamic shadows, fog, and
+reflective water.
 
-## Help wanted: byte-matching decomp
+ReSands is still in heavy development, and is far from complete. The game still drops to 30fps during heavy combat
+encounters, and the native Vulkan-based renderer occasionally produces graphical glitches. If you'd still like to
+give the project a go then I'd absolutely love you to, just know that at the moment you'd be serving as a beta
+tester.
 
-We are rebuilding the game's sound engine (DARE) as C++ that compiles to the original machine code, one function
-at a time, and AI-assisted contributions are welcome. Point your agent at [`AGENTS.md`](AGENTS.md): it covers the
-setup (your own disc, the CodeWarrior compiler from decomp.me's archive), the work loop and the rules.
+Please note that this is a bring-your-own-disc project, and no original game data is included in this repository
+or its downloads. You'll have to provide your own ISO of the NTSC version of the game (US, SLUS-20743; support for
+PAL and JP versions is planned for the future). The project is also not affiliated with, nor endorsed by Ubisoft or
+Ubisoft Montreal, and AI was used extensively in its development.
 
-## Layout
+More of an Xbox person? Check out [rePOP](https://github.com/FulGerNet/rePOP), which looks awesome.
+
+## Contributing
+
+If you're interested in contributing to ReSands, here's how you can help:
+
+1. **Playtesting.** Download the recomp and give it a play. If you encounter any crashes, glitches, or anything that
+   simply doesn't look, sound, or feel right, please report it. ReSands currently has a save state feature built
+   into it and accessible via the Select button (unused in the original game). Hit the button when you encounter a
+   bug and it'll generate a log file which you can include in your report to help me hunt down whatever bug you're
+   encountering.
+2. **Byte-matching.** This isn't strictly speaking required, but in the interests of learning and preservation, I
+   eventually want to offer a byte-matched decompilation of the entire PS2 game. We're starting with the game's
+   sound engine (DARE). Even with current AI tools this is an arduous and token-expensive process, so if you'd like
+   to contribute some computing power, you should point your LLM of choice at the [AGENTS.md](AGENTS.md) file.
+
+## 1.0 Roadmap
+
+- 0.1 - Playable start to finish with emulated graphics and sound
+- 0.2 - Graphics ported to a fully native Vulkan-based renderer
+- 0.3 - Sound ported to a native engine
+- 0.4 - Native pre-rendered video playback
+- 0.5 - Native memory card and gamepad support
+- 0.6 - Support for PAL and JP discs
+- 1.0 - Cleaned up code, performance optimised
+
+## 2.0 Roadmap (subject to change)
+
+- 1.1 - Adding a graphics settings launcher
+- 1.2 - Support for higher quality audio and pre-rendered movies from the PC version of the game
+- 1.3 - Widescreen
+- 1.4 - Uncapped framerate
+- 1.5 - Support for native higher resolutions
+- 1.6 - Modern graphical enhancements including ambient occlusion, dynamic shadows, fog and atmospheric scattering,
+  reflective water, global illumination, volumetric smoke, and more
+- 1.7 - Support for more PC assets such as high quality textures
+- 1.8 - Support for Linux and macOS
+- 2.0 - A fully byte-matched decomp
+
+## What's in this repository
+
+Our own tooling, runtime patches and notes, plus the hand-written decomp sources. No game data, executables, disc
+images, disassembly or recompiled output.
 
 - `tools/`: analysis and build tooling, native renderer/sound code (`tools/overrides`, `tools/native`)
-- `tools/patches/`: patches on top of PS2Recomp's runtime
+- `tools/patches/`: patches on top of [PS2Recomp](https://github.com/ran-j/PS2Recomp)'s runtime
 - `decomp/dare/`: the byte-matching decomp of DARE (shared header and matched functions)
 - `docs/`: design notes, progress and findings
 
