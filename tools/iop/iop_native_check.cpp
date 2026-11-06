@@ -4,6 +4,11 @@
 // all of IOP RAM, the IOP clock and every thread's state. Exit 0 = identical.
 //
 //   iop_native_check <SLUS_207.43> [EE seconds, default 2]
+//   iop_native_check <SLUS_207.43> --sound <out dir>   the SPU2 path (real libsd + emulated SPU2) against
+//       PS2X_NATIVE_AUDIO=1 (native libsd + mixer), driven the EE's way (sceSdRemote = sdrdrv RPC 0x80000701): a
+//       looping ADPCM voice on core 0 (all 5 filters) keyed on and off, and a PCM block input; writes spu2.wav and
+//       native.wav and compares level, timing and shape. Our SPU2 emulation is not ground truth: a difference
+//       points at one of the two, the WAVs (and the real PS2) decide.
 //   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
 //       rate must still move the IOP clock by 1 s (within 2 %), a 0.5 s stall must be skipped, not replayed, and
 //       after 5000 fast inline RPCs (run ahead) the IOP must keep real time, not wait for the PC to catch up.
@@ -15,7 +20,10 @@
 #include "ps2x/iop/iop_host.h"
 
 #include <chrono>
+#include <cmath>
+#include <tuple>
 #include <cstdio>
+#include <filesystem>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -86,6 +94,9 @@ namespace
         bool hasGuestFunction(uint32_t) const override { return false; }
         bool invokeGuestFunction(uint64_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t *) override { return false; }
         void log(LogLevel, std::string_view) override {}
+        void submitAudio(std::span<const int16_t> samples) override { audio.insert(audio.end(), samples.begin(), samples.end()); }
+
+        std::vector<int16_t> audio; // 48 kHz stereo, as the IOP's sound output gave it
 
         std::vector<uint8_t> guest;
     };
@@ -248,6 +259,168 @@ namespace
         std::printf("%s\n", ok ? "clock ok" : "CLOCK WRONG");
         return ok ? 0 : 4;
     }
+
+    // sceSdRemote as the EE makes it: sdrdrv's command number is the RPC function, arguments at +4, +8, ...
+    std::vector<int16_t> soundRun(const std::vector<uint8_t> &elf, bool nativeAudio)
+    {
+        setenv("PS2X_NATIVE_AUDIO", nativeAudio ? "1" : "0", 1);
+        ElfHost host(elf);
+        IopEmulator iop(host);
+        Result result;
+        loadSoundModules(iop, result, nativeAudio ? "native" : "spu2");
+        auto runFor = [&](double seconds)
+        {
+            for (uint64_t done = 0, cycles = uint64_t(seconds * 294912000.0); done < cycles; done += 294912u)
+                iop.runEeCycles(294912u);
+        };
+        constexpr uint32_t kSend = 0x7F0000u, kReceive = 0x7F8000u;
+        auto sd = [&](uint32_t command, std::initializer_list<uint32_t> args)
+        {
+            uint32_t words[8] = {};
+            size_t i = 1;
+            for (uint32_t a : args)
+                words[i++] = a;
+            (void)host.writeGuest(kSend, words, sizeof(words));
+            RpcRequest request;
+            request.sid = 0x80000701u;
+            request.function = command;
+            request.send = {kSend, sizeof(words)};
+            request.receive = {kReceive, 16u};
+            (void)iop.handleRpc(request);
+            uint32_t reply = 0;
+            (void)host.readGuest(kReceive, &reply, 4u);
+            runFor(0.002);
+            return reply;
+        };
+        enum : uint32_t { kInit = 0x8000, kSetParam = 0x8010, kSetSwitch = 0x8030, kSetAddr = 0x8050, kSetCoreAttr = 0x8070,
+                          kVoiceTrans = 0x80d0, kBlockTrans = 0x80e0, kVoiceTransStatus = 0x80f0 };
+        sd(kInit, {0u});
+        runFor(0.05);
+
+        // A looping sample: 40 ADPCM blocks of a 28-sample sawtooth, cycling through the 5 filters and 3 shifts;
+        // the first block marks the loop start, the last ends with repeat.
+        std::vector<uint8_t> adpcm(40u * 16u, 0u);
+        for (uint32_t b = 0; b < 40u; ++b)
+        {
+            uint8_t *block = &adpcm[b * 16u];
+            block[0] = uint8_t(((b % 5u) << 4) | (2u + b % 3u));
+            block[1] = b == 0u ? 4u : b == 39u ? 3u : 0u;
+            for (uint32_t i = 0; i < 28u; ++i)
+            {
+                const uint8_t nibble = uint8_t((i * 16u / 28u) ^ 8u) & 0xFu;
+                block[2u + i / 2u] |= uint8_t(nibble << ((i & 1u) * 4u));
+            }
+        }
+        const uint32_t iopSample = iop.allocateMemory(uint32_t(adpcm.size()), 64u);
+        (void)iop.writeMemory(iopSample, adpcm.data(), adpcm.size());
+        constexpr uint32_t kSpuSample = 0x5000u;
+        const uint32_t sent = sd(kVoiceTrans, {0u, 0u, iopSample, kSpuSample, uint32_t(adpcm.size())});
+        runFor(0.02);
+        const uint32_t status = sd(kVoiceTransStatus, {0u, 1u});
+        std::printf("  %s: VoiceTrans %#x status %#x\n", nativeAudio ? "native" : "spu2", sent, status);
+
+        // Core 0: master and voice volumes, voice 0 to the dry output, the sample at a fifth above its rate.
+        for (uint32_t core = 0; core < 2u; ++core)
+        {
+            sd(kSetParam, {0x0980u | core, 0x3FFFu});
+            sd(kSetParam, {0x0A80u | core, 0x3FFFu});
+        }
+        sd(kSetSwitch, {0x1800u, 1u}); // VMIXL core 0: voice 0
+        sd(kSetSwitch, {0x1A00u, 1u}); // VMIXR
+        sd(kSetParam, {0x0000u, 0x3FFFu}); // VOLL voice 0
+        sd(kSetParam, {0x0100u, 0x2000u}); // VOLR
+        sd(kSetParam, {0x0200u, 0x1800u}); // PITCH
+        sd(kSetParam, {0x0300u, 0x0A8Fu}); // ADSR1: attack linear rate 10, decay 8, sustain level 15
+        sd(kSetParam, {0x0400u, 0x4C4Bu}); // ADSR2: sustain decreasing, rate 0x31; release linear rate 11
+        sd(kSetAddr, {0x2040u, kSpuSample}); // SSA voice 0
+        sd(kSetSwitch, {0x1500u, 1u}); // KON
+        runFor(0.4);
+        sd(kSetSwitch, {0x1600u, 1u}); // KOFF
+        runFor(0.2);
+
+        // A streamed input on core 0 (as DARE's stream): a looping 2-half PCM buffer, 1 kHz square, left only.
+        std::vector<int16_t> pcm(2u * 2u * 512u, 0);
+        for (uint32_t block = 0; block < 4u; ++block)
+            for (uint32_t i = 0; i < 256u; ++i)
+                pcm[block * 512u + i] = int16_t(((block * 256u + i) / 24u) % 2u ? 6000 : -6000);
+        const uint32_t iopStream = iop.allocateMemory(uint32_t(pcm.size() * 2u), 64u);
+        (void)iop.writeMemory(iopStream, pcm.data(), pcm.size() * 2u);
+        sd(kSetParam, {0x0F80u, 0x7FFFu}); // BVOLL core 0
+        sd(kSetParam, {0x1080u, 0x7FFFu}); // BVOLR
+        sd(kBlockTrans, {0u, 0x10u, iopStream, uint32_t(pcm.size() * 2u)});
+        runFor(0.2);
+        sd(kBlockTrans, {0u, 2u, 0u, 0u});
+        runFor(0.05);
+        return std::move(host.audio);
+    }
+
+    void writeWav(const std::string &path, const std::vector<int16_t> &stereo)
+    {
+        std::ofstream out(path, std::ios::binary);
+        auto u32 = [&](uint32_t v) { out.write(reinterpret_cast<const char *>(&v), 4); };
+        auto u16 = [&](uint16_t v) { out.write(reinterpret_cast<const char *>(&v), 2); };
+        const uint32_t bytes = uint32_t(stereo.size() * 2u);
+        out.write("RIFF", 4); u32(36u + bytes); out.write("WAVEfmt ", 8); u32(16u); u16(1u); u16(2u); u32(48000u);
+        u32(48000u * 4u); u16(4u); u16(16u); out.write("data", 4); u32(bytes);
+        out.write(reinterpret_cast<const char *>(stereo.data()), bytes);
+    }
+
+    // Level and timing per 10 ms window, then the correlation of the two outputs.
+    int soundCheck(const std::vector<uint8_t> &elf, const std::string &outDir)
+    {
+        const std::vector<int16_t> spu2 = soundRun(elf, false), native = soundRun(elf, true);
+        std::filesystem::create_directories(outDir);
+        writeWav(outDir + "/spu2.wav", spu2);
+        writeWav(outDir + "/native.wav", native);
+        const size_t frames = std::min(spu2.size(), native.size()) / 2u;
+        std::printf("frames: spu2 %zu native %zu\n", spu2.size() / 2u, native.size() / 2u);
+        auto firstSound = [](const std::vector<int16_t> &a)
+        {
+            for (size_t i = 0; i < a.size(); ++i)
+                if (std::abs(a[i]) > 64)
+                    return double(i / 2u) / 48000.0;
+            return -1.0;
+        };
+        std::printf("first sound: spu2 %.4f s native %.4f s\n", firstSound(spu2), firstSound(native));
+        std::printf("window(10ms)  spu2 L/R rms      native L/R rms\n");
+        for (size_t w = 0; w + 480u <= frames; w += 480u * 4u)
+        {
+            double r[4] = {};
+            for (size_t i = w; i < w + 480u; ++i)
+                for (int c = 0; c < 2; ++c)
+                {
+                    r[c] += double(spu2[i * 2u + c]) * spu2[i * 2u + c];
+                    r[2 + c] += double(native[i * 2u + c]) * native[i * 2u + c];
+                }
+            std::printf("%6.2f s   %7.0f %7.0f    %7.0f %7.0f\n", double(w) / 48000.0, std::sqrt(r[0] / 480), std::sqrt(r[1] / 480),
+                        std::sqrt(r[2] / 480), std::sqrt(r[3] / 480));
+        }
+        // Per section (voice 0.1-0.3 s, stream 0.71-0.88 s): best correlation of the left channels over +-8 samples,
+        // and the RMS ratio. Pass: same shape (>= 0.999) and level (within 2 %).
+        bool ok = frames > 0.9 * 48000;
+        for (const auto &[name, t0, t1] : {std::tuple{"voice", 0.1, 0.3}, std::tuple{"stream", 0.71, 0.88}})
+        {
+            const size_t i0 = size_t(t0 * 48000), i1 = std::min(size_t(t1 * 48000), frames - 8u);
+            double best = -1.0, ratio = 0.0;
+            int bestLag = 0;
+            for (int lag = -8; lag <= 8; ++lag)
+            {
+                double xy = 0, xx = 0, yy = 0;
+                for (size_t i = i0; i < i1; ++i)
+                {
+                    const double x = spu2[i * 2u], y = native[(i + lag) * 2u];
+                    xy += x * y, xx += x * x, yy += y * y;
+                }
+                const double c = xx > 0 && yy > 0 ? xy / std::sqrt(xx * yy) : 0.0;
+                if (c > best)
+                    best = c, bestLag = lag, ratio = xx > 0 ? std::sqrt(yy / xx) : 0.0;
+            }
+            std::printf("%s: correlation %.5f at lag %d samples, native/spu2 level %.4f\n", name, best, bestLag, ratio);
+            ok &= best >= 0.999 && ratio > 0.98 && ratio < 1.02;
+        }
+        std::printf("%s\n", ok ? "sound ok" : "SOUND DIFFERS");
+        return ok ? 0 : 5;
+    }
 }
 
 int main(int argc, char **argv)
@@ -259,6 +432,8 @@ int main(int argc, char **argv)
     }
     std::ifstream in(argv[1], std::ios::binary);
     const std::vector<uint8_t> elf((std::istreambuf_iterator<char>(in)), {});
+    if (argc > 3 && std::string(argv[2]) == "--sound")
+        return soundCheck(elf, argv[3]);
     if (argc > 2 && std::string(argv[2]) == "--clock")
         return clockCheck(elf);
     const double seconds = argc > 2 ? std::atof(argv[2]) : 2.0;
@@ -286,6 +461,9 @@ int main(int argc, char **argv)
             std::printf("thread %zu: %s | %s\n", i, i < interp.threads.size() ? interp.threads[i].c_str() : "-",
                         i < native.threads.size() ? native.threads[i].c_str() : "-");
     }
+    if (std::getenv("CHECK_THREADS"))
+        for (const std::string &thread : interp.threads)
+            std::printf("  thread %s\n", thread.c_str());
     std::printf("%s (%zu threads)\n", differences ? "DIFFERENT" : "identical", interp.threads.size());
     return differences ? 3 : 0;
 }

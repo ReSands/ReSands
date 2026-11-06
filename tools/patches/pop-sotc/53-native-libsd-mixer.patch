@@ -1,0 +1,1690 @@
+From 6ddaa440792e06503e239c416eb37bfc50a3475b Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 6 Nov 2026 12:01:03 +0000
+Subject: [PATCH] iop: native libsd + mixer (PS2X_NATIVE_AUDIO=1): libsd's
+ calls play on a native mixer, not the SPU2
+
+From TheBozos/PS2Recomp native/gs-backend (native_libsd.cpp, native_mixer.{h,cpp}, GPL-3.0), adapted:
+- libsd is an HLE import library like timrman (imports/iop_libsd.*), per emulator, dispatched before
+  the import resolves to the loaded libsd module; ordinals it does not take (sceSdNote2Pitch /
+  Pitch2Note, the newer 30-33) still run libsd's own code (logged once).
+- The mixer (devices/iop_native_mixer.*) is rendered by IOP time where the SPU2 was (512-frame submits,
+  as the SPU2 path), so with PS2X_IOP_CLOCK=host it plays in real time; block-input half interrupts
+  and transfer-done handlers become guest calls 2000 cycles later through a small queue of their own
+  (not in states: ScheduledGuestCallback is saved raw, so its layout stays). Movie input and the
+  singleton removed; Catmull-Rom replaced by the SPU2's Gaussian table (now spu2InterpolationWeights()).
+- PMON / NON switches (not played by the mixer) are logged once when set.
+- State load resets the native mixer (states carry the SPU2 path's libsd).
+
+Default off; the default path is unchanged. Checked offline (PoP tools/iop/iop_native_check.cpp
+--sound, sdrdrv RPC as the EE sends it): a looping ADPCM voice (5 filters, ADSR, key on/off) and a
+PCM block input match the SPU2 path: correlation 1.00000, level 0.9999 / 1.0001, voice 1 sample later.
+---
+ ps2xIOP/CMakeLists.txt                        |   2 +
+ .../src/emulator/devices/iop_native_mixer.cpp | 734 ++++++++++++++++++
+ .../src/emulator/devices/iop_native_mixer.h   | 180 +++++
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp     |   5 +
+ ps2xIOP/src/emulator/devices/iop_spu2.h       |   3 +
+ ps2xIOP/src/emulator/imports/iop_libsd.cpp    | 459 +++++++++++
+ ps2xIOP/src/emulator/imports/iop_libsd.h      |  74 ++
+ ps2xIOP/src/emulator/iop_emulator.cpp         |  64 +-
+ 8 files changed, 1520 insertions(+), 1 deletion(-)
+ create mode 100644 ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
+ create mode 100644 ps2xIOP/src/emulator/devices/iop_native_mixer.h
+ create mode 100644 ps2xIOP/src/emulator/imports/iop_libsd.cpp
+ create mode 100644 ps2xIOP/src/emulator/imports/iop_libsd.h
+
+diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
+index 1f4537e..155a3cf 100644
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -14,6 +14,7 @@ add_library(ps2_iop STATIC
+     src/emulator/core/iop_memory.cpp
+     src/emulator/devices/iop_dualshock2.cpp
+     src/emulator/devices/iop_memcard.cpp
++    src/emulator/devices/iop_native_mixer.cpp
+     src/emulator/devices/iop_sio2.cpp
+     src/emulator/devices/iop_spu2.cpp
+     src/emulator/services/iop_module_loader.cpp
+@@ -23,6 +24,7 @@ add_library(ps2_iop STATIC
+     src/emulator/imports/iop_imports.cpp
+     src/emulator/imports/iop_intrman.cpp
+     src/emulator/imports/iop_ioman.cpp
++    src/emulator/imports/iop_libsd.cpp
+     src/emulator/imports/iop_loadcore.cpp
+     src/emulator/imports/iop_stdio.cpp
+     src/emulator/imports/iop_sysclib.cpp
+diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp b/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
+new file mode 100644
+index 0000000..247797a
+--- /dev/null
++++ b/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
+@@ -0,0 +1,734 @@
++// From TheBozos/PS2Recomp native/gs-backend (ps2xIOP/src/native_mixer.cpp, GPL-3.0); see iop_native_mixer.h.
++#include "emulator/devices/iop_native_mixer.h"
++#include "emulator/devices/iop_spu2.h"
++
++#include <algorithm>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++
++namespace ps2x::audio
++{
++    namespace
++    {
++        // The report's raw peak of each group's input data since its last line.
++        int g_inputRawPeak[2] = {0, 0};
++
++        // PS2 ADPCM: a 16-byte block is a header (shift, filter, flags) and 28 4-bit samples; each filter predicts
++        // from the two samples before.
++        constexpr int32_t kFilterPositive[5] = {0, 60, 115, 98, 122};
++        constexpr int32_t kFilterNegative[5] = {0, 0, -52, -55, -60};
++
++        int32_t clamp16(int32_t value)
++        {
++            return std::clamp(value, -0x8000, 0x7FFF);
++        }
++
++        int32_t mul15(int32_t a, int32_t b)
++        {
++            return (a * b) >> 15;
++        }
++
++        // One step of an envelope or a volume sweep: rate is (shift << 2) | step, 0..127, at 48 kHz.
++        void envelopeStep(int32_t &level, uint32_t &counter, uint32_t rate, bool decreasing, bool exponential)
++        {
++            const int32_t shift = static_cast<int32_t>(rate >> 2u);
++            int32_t step = 7 - static_cast<int32_t>(rate & 3u);
++            if (decreasing)
++                step = ~step;
++            uint32_t increment = 0x8000u;
++            if (shift < 11)
++                step *= 1 << (11 - shift);
++            else if (shift > 11)
++                increment = shift - 11 < 16 ? increment >> (shift - 11) : 0u;
++            if (exponential)
++            {
++                if (decreasing)
++                    step = (step * level) >> 15;
++                else if (level >= 0x6000)
++                {
++                    if (shift < 10)
++                        step >>= 2;
++                    else if (shift >= 11)
++                        increment >>= 2;
++                    else
++                    {
++                        step >>= 1;
++                        increment >>= 1;
++                    }
++                }
++            }
++            counter += increment;
++            if ((counter & 0x8000u) == 0u)
++                return;
++            counter = 0u;
++            level = std::clamp(level + step, 0, 0x7FFF);
++        }
++
++        // libsd's reverb presets (its table, mode 0 off .. 9 pipe): dAPF1, dAPF2, vIIR, vCOMB1..4, vWALL, vAPF1, vAPF2,
++        // mLSAME, mRSAME, mLCOMB1, mRCOMB1, mLCOMB2, mRCOMB2, dLSAME, dRSAME, mLDIFF, mRDIFF, mLCOMB3, mRCOMB3, mLCOMB4,
++        // mRCOMB4, dLDIFF, dRDIFF, mLAPF1, mRAPF1, mLAPF2, mRAPF2, vLIN, vRIN; offsets in units of 8 bytes. And each
++        // mode's effect area, in the same units.
++        constexpr uint16_t kPresets[10][32] = {
++            {0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0001, 0x0001, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000},
++            {0x007D, 0x005B, 0x6D80, 0x54B8, 0xBED0, 0x0000, 0x0000, 0xBA80, 0x5800, 0x5300, 0x04D6, 0x0333, 0x03F0, 0x0227, 0x0374, 0x01EF, 0x0336, 0x01B7, 0x0335, 0x01B6, 0x0334, 0x01B5, 0x0334, 0x01B5, 0x0334, 0x01B5, 0x01B4, 0x0136, 0x00B8, 0x005C, 0x8000, 0x8000},
++            {0x0033, 0x0025, 0x70F0, 0x4FA8, 0xBCE0, 0x4410, 0xC0F0, 0x9C00, 0x5280, 0x4EC0, 0x03E4, 0x031B, 0x03A4, 0x02AF, 0x0372, 0x0266, 0x031C, 0x025D, 0x025C, 0x018E, 0x022F, 0x0135, 0x01D2, 0x00B7, 0x018F, 0x00B5, 0x00B4, 0x0080, 0x004C, 0x0026, 0x8000, 0x8000},
++            {0x00B1, 0x007F, 0x70F0, 0x4FA8, 0xBCE0, 0x4510, 0xBEF0, 0xB4C0, 0x5280, 0x4EC0, 0x0904, 0x076B, 0x0824, 0x065F, 0x07A2, 0x0616, 0x076C, 0x05ED, 0x05EC, 0x042E, 0x050F, 0x0305, 0x0462, 0x02B7, 0x042F, 0x0265, 0x0264, 0x01B2, 0x0100, 0x0080, 0x8000, 0x8000},
++            {0x00E3, 0x00A9, 0x6F60, 0x4FA8, 0xBCE0, 0x4510, 0xBEF0, 0xA680, 0x5680, 0x52C0, 0x0DFB, 0x0B58, 0x0D09, 0x0A3C, 0x0BD9, 0x0973, 0x0B59, 0x08DA, 0x08D9, 0x05E9, 0x07EC, 0x04B0, 0x06EF, 0x03D2, 0x05EA, 0x031D, 0x031C, 0x0238, 0x0154, 0x00AA, 0x8000, 0x8000},
++            {0x01A5, 0x0139, 0x6000, 0x5000, 0x4C00, 0xB800, 0xBC00, 0xC000, 0x6000, 0x5C00, 0x15BA, 0x11BB, 0x14C2, 0x10BD, 0x11BC, 0x0DC1, 0x11C0, 0x0DC3, 0x0DC0, 0x09C1, 0x0BC4, 0x07C1, 0x0A00, 0x06CD, 0x09C2, 0x05C1, 0x05C0, 0x041A, 0x0274, 0x013A, 0x8000, 0x8000},
++            {0x033D, 0x0231, 0x7E00, 0x5000, 0xB400, 0xB000, 0x4C00, 0xB000, 0x6000, 0x5400, 0x1ED6, 0x1A31, 0x1D14, 0x183B, 0x1BC2, 0x16B2, 0x1A32, 0x15EF, 0x15EE, 0x1055, 0x1334, 0x0F2D, 0x11F6, 0x0C5D, 0x1056, 0x0AE1, 0x0AE0, 0x07A2, 0x0464, 0x0232, 0x8000, 0x8000},
++            {0x0003, 0x0003, 0x7FFF, 0x7FFF, 0x0000, 0x0000, 0x0000, 0x8100, 0x0000, 0x0000, 0x1FFD, 0x0FFD, 0x1009, 0x0009, 0x0000, 0x0000, 0x1009, 0x0009, 0x1FFF, 0x1FFF, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1008, 0x1004, 0x0008, 0x0004, 0x8000, 0x8000},
++            {0x0003, 0x0003, 0x7FFF, 0x7FFF, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x1FFD, 0x0FFD, 0x1009, 0x0009, 0x0000, 0x0000, 0x1009, 0x0009, 0x1FFF, 0x1FFF, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1FFE, 0x1008, 0x1004, 0x0008, 0x0004, 0x8000, 0x8000},
++            {0x0017, 0x0013, 0x70F0, 0x4FA8, 0xBCE0, 0x4510, 0xBEF0, 0x8500, 0x5F80, 0x54C0, 0x0371, 0x02AF, 0x02E5, 0x01DF, 0x02B0, 0x01D7, 0x0358, 0x026A, 0x01D6, 0x011E, 0x012D, 0x00B1, 0x011F, 0x0059, 0x01A0, 0x00E3, 0x0058, 0x0040, 0x0028, 0x0014, 0x8000, 0x8000},
++        };
++        constexpr uint32_t kAreaSizes[10] = {0x2, 0x4D8, 0x3E8, 0x908, 0xDFC, 0x15BC, 0x1ED8, 0x3008, 0x3008, 0x780};
++
++        // The SPU2's 4-tap Gaussian over y0..y3 (oldest first); t a 12-bit fraction (pop-sotc: was Catmull-Rom).
++        int32_t interpolate(int32_t y0, int32_t y1, int32_t y2, int32_t y3, uint32_t t)
++        {
++            const auto &w = ps2x::iop::detail::spu2InterpolationWeights()[(t >> 4u) & 0xFFu];
++            return clamp16(((y0 * w[0]) >> 15) + ((y1 * w[1]) >> 15) + ((y2 * w[2]) >> 15) + ((y3 * w[3]) >> 15));
++        }
++    }
++
++    void NativeMixer::Volume::set(uint16_t value)
++    {
++        setting = value;
++        counter = 0u;
++        if ((value & 0x8000u) == 0u)
++            level = static_cast<int16_t>(static_cast<uint16_t>(value << 1u));
++    }
++
++    void NativeMixer::Volume::tick()
++    {
++        if ((setting & 0x8000u) == 0u)
++            return;
++        const bool negative = (setting & 0x1000u) != 0u;
++        int32_t magnitude = std::abs(level);
++        envelopeStep(magnitude, counter, setting & 0x7Fu, (setting & 0x2000u) != 0u, (setting & 0x4000u) != 0u);
++        level = negative ? -magnitude : magnitude;
++    }
++
++    void NativeMixer::reset()
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        for (Group &group : m_groups)
++            group = Group{};
++        m_groups[1].mix = 0xFFCu;
++    }
++
++    void NativeMixer::write(uint32_t address, const uint8_t *data, uint32_t bytes)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        for (uint32_t i = 0; i < bytes; ++i)
++            m_memory[(address + i) % kSoundMemory] = data[i];
++        m_stats.uploaded += bytes;
++    }
++
++    void NativeMixer::read(uint32_t address, uint8_t *data, uint32_t bytes) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        for (uint32_t i = 0; i < bytes; ++i)
++            data[i] = m_memory[(address + i) % kSoundMemory];
++    }
++
++    void NativeMixer::setVolume(int group, int voice, int side, uint16_t value)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].voices[voice].volume[side].set(value);
++    }
++    void NativeMixer::setPitch(int group, int voice, uint16_t pitch)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].voices[voice].pitch = pitch;
++    }
++    void NativeMixer::setAdsr(int group, int voice, int word, uint16_t value)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].voices[voice].adsr[word] = value;
++    }
++    void NativeMixer::setStart(int group, int voice, uint32_t address)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].voices[voice].start = address & (kSoundMemory - 1u) & ~15u;
++    }
++    void NativeMixer::setLoop(int group, int voice, uint32_t address)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        Voice &v = m_groups[group].voices[voice];
++        v.loop = address & (kSoundMemory - 1u) & ~15u;
++        v.loopSet = true;
++    }
++    uint16_t NativeMixer::volume(int group, int voice, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].volume[side].setting;
++    }
++    uint16_t NativeMixer::pitch(int group, int voice) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].pitch;
++    }
++    uint16_t NativeMixer::adsr(int group, int voice, int word) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].adsr[word];
++    }
++    uint16_t NativeMixer::envelope(int group, int voice) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return static_cast<uint16_t>(m_groups[group].voices[voice].level);
++    }
++    uint32_t NativeMixer::start(int group, int voice) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].start;
++    }
++    uint32_t NativeMixer::loop(int group, int voice) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].loop;
++    }
++    uint32_t NativeMixer::position(int group, int voice) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].voices[voice].block;
++    }
++
++    void NativeMixer::keyOn(int group, uint32_t mask)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        Group &g = m_groups[group];
++        for (int index = 0; index < kVoices; ++index)
++        {
++            if ((mask & (1u << index)) == 0u)
++                continue;
++            Voice &voice = g.voices[index];
++            voice.phase = Voice::Phase::Attack;
++            voice.level = 0;
++            voice.envelopeCounter = 0u;
++            voice.counter = 0u;
++            std::fill(std::begin(voice.samples), std::end(voice.samples), static_cast<int16_t>(0));
++            voice.history[0] = voice.history[1] = 0;
++            voice.block = voice.start;
++            voice.loopSet = false;
++            g.ended &= ~(1u << index);
++            decode(voice);
++            ++m_stats.keyOns;
++        }
++    }
++
++    void NativeMixer::keyOff(int group, uint32_t mask)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        for (int index = 0; index < kVoices; ++index)
++        {
++            Voice &voice = m_groups[group].voices[index];
++            if ((mask & (1u << index)) == 0u || voice.phase == Voice::Phase::Off)
++                continue;
++            voice.phase = Voice::Phase::Release;
++            voice.envelopeCounter = 0u;
++        }
++    }
++
++    uint32_t NativeMixer::ended(int group) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].ended;
++    }
++    void NativeMixer::clearEnded(int group, uint32_t mask)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].ended &= ~mask;
++    }
++    void NativeMixer::setDryMask(int group, int side, uint32_t mask)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].dry[side] = mask & 0xFFFFFFu;
++    }
++    void NativeMixer::setWetMask(int group, int side, uint32_t mask)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].wet[side] = mask & 0xFFFFFFu;
++    }
++    uint32_t NativeMixer::dryMask(int group, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].dry[side];
++    }
++    uint32_t NativeMixer::wetMask(int group, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].wet[side];
++    }
++    void NativeMixer::setMasterVolume(int group, int side, uint16_t value)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].master[side].set(value);
++    }
++    void NativeMixer::setEffectVolume(int group, int side, uint16_t value)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].effect[side].set(value);
++    }
++    uint16_t NativeMixer::masterVolume(int group, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].master[side].setting;
++    }
++    uint16_t NativeMixer::effectVolume(int group, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].effect[side].setting;
++    }
++
++    uint32_t NativeMixer::effectAreaBytes(int mode)
++    {
++        return kAreaSizes[std::clamp(mode, 0, 9)] * 8u;
++    }
++
++    void NativeMixer::setEffect(int group, int mode, uint32_t delay, uint32_t feedback, uint32_t end)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        Reverb &reverb = m_groups[group].reverb;
++        mode = std::clamp(mode, 0, 9);
++        reverb.mode = mode;
++        std::copy(std::begin(kPresets[mode]), std::end(kPresets[mode]), reverb.settings);
++        if (mode == 7 || mode == 8)
++        {
++            // Echo and delay: the delay time moves the same-side and all-pass lines (as libsd's sceSdSetEffectAttr
++            // does), the feedback is the wall coefficient.
++            const uint32_t t = std::min(delay, 127u) + 1u;
++            uint16_t *s = reverb.settings;
++            s[10] = static_cast<uint16_t>((t << 6u) - s[0]);
++            s[11] = static_cast<uint16_t>((t << 5u) - s[1]);
++            s[16] = static_cast<uint16_t>(s[17] + (t << 5u));
++            s[12] = static_cast<uint16_t>(s[13] + (t << 5u));
++            s[27] = static_cast<uint16_t>(s[29] + (t << 5u));
++            s[26] = static_cast<uint16_t>(s[28] + (t << 5u));
++            s[7] = static_cast<uint16_t>(std::min(feedback, 127u) * 258u);
++        }
++        // The area: the mode's size below end (its last byte), in 16-bit samples.
++        end = (end | 0x1FFFFu) & (kSoundMemory - 1u);
++        reverb.size = kAreaSizes[mode] * 4u;
++        reverb.start = ((end + 1u) / 2u - reverb.size) & (kSoundMemory / 2u - 1u);
++        reverb.position = 0u;
++        reverb.input[0] = reverb.input[1] = reverb.out[0] = reverb.out[1] = reverb.previous[0] = reverb.previous[1] = 0;
++    }
++
++    void NativeMixer::setEffectEnable(int group, bool enable)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].reverb.enabled = enable;
++    }
++
++    void NativeMixer::clearEffectArea(int mode, uint32_t end)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        end = (end | 0x1FFFFu) & (kSoundMemory - 1u);
++        const uint32_t bytes = effectAreaBytes(mode);
++        for (uint32_t i = 0; i < bytes; ++i)
++            m_memory[(end + 1u - bytes + i) & (kSoundMemory - 1u)] = 0u;
++    }
++
++    // One step of the console's reverb (24 kHz): the same-side and cross IIR lines, four combs, two all-pass filters,
++    // on the delay lines in sound memory, which advance a sample each step.
++    void NativeMixer::stepReverb(Reverb &reverb, const int32_t send[2], int32_t out[2])
++    {
++        const uint32_t size = reverb.size;
++        const auto at = [&](uint32_t offset, int32_t delta = 0)
++        {
++            const uint32_t relative = (reverb.position + offset + static_cast<uint32_t>(delta + static_cast<int32_t>(size))) % size;
++            return ((reverb.start + relative) & (kSoundMemory / 2u - 1u)) * 2u;
++        };
++        const auto load = [&](uint32_t offset, int32_t delta = 0)
++        {
++            const uint32_t a = at(offset, delta);
++            return static_cast<int32_t>(static_cast<int16_t>(m_memory[a] | (m_memory[a + 1u] << 8u)));
++        };
++        const auto store = [&](uint32_t offset, int32_t value)
++        {
++            const uint32_t a = at(offset);
++            const uint16_t v = static_cast<uint16_t>(clamp16(value));
++            m_memory[a] = static_cast<uint8_t>(v);
++            m_memory[a + 1u] = static_cast<uint8_t>(v >> 8u);
++        };
++        const uint16_t *s = reverb.settings;
++        const auto gain = [&](int index) { return static_cast<int32_t>(static_cast<int16_t>(s[index])); };
++        const auto line = [&](int index) { return static_cast<uint32_t>(s[index]) * 4u; };
++        const int32_t vIIR = gain(2), vCOMB1 = gain(3), vCOMB2 = gain(4), vCOMB3 = gain(5), vCOMB4 = gain(6),
++                      vWALL = gain(7), vAPF1 = gain(8), vAPF2 = gain(9), vLIN = gain(30), vRIN = gain(31);
++        const uint32_t dAPF1 = line(0), dAPF2 = line(1), mLSAME = line(10), mRSAME = line(11), mLCOMB1 = line(12),
++                       mRCOMB1 = line(13), mLCOMB2 = line(14), mRCOMB2 = line(15), dLSAME = line(16), dRSAME = line(17),
++                       mLDIFF = line(18), mRDIFF = line(19), mLCOMB3 = line(20), mRCOMB3 = line(21), mLCOMB4 = line(22),
++                       mRCOMB4 = line(23), dLDIFF = line(24), dRDIFF = line(25), mLAPF1 = line(26), mRAPF1 = line(27),
++                       mLAPF2 = line(28), mRAPF2 = line(29);
++
++        const int32_t lin = mul15(clamp16(send[0]), vLIN);
++        const int32_t rin = mul15(clamp16(send[1]), vRIN);
++        store(mLSAME, mul15(lin + mul15(load(dLSAME), vWALL) - load(mLSAME, -1), vIIR) + load(mLSAME, -1));
++        store(mRSAME, mul15(rin + mul15(load(dRSAME), vWALL) - load(mRSAME, -1), vIIR) + load(mRSAME, -1));
++        store(mLDIFF, mul15(lin + mul15(load(dRDIFF), vWALL) - load(mLDIFF, -1), vIIR) + load(mLDIFF, -1));
++        store(mRDIFF, mul15(rin + mul15(load(dLDIFF), vWALL) - load(mRDIFF, -1), vIIR) + load(mRDIFF, -1));
++
++        int32_t lout = mul15(vCOMB1, load(mLCOMB1)) + mul15(vCOMB2, load(mLCOMB2)) + mul15(vCOMB3, load(mLCOMB3)) +
++                       mul15(vCOMB4, load(mLCOMB4));
++        int32_t rout = mul15(vCOMB1, load(mRCOMB1)) + mul15(vCOMB2, load(mRCOMB2)) + mul15(vCOMB3, load(mRCOMB3)) +
++                       mul15(vCOMB4, load(mRCOMB4));
++        const auto allPass = [&](int32_t value, uint32_t destination, uint32_t delay, int32_t coefficient)
++        {
++            const int32_t delayed = load(destination, -static_cast<int32_t>(delay));
++            value = clamp16(value - mul15(coefficient, delayed));
++            store(destination, value);
++            return mul15(value, coefficient) + delayed;
++        };
++        lout = allPass(lout, mLAPF1, dAPF1, vAPF1);
++        rout = allPass(rout, mRAPF1, dAPF1, vAPF1);
++        lout = allPass(lout, mLAPF2, dAPF2, vAPF2);
++        rout = allPass(rout, mRAPF2, dAPF2, vAPF2);
++
++        reverb.position = reverb.position + 1u >= size ? 0u : reverb.position + 1u;
++        out[0] = clamp16(lout);
++        out[1] = clamp16(rout);
++    }
++
++    void NativeMixer::setMix(int group, uint16_t mix)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].mix = mix & 0xFFFu;
++    }
++    uint16_t NativeMixer::mix(int group) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].mix;
++    }
++    void NativeMixer::setInputVolume(int group, int side, uint16_t value)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].input.volume[side] = static_cast<int16_t>(value);
++    }
++    uint16_t NativeMixer::inputVolume(int group, int side) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return static_cast<uint16_t>(m_groups[group].input.volume[side]);
++    }
++
++    namespace
++    {
++        // The input's layout: blocks of 1024 bytes, 256 left samples then 256 right.
++        uint32_t inputSampleAt(uint32_t offset)
++        {
++            return (offset / 1024u) * 256u + (offset % 512u) / 2u;
++        }
++        uint32_t inputOffsetOf(uint32_t sample)
++        {
++            return (sample / 256u) * 1024u + (sample % 256u) * 2u;
++        }
++    }
++
++    void NativeMixer::startInput(int group, const uint8_t *memory, uint32_t bytes, uint32_t offset, bool loop)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        Input &input = m_groups[group].input;
++        input.memory = memory;
++        input.samples = bytes / 1024u * 256u;
++        input.position = input.samples != 0u ? inputSampleAt(offset) % input.samples : 0u;
++        input.loop = loop;
++        input.playing = memory != nullptr && input.samples != 0u;
++    }
++    void NativeMixer::stopInput(int group)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_groups[group].input.playing = false;
++    }
++    bool NativeMixer::inputPlaying(int group) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return m_groups[group].input.playing;
++    }
++    uint32_t NativeMixer::inputOffset(int group) const
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        return inputOffsetOf(m_groups[group].input.position);
++    }
++    void NativeMixer::setInputHalfCallback(std::function<void(int group, int half)> half)
++    {
++        std::lock_guard<std::mutex> lock(m_mutex);
++        m_inputHalf = std::move(half);
++    }
++
++    void NativeMixer::decode(Voice &voice)
++    {
++        const uint8_t *block = &m_memory[voice.block & (kSoundMemory - 16u)];
++        uint32_t shift = block[0] & 0xFu, filter = (block[0] >> 4u) & 7u;
++        if (shift > 12u)
++            shift = 9u;
++        if (filter > 4u)
++            filter = 4u;
++        voice.flags = block[1];
++        if ((voice.flags & 4u) != 0u && !voice.loopSet)
++            voice.loop = voice.block;
++        voice.samples[0] = voice.samples[28];
++        voice.samples[1] = voice.samples[29];
++        voice.samples[2] = voice.samples[30];
++        int32_t h0 = voice.history[0], h1 = voice.history[1];
++        for (uint32_t i = 0; i < 28u; ++i)
++        {
++            const uint32_t nibble = (block[2u + (i >> 1u)] >> ((i & 1u) * 4u)) & 0xFu;
++            int32_t value = static_cast<int16_t>(static_cast<uint16_t>(nibble << 12u)) >> shift;
++            value = clamp16(value + ((h0 * kFilterPositive[filter] + h1 * kFilterNegative[filter] + 32) >> 6));
++            h1 = h0;
++            h0 = value;
++            voice.samples[3u + i] = static_cast<int16_t>(value);
++        }
++        voice.history[0] = h0;
++        voice.history[1] = h1;
++    }
++
++    void NativeMixer::stepEnvelope(Voice &voice)
++    {
++        const uint16_t a1 = voice.adsr[0], a2 = voice.adsr[1];
++        switch (voice.phase)
++        {
++        case Voice::Phase::Attack:
++            envelopeStep(voice.level, voice.envelopeCounter, (a1 >> 8u) & 0x7Fu, false, (a1 & 0x8000u) != 0u);
++            if (voice.level >= 0x7FFF)
++            {
++                voice.phase = Voice::Phase::Decay;
++                voice.envelopeCounter = 0u;
++            }
++            break;
++        case Voice::Phase::Decay:
++            envelopeStep(voice.level, voice.envelopeCounter, ((a1 >> 4u) & 0xFu) << 2u, true, true);
++            if (voice.level <= std::min<int32_t>(((a1 & 0xFu) + 1) * 0x800, 0x7FFF))
++            {
++                voice.phase = Voice::Phase::Sustain;
++                voice.envelopeCounter = 0u;
++            }
++            break;
++        case Voice::Phase::Sustain:
++            envelopeStep(voice.level, voice.envelopeCounter, (a2 >> 6u) & 0x7Fu, (a2 & 0x4000u) != 0u, (a2 & 0x8000u) != 0u);
++            break;
++        case Voice::Phase::Release:
++            envelopeStep(voice.level, voice.envelopeCounter, (a2 & 0x1Fu) << 2u, true, (a2 & 0x20u) != 0u);
++            if (voice.level <= 0)
++            {
++                voice.level = 0;
++                voice.phase = Voice::Phase::Off;
++            }
++            break;
++        case Voice::Phase::Off:
++            break;
++        }
++    }
++
++    int32_t NativeMixer::sample(Group &group, int index, Voice &voice)
++    {
++        const uint32_t at = voice.counter >> 12u;
++        int32_t value = interpolate(voice.samples[at], voice.samples[at + 1u], voice.samples[at + 2u], voice.samples[at + 3u],
++                                    voice.counter & 0xFFFu);
++        stepEnvelope(voice);
++        value = mul15(value, voice.level);
++        voice.counter += std::min<uint32_t>(voice.pitch, 0x3FFFu);
++        while ((voice.counter >> 12u) >= 28u)
++        {
++            voice.counter -= 28u << 12u;
++            if ((voice.flags & 1u) != 0u)
++            {
++                // The block ends the sample: on to the loop point; without the repeat flag the voice stops.
++                group.ended |= 1u << index;
++                voice.block = voice.loop;
++                if ((voice.flags & 2u) == 0u)
++                {
++                    voice.phase = Voice::Phase::Off;
++                    voice.level = 0;
++                }
++            }
++            else
++                voice.block = (voice.block + 16u) & (kSoundMemory - 1u);
++            decode(voice);
++        }
++        return value;
++    }
++
++    void NativeMixer::report()
++    {
++        static const bool s_stats = [] { const char *v = std::getenv("PS2X_NATIVE_AUDIO_STATS"); return !(v && *v == '0'); }();
++        if (!s_stats)
++            return;
++        int playing = 0;
++        Stats stats;
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            for (const Group &group : m_groups)
++                for (const Voice &voice : group.voices)
++                    playing += voice.phase != Voice::Phase::Off ? 1 : 0;
++            stats = m_stats;
++            m_stats.peak = 0;
++        }
++        std::fprintf(stderr, "[audio] native mixer: %.0f s mixed, key ons %llu, uploaded %llu bytes, input halves %llu, peak %d, voices playing %d\n",
++                     static_cast<double>(stats.frames) / kSampleRate, static_cast<unsigned long long>(stats.keyOns),
++                     static_cast<unsigned long long>(stats.uploaded), static_cast<unsigned long long>(stats.halves), stats.peak,
++                     playing);
++        // Each group's input: its raw peak since the last line (the data the game streams), volume and mix switches.
++        for (int g = 0; g < kGroups; ++g)
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            const Group &group = m_groups[g];
++            std::fprintf(stderr, "[audio]   group %d input %s raw peak %d volume %04x %04x mix %04x\n", g,
++                         group.input.playing ? "playing" : "stopped", g_inputRawPeak[g], static_cast<uint16_t>(group.input.volume[0]),
++                         static_cast<uint16_t>(group.input.volume[1]), group.mix);
++            g_inputRawPeak[g] = 0;
++        }
++    }
++
++    void NativeMixer::render(int16_t *out, size_t frames)
++    {
++        bool due = false;
++        {
++            std::lock_guard<std::mutex> lock(m_mutex);
++            const uint64_t before = m_stats.frames;
++            m_stats.frames += frames;
++            due = before / (10u * kSampleRate) != m_stats.frames / (10u * kSampleRate);
++            mix(out, frames);
++        }
++        if (due)
++            report();
++    }
++
++    void NativeMixer::mix(int16_t *out, size_t frames)
++    {
++        for (size_t frame = 0; frame < frames; ++frame)
++        {
++            // Group 0's output goes into group 1 (as its external input, through group 1's master volume).
++            int32_t mixed[2] = {0, 0};
++            for (int g = 0; g < kGroups; ++g)
++            {
++                Group &group = m_groups[g];
++                int32_t dry[2] = {0, 0}, wet[2] = {0, 0};
++                int32_t input[2] = {0, 0};
++                if (group.input.playing)
++                {
++                    Input &in = group.input;
++                    const uint32_t at = inputOffsetOf(in.position);
++                    for (int side = 0; side < 2; ++side)
++                    {
++                        const uint8_t *p = in.memory + at + static_cast<uint32_t>(side) * 512u;
++                        int16_t raw = static_cast<int16_t>(static_cast<uint16_t>(p[0] | (p[1] << 8u)));
++                        g_inputRawPeak[g] = std::max(g_inputRawPeak[g], std::abs(static_cast<int>(raw)));
++                        input[side] = mul15(raw, in.volume[side]);
++                    }
++                    ++in.position;
++                    const uint32_t half = in.samples / 2u;
++                    if (in.position == half || in.position >= in.samples)
++                    {
++                        const int which = in.position == half ? 0 : 1;
++                        if (in.position >= in.samples)
++                        {
++                            in.position = 0u;
++                            in.playing = in.loop;
++                        }
++                        ++m_stats.halves;
++                        // PS2X_NATIVE_AUDIO_INPUT_DUMP=<file> (diagnosis): each half of the input just played, as the
++                        // game left it in its buffer, appended in order.
++                        static std::FILE *s_dump = []
++                        {
++                            const char *path = std::getenv("PS2X_NATIVE_AUDIO_INPUT_DUMP");
++                            return path && *path ? std::fopen(path, "wb") : nullptr;
++                        }();
++                        if (s_dump)
++                        {
++                            const uint32_t bytes = half / 256u * 1024u;
++                            std::fwrite(in.memory + (which == 0 ? 0u : bytes), 1, bytes, s_dump);
++                            std::fflush(s_dump);
++                        }
++                        if (m_inputHalf)
++                            m_inputHalf(g, which);
++                    }
++                }
++                for (int index = 0; index < kVoices; ++index)
++                {
++                    Voice &voice = group.voices[index];
++                    voice.volume[0].tick();
++                    voice.volume[1].tick();
++                    if (voice.phase == Voice::Phase::Off)
++                        continue;
++                    const int32_t value = sample(group, index, voice);
++                    const uint32_t bit = 1u << index;
++                    if ((group.dry[0] & bit) != 0u)
++                        dry[0] += mul15(value, voice.volume[0].level);
++                    if ((group.dry[1] & bit) != 0u)
++                        dry[1] += mul15(value, voice.volume[1].level);
++                    if ((group.wet[0] & bit) != 0u)
++                        wet[0] += mul15(value, voice.volume[0].level);
++                    if ((group.wet[1] & bit) != 0u)
++                        wet[1] += mul15(value, voice.volume[1].level);
++                }
++                // The reverb: the send averaged over two output samples, a step every other sample, its output
++                // eased between steps; at the group's effect volume.
++                int32_t returned[2] = {0, 0};
++                Reverb &reverb = group.reverb;
++                group.effect[0].tick();
++                group.effect[1].tick();
++                if (reverb.enabled && reverb.mode != 0)
++                {
++                    int32_t send[2] = {clamp16(wet[0]), clamp16(wet[1])};
++                    if ((group.mix & 0x200u) == 0u)
++                        send[0] = 0;
++                    if ((group.mix & 0x100u) == 0u)
++                        send[1] = 0;
++                    send[0] += (group.mix & 0x20u) != 0u ? input[0] : 0;
++                    send[1] += (group.mix & 0x10u) != 0u ? input[1] : 0;
++                    if (g == 1)
++                    {
++                        send[0] += (group.mix & 0x2u) != 0u ? mixed[0] : 0;
++                        send[1] += (group.mix & 0x1u) != 0u ? mixed[1] : 0;
++                    }
++                    send[0] = clamp16(send[0]);
++                    send[1] = clamp16(send[1]);
++                    if (reverb.phase)
++                    {
++                        const int32_t average[2] = {(reverb.input[0] + send[0]) >> 1, (reverb.input[1] + send[1]) >> 1};
++                        reverb.previous[0] = reverb.out[0];
++                        reverb.previous[1] = reverb.out[1];
++                        stepReverb(reverb, average, reverb.out);
++                    }
++                    else
++                    {
++                        reverb.input[0] = send[0];
++                        reverb.input[1] = send[1];
++                    }
++                    for (int side = 0; side < 2; ++side)
++                    {
++                        const int32_t value = reverb.phase ? (reverb.previous[side] + reverb.out[side]) >> 1 : reverb.out[side];
++                        returned[side] = mul15(value, group.effect[side].level);
++                    }
++                    reverb.phase = !reverb.phase;
++                }
++                group.master[0].tick();
++                group.master[1].tick();
++                for (int side = 0; side < 2; ++side)
++                {
++                    // The dry switches: the voices (bits 11 / 10, left / right), the input (7 / 6), group 0 (3 / 2).
++                    const uint32_t shift = side == 0 ? 1u : 0u;
++                    int32_t level = returned[side];
++                    if ((group.mix & (0x400u << shift)) != 0u)
++                        level += clamp16(dry[side]);
++                    if ((group.mix & (0x40u << shift)) != 0u)
++                        level += input[side];
++                    level = clamp16(level);
++                    if (g == 0)
++                        mixed[side] = mul15(level, group.master[side].level);
++                    else
++                        mixed[side] = clamp16(((group.mix & (0x4u << shift)) != 0u ? mixed[side] : 0) + level);
++                }
++                if (g == kGroups - 1)
++                    for (int side = 0; side < 2; ++side)
++                        mixed[side] = mul15(mixed[side], group.master[side].level);
++            }
++            out[frame * 2u] = static_cast<int16_t>(clamp16(mixed[0]));
++            out[frame * 2u + 1u] = static_cast<int16_t>(clamp16(mixed[1]));
++            m_stats.peak = std::max({m_stats.peak, std::abs(clamp16(mixed[0])), std::abs(clamp16(mixed[1]))});
++        }
++    }
++}
+diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.h b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+new file mode 100644
+index 0000000..078fd7d
+--- /dev/null
++++ b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+@@ -0,0 +1,180 @@
++#pragma once
++// From TheBozos/PS2Recomp native/gs-backend (ps2xIOP/src/native_mixer.h, GPL-3.0); pop-sotc: an IOP device owned by
++// the emulator (no singleton), rendered by IOP time like the SPU2 it replaces; movie input removed (not wired in
++// this runtime).
++
++// Native sound playback for ports whose sound drivers are taken over at their API (libsd: native_libsd.cpp): the
++// game's sample banks (PS2 ADPCM, as its drivers upload them) played by 48 voices (two groups of 24, as the drivers
++// address them) with their pitch, ADSR envelope and volume, mixed at 48 kHz for the PC's audio device. There is no
++// sound chip here: no registers, no DMA, no interrupts, no chip timing. What a driver sets is a voice's playback
++// state, what it reads back (a voice's envelope, which voices reached their end) is that state as it plays.
++//
++// Reverb: each group's effect send through libsd's reverb presets (room ... pipe, echo and delay with their delay
++// time and feedback), the reverb's delay lines in sound memory below the effect end address as the drivers place
++// them, at 24 kHz as on the console, mixed back at the group's effect volume.
++//
++// The sound data input: a driver's PCM stream (sceSdBlockTrans) played from its buffer in IOP memory, 16-bit stereo at
++// 48 kHz in blocks of 256 left samples then 256 right, looping or once, with a signal at each half for the driver to
++// refill the other. Each group's mix (MMIX) routes the voices, the input and (group 1) group 0's output to the output
++// and the reverb.
++//
++// Not done yet: noise, pitch modulation.
++
++#include <cstddef>
++#include <cstdint>
++#include <functional>
++#include <mutex>
++#include <vector>
++
++namespace ps2x::audio
++{
++    class NativeMixer
++    {
++    public:
++        static constexpr uint32_t kSoundMemory = 2u * 1024u * 1024u; // bytes
++        static constexpr uint32_t kSampleRate = 48000u;
++        static constexpr int kGroups = 2, kVoices = 24;
++
++        NativeMixer() { m_groups[1].mix = 0xFFCu; } // sceSdInit's mixes: group 1 also takes group 0's output (dry)
++
++        void reset();
++        // The drivers' uploads: bytes into sound memory at address.
++        void write(uint32_t address, const uint8_t *data, uint32_t bytes);
++        void read(uint32_t address, uint8_t *data, uint32_t bytes) const;
++
++        // A voice's playback settings, as libsd's voice parameters give them (volume: fixed when bit 15 is clear,
++        // value << 1 the level; pitch: 0x1000 plays a sample per 48 kHz output sample; ADSR: the PS2's two words).
++        void setVolume(int group, int voice, int side, uint16_t value);
++        void setPitch(int group, int voice, uint16_t pitch);
++        void setAdsr(int group, int voice, int word, uint16_t value);
++        void setStart(int group, int voice, uint32_t address);
++        void setLoop(int group, int voice, uint32_t address);
++        uint16_t volume(int group, int voice, int side) const;
++        uint16_t pitch(int group, int voice) const;
++        uint16_t adsr(int group, int voice, int word) const;
++        uint16_t envelope(int group, int voice) const; // the envelope's level now (0..0x7FFF)
++        uint32_t start(int group, int voice) const;
++        uint32_t loop(int group, int voice) const;
++        uint32_t position(int group, int voice) const; // the block playing now
++
++        // Key on / off (masks of the group's 24 voices); end: voices that reached a block with the end flag since
++        // their key on (the drivers poll it to free voices).
++        void keyOn(int group, uint32_t mask);
++        void keyOff(int group, uint32_t mask);
++        uint32_t ended(int group) const;
++        void clearEnded(int group, uint32_t mask);
++        // Which voices go to the output (left / right) and to the effect send (kept for reverb).
++        void setDryMask(int group, int side, uint32_t mask);
++        void setWetMask(int group, int side, uint32_t mask);
++        uint32_t dryMask(int group, int side) const;
++        uint32_t wetMask(int group, int side) const;
++        // A group's master and effect volumes (the volume encoding above).
++        void setMasterVolume(int group, int side, uint16_t value);
++        void setEffectVolume(int group, int side, uint16_t value);
++        uint16_t masterVolume(int group, int side) const;
++        uint16_t effectVolume(int group, int side) const;
++
++        // A group's reverb: mode 0 (off) .. 9 (pipe) as libsd numbers them; delay and feedback (0..127) for the echo
++        // and delay modes; end, the effect area's last byte in sound memory (the area is the mode's size below it).
++        void setEffect(int group, int mode, uint32_t delay, uint32_t feedback, uint32_t end);
++        void setEffectEnable(int group, bool enable);
++        // Zeroes the area mode's reverb uses below end.
++        void clearEffectArea(int mode, uint32_t end);
++        static uint32_t effectAreaBytes(int mode);
++
++        // A group's mix switches (MMIX: bits 0-3 group 0's output into group 1, 4-7 the input, 8-11 the voices; wet
++        // right, wet left, dry right, dry left) and its input volume (16-bit level).
++        void setMix(int group, uint16_t mix);
++        uint16_t mix(int group) const;
++        void setInputVolume(int group, int side, uint16_t value);
++        uint16_t inputVolume(int group, int side) const;
++        // The input: bytes at memory (a buffer in IOP RAM, which the driver refills while it plays) from offset; loop
++        // or once. half(group, half) is called (on the mixer's thread) each time a half has played, half 0 or 1.
++        void startInput(int group, const uint8_t *memory, uint32_t bytes, uint32_t offset, bool loop);
++        void stopInput(int group);
++        bool inputPlaying(int group) const;
++        uint32_t inputOffset(int group) const; // the byte the input plays next
++        void setInputHalfCallback(std::function<void(int group, int half)> half);
++
++        // frames stereo 16-bit samples at 48 kHz. Every 10 s of output (PS2X_NATIVE_AUDIO_STATS=0: never), a line on
++        // stderr: key ons, bytes uploaded, input halves played, the loudest sample, voices playing.
++        void render(int16_t *out, size_t frames);
++
++    private:
++        struct Volume
++        {
++            uint16_t setting = 0;
++            int32_t level = 0;
++            uint32_t counter = 0;
++            void set(uint16_t value);
++            void tick();
++        };
++        struct Voice
++        {
++            Volume volume[2];
++            uint16_t pitch = 0;
++            uint16_t adsr[2] = {};
++            uint32_t start = 0, loop = 0, block = 0;
++            bool loopSet = false;
++            enum class Phase : uint8_t
++            {
++                Off,
++                Attack,
++                Decay,
++                Sustain,
++                Release
++            } phase = Phase::Off;
++            int32_t level = 0;
++            uint32_t envelopeCounter = 0;
++            uint32_t counter = 0;      // 12-bit fraction of the position in the decoded block
++            uint8_t flags = 0;         // the block's flags (1 end, 2 repeat, 4 loop start)
++            int16_t samples[31] = {};  // 3 of the previous block, then the 28 of this one
++            int32_t history[2] = {};
++        };
++        struct Reverb
++        {
++            int mode = 0;
++            bool enabled = false;
++            uint16_t settings[32] = {}; // the preset's: dAPF1, dAPF2, vIIR ... mRAPF2, vLIN, vRIN (offsets in 8 bytes)
++            uint32_t start = 0, size = 0;  // the delay lines: first sample (16-bit units) and how many
++            uint32_t position = 0;
++            bool phase = false;            // the reverb steps every other output sample
++            int32_t input[2] = {}, out[2] = {}, previous[2] = {};
++        };
++        struct Input
++        {
++            const uint8_t *memory = nullptr;
++            uint32_t samples = 0, position = 0; // in stereo samples
++            bool playing = false, loop = false;
++            int16_t volume[2] = {0x7FFF, 0x7FFF};
++        };
++        struct Group
++        {
++            Voice voices[kVoices];
++            uint32_t ended = 0;
++            uint32_t dry[2] = {}, wet[2] = {};
++            Volume master[2], effect[2];
++            Reverb reverb;
++            uint16_t mix = 0xFF0u;
++            Input input;
++        };
++
++        void decode(Voice &voice);
++        void stepEnvelope(Voice &voice);
++        int32_t sample(Group &group, int index, Voice &voice);
++        void stepReverb(Reverb &reverb, const int32_t send[2], int32_t out[2]);
++
++        struct Stats
++        {
++            uint64_t frames = 0, keyOns = 0, uploaded = 0, halves = 0;
++            int32_t peak = 0;
++        } m_stats;
++        void report();
++        void mix(int16_t *out, size_t frames); // under m_mutex
++
++        mutable std::mutex m_mutex;
++        std::vector<uint8_t> m_memory = std::vector<uint8_t>(kSoundMemory, 0u);
++        Group m_groups[kGroups];
++        std::function<void(int group, int half)> m_inputHalf;
++    };
++}
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index ec5b150..4d4f9ed 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -125,6 +125,11 @@ namespace ps2x::iop::detail
+         }
+     }
+ 
++    const std::array<std::array<int16_t, 4>, 256> &spu2InterpolationWeights()
++    {
++        return kInterpolationWeights;
++    }
++
+     IopSpu2::IopSpu2()
+         : m_ram(kRamHalfwords)
+     {
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.h b/ps2xIOP/src/emulator/devices/iop_spu2.h
+index 4203aa6..6d93e28 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.h
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.h
+@@ -10,6 +10,9 @@
+ 
+ namespace ps2x::iop::detail
+ {
++    // The SPU2's 4-tap Gaussian interpolation: weights per 8-bit phase, oldest sample first (also the native mixer's).
++    [[nodiscard]] const std::array<std::array<int16_t, 4>, 256> &spu2InterpolationWeights();
++
+     class IopSpu2
+     {
+     public:
+diff --git a/ps2xIOP/src/emulator/imports/iop_libsd.cpp b/ps2xIOP/src/emulator/imports/iop_libsd.cpp
+new file mode 100644
+index 0000000..beefe65
+--- /dev/null
++++ b/ps2xIOP/src/emulator/imports/iop_libsd.cpp
+@@ -0,0 +1,459 @@
++// From TheBozos/PS2Recomp native/gs-backend (ps2xIOP/src/native_libsd.cpp, GPL-3.0); see iop_libsd.h.
++//
++// libsd's entries: a parameter, switch or address id | voice << 1 | core.
++#include "emulator/imports/iop_libsd.h"
++
++#include "emulator/core/iop_cpu.h"
++#include "emulator/core/iop_memory.h"
++#include "emulator/devices/iop_native_mixer.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <vector>
++
++namespace ps2x::iop::detail
++{
++    namespace
++    {
++        // Voice parameters.
++        constexpr uint32_t kVolL = 0x0000u, kVolR = 0x0100u, kPitch = 0x0200u, kAdsr1 = 0x0300u, kAdsr2 = 0x0400u,
++                           kEnvX = 0x0500u, kVolXL = 0x0600u, kVolXR = 0x0700u;
++        // Core parameters (bit 7 set).
++        constexpr uint32_t kMix = 0x0800u, kMVolL = 0x0980u, kMVolR = 0x0A80u, kEVolL = 0x0B80u, kEVolR = 0x0C80u,
++                           kBVolL = 0x0F80u, kBVolR = 0x1080u;
++        // Switches.
++        constexpr uint32_t kKon = 0x1500u, kKoff = 0x1600u, kEndX = 0x1700u, kVMixL = 0x1800u, kVMixEL = 0x1900u,
++                           kVMixR = 0x1A00u, kVMixER = 0x1B00u;
++        // Addresses.
++        constexpr uint32_t kEea = 0x1D00u, kTsa = 0x1E00u, kSsa = 0x2040u, kLsax = 0x2140u, kNax = 0x2240u;
++        // Core attributes.
++        constexpr uint32_t kEffectEnable = 0x2u;
++        // A transfer's end is reported this long after the call (IOP cycles), as libsd's DMA interrupt would.
++        constexpr uint32_t kTransferDoneDelay = 2000u;
++
++        int coreOf(uint32_t entry)
++        {
++            return static_cast<int>(entry & 1u);
++        }
++        int voiceOf(uint32_t entry)
++        {
++            return static_cast<int>((entry >> 1u) & 0x1Fu) % ps2x::audio::NativeMixer::kVoices;
++        }
++
++        // PS2X_NATIVE_AUDIO_LOG=1 (diagnosis): the first 200 switch, parameter and attribute calls.
++        bool logging()
++        {
++            static const bool s_log = []
++            {
++                const char *v = std::getenv("PS2X_NATIVE_AUDIO_LOG");
++                return v && *v == '1';
++            }();
++            return s_log;
++        }
++        void logCall(const char *what, uint32_t entry, uint32_t value)
++        {
++            static int s_logged = 0;
++            if (logging() && s_logged++ < 200)
++                std::fprintf(stderr, "[audio] %s %04x = %x\n", what, entry, value);
++        }
++    }
++
++    IopLibsd::IopLibsd(IopMemory &memory, ps2x::audio::NativeMixer &mixer, QueueCall queueCall)
++        : m_memory(memory), m_mixer(mixer), m_queueCall(std::move(queueCall))
++    {
++        // Each half of a block transfer played: the channel's transfer interrupt.
++        m_mixer.setInputHalfCallback([this](int group, int) { transferDone(static_cast<uint32_t>(group)); });
++    }
++
++    void IopLibsd::reset()
++    {
++        m_mixer.reset();
++        m_params.clear();
++        m_switches.clear();
++        m_addresses.clear();
++        m_coreAttributes.clear();
++        m_effectEnd[0] = 0x1DFFFFu;
++        m_effectEnd[1] = 0x1FFFFFu;
++        for (int c = 0; c < 2; ++c)
++        {
++            m_transCallback[c] = {};
++            m_transHandler[c] = {};
++            m_blockBuffer[c] = m_blockSize[c] = 0u;
++            m_effect[c] = {};
++        }
++        m_irqCallback = 0u;
++    }
++
++    uint32_t IopLibsd::arg(const IopCpuState &cpu, int n) const
++    {
++        return n < 4 ? cpu.gpr[4 + n] : m_memory.read32(cpu.gpr[29] + 0x10u + static_cast<uint32_t>(n - 4) * 4u);
++    }
++
++    void IopLibsd::setParam(uint32_t entry, uint32_t value)
++    {
++        logCall("param", entry, value);
++        const int core = coreOf(entry), voice = voiceOf(entry);
++        const uint16_t v = static_cast<uint16_t>(value);
++        if ((entry & 0x80u) == 0u)
++        {
++            switch (entry & 0xFF00u)
++            {
++            case kVolL: m_mixer.setVolume(core, voice, 0, v); return;
++            case kVolR: m_mixer.setVolume(core, voice, 1, v); return;
++            case kPitch: m_mixer.setPitch(core, voice, v); return;
++            case kAdsr1: m_mixer.setAdsr(core, voice, 0, v); return;
++            case kAdsr2: m_mixer.setAdsr(core, voice, 1, v); return;
++            default: break;
++            }
++        }
++        switch (entry & 0xFFFEu)
++        {
++        case kMVolL: m_mixer.setMasterVolume(core, 0, v); return;
++        case kMVolR: m_mixer.setMasterVolume(core, 1, v); return;
++        case kEVolL: m_mixer.setEffectVolume(core, 0, v); return;
++        case kEVolR: m_mixer.setEffectVolume(core, 1, v); return;
++        case kMix: m_mixer.setMix(core, v); return;
++        // The sound data input's volume is BVOL (SPU2 0x76C); AVOL (0x768) is the external input's, core 0's output
++        // into core 1, kept as a plain parameter.
++        case kBVolL: m_mixer.setInputVolume(core, 0, v); return;
++        case kBVolR: m_mixer.setInputVolume(core, 1, v); return;
++        default: m_params[entry] = value; return;
++        }
++    }
++
++    uint32_t IopLibsd::getParam(uint32_t entry) const
++    {
++        const int core = coreOf(entry), voice = voiceOf(entry);
++        if ((entry & 0x80u) == 0u)
++        {
++            switch (entry & 0xFF00u)
++            {
++            case kVolL: return m_mixer.volume(core, voice, 0);
++            case kVolR: return m_mixer.volume(core, voice, 1);
++            case kPitch: return m_mixer.pitch(core, voice);
++            case kAdsr1: return m_mixer.adsr(core, voice, 0);
++            case kAdsr2: return m_mixer.adsr(core, voice, 1);
++            case kEnvX: return m_mixer.envelope(core, voice);
++            case kVolXL: return m_mixer.volume(core, voice, 0) & 0x7FFFu;
++            case kVolXR: return m_mixer.volume(core, voice, 1) & 0x7FFFu;
++            default: break;
++            }
++        }
++        switch (entry & 0xFFFEu)
++        {
++        case kMVolL: return m_mixer.masterVolume(core, 0);
++        case kMVolR: return m_mixer.masterVolume(core, 1);
++        case kEVolL: return m_mixer.effectVolume(core, 0);
++        case kEVolR: return m_mixer.effectVolume(core, 1);
++        case kMix: return m_mixer.mix(core);
++        case kBVolL: return m_mixer.inputVolume(core, 0);
++        case kBVolR: return m_mixer.inputVolume(core, 1);
++        default:
++        {
++            const auto it = m_params.find(entry);
++            return it == m_params.end() ? 0u : it->second;
++        }
++        }
++    }
++
++    void IopLibsd::setSwitch(uint32_t entry, uint32_t value)
++    {
++        logCall("switch", entry, value);
++        const int core = coreOf(entry);
++        switch (entry & 0xFF00u)
++        {
++        case kKon: m_mixer.keyOn(core, value & 0xFFFFFFu); return;
++        case kKoff: m_mixer.keyOff(core, value & 0xFFFFFFu); return;
++        case kEndX: m_mixer.clearEnded(core, 0xFFFFFFu); return;
++        case kVMixL: m_mixer.setDryMask(core, 0, value); return;
++        case kVMixR: m_mixer.setDryMask(core, 1, value); return;
++        case kVMixEL: m_mixer.setWetMask(core, 0, value); return;
++        case kVMixER: m_mixer.setWetMask(core, 1, value); return;
++        default: break;
++        }
++        // PMON (0x13) and NON (0x14): pitch modulation and noise, which the mixer does not play yet.
++        static bool s_warned = false;
++        if (((entry & 0xFF00u) == 0x1300u || (entry & 0xFF00u) == 0x1400u) && value != 0u && !s_warned)
++        {
++            s_warned = true;
++            std::fprintf(stderr, "[audio] native libsd: switch %04x = %x (pitch modulation / noise) is not played\n", entry, value);
++        }
++        m_switches[entry & 0xFF01u] = value;
++    }
++
++    uint32_t IopLibsd::getSwitch(uint32_t entry) const
++    {
++        const int core = coreOf(entry);
++        switch (entry & 0xFF00u)
++        {
++        case kEndX: return m_mixer.ended(core);
++        case kVMixL: return m_mixer.dryMask(core, 0);
++        case kVMixR: return m_mixer.dryMask(core, 1);
++        case kVMixEL: return m_mixer.wetMask(core, 0);
++        case kVMixER: return m_mixer.wetMask(core, 1);
++        default:
++        {
++            const auto it = m_switches.find(entry & 0xFF01u);
++            return it == m_switches.end() ? 0u : it->second;
++        }
++        }
++    }
++
++    void IopLibsd::setAddr(uint32_t entry, uint32_t value)
++    {
++        const int core = coreOf(entry), voice = voiceOf(entry);
++        switch (entry & 0xFFC0u)
++        {
++        case kSsa: m_mixer.setStart(core, voice, value); return;
++        case kLsax: m_mixer.setLoop(core, voice, value); return;
++        default: break;
++        }
++        if ((entry & 0xFF00u) == kEea)
++            m_effectEnd[core] = value | 0x1FFFFu;
++        m_addresses[entry & 0xFF01u] = value; // TSA among them: a transfer's address comes with sceSdVoiceTrans
++    }
++
++    uint32_t IopLibsd::getAddr(uint32_t entry) const
++    {
++        const int core = coreOf(entry), voice = voiceOf(entry);
++        switch (entry & 0xFFC0u)
++        {
++        case kSsa: return m_mixer.start(core, voice);
++        case kLsax: return m_mixer.loop(core, voice);
++        case kNax: return m_mixer.position(core, voice);
++        default: break;
++        }
++        if ((entry & 0xFF00u) == kEea)
++            return m_effectEnd[core];
++        const auto it = m_addresses.find(entry & 0xFF01u);
++        return it == m_addresses.end() ? 0u : it->second;
++    }
++
++    void IopLibsd::setCoreAttr(uint32_t entry, uint32_t value)
++    {
++        logCall("core attribute", entry, value);
++        if ((entry & ~1u) == kEffectEnable)
++            m_mixer.setEffectEnable(coreOf(entry), value != 0u);
++        m_coreAttributes[entry] = value;
++    }
++
++    uint32_t IopLibsd::getCoreAttr(uint32_t entry) const
++    {
++        const auto it = m_coreAttributes.find(entry);
++        return it == m_coreAttributes.end() ? 0u : it->second;
++    }
++
++    // sceSdProcBatch entries: 8 bytes, {u16 function, u16 entry, u32 value}.
++    uint32_t IopLibsd::batchOne(uint32_t function, uint32_t entry, uint32_t value)
++    {
++        switch (function)
++        {
++        case 0x01: setParam(entry, value); return 0u;
++        case 0x02: setSwitch(entry, value); return 0u;
++        case 0x03: setAddr(entry, value); return 0u;
++        case 0x04: setCoreAttr(entry, value); return 0u;
++        case 0x05: m_memory.write32(entry, value); return 0u; // write to IOP memory
++        case 0x10: return getParam(entry);
++        case 0x12: return getSwitch(entry);
++        case 0x13: return getAddr(entry);
++        case 0x14: return getCoreAttr(entry);
++        default: return 0u;
++        }
++    }
++
++    // A transfer's end, as libsd's DMA interrupt reports it: the channel's handler (sceSdSetTransIntrHandler:
++    // handler(channel, its argument)), else its callback (sceSdSetTransCallback: callback(0)).
++    void IopLibsd::transferDone(uint32_t channel)
++    {
++        const Callback &handler = m_transHandler[channel], &callback = m_transCallback[channel];
++        if (handler.function != 0u)
++            m_queueCall(handler.function, channel, handler.argument, handler.gp);
++        else if (callback.function != 0u)
++            m_queueCall(callback.function, 0u, 0u, callback.gp);
++    }
++
++    // sceSdVoiceTrans(channel, mode, iop address, sound memory address, size): mode 0 writes, 1 reads, 2 stops (bits
++    // 3+ choose DMA or I/O: the same here). Done when it returns.
++    uint32_t IopLibsd::voiceTrans(const IopCpuState &cpu)
++    {
++        const uint32_t mode = arg(cpu, 1) & 3u, iop = arg(cpu, 2), sound = arg(cpu, 3), size = arg(cpu, 4);
++        std::vector<uint8_t> data(size);
++        if (mode == 0u || mode == 3u)
++        {
++            if (!m_memory.readRam(iop, data.data(), size))
++                return 0xFFFFFFFFu;
++            m_mixer.write(sound, data.data(), size);
++        }
++        else if (mode == 1u)
++        {
++            m_mixer.read(sound, data.data(), size);
++            if (!m_memory.writeRam(iop, data.data(), size))
++                return 0xFFFFFFFFu;
++        }
++        if (mode == 2u)
++            return 0u;
++        transferDone(arg(cpu, 0) & 1u);
++        return size;
++    }
++
++    // sceSdBlockTrans(channel, mode, iop address, size[, start]): the sound data input of core channel, played from
++    // the driver's buffer as it lies in IOP memory (the driver refills the half that has played). Mode 0 writes from
++    // the start, 3 from start, | 0x10 loops; 2 stops and returns where it was. Writes only (mode 1, reading the
++    // output back, is not done). The end of each half is the channel's transfer interrupt.
++    uint32_t IopLibsd::blockTrans(const IopCpuState &cpu)
++    {
++        const uint32_t channel = arg(cpu, 0) & 1u, mode = arg(cpu, 1), iop = arg(cpu, 2), size = arg(cpu, 3);
++        static int s_logged = 0;
++        if (logging() && s_logged++ < 20)
++            std::fprintf(stderr, "[audio] sceSdBlockTrans(%x, %x, %08x, %x, %x)\n", arg(cpu, 0), mode, iop, size, arg(cpu, 4));
++        switch (mode & 3u)
++        {
++        case 2u:
++        {
++            const uint32_t position = m_blockBuffer[channel] + m_mixer.inputOffset(static_cast<int>(channel));
++            m_mixer.stopInput(static_cast<int>(channel));
++            return position;
++        }
++        case 1u:
++            return 0u;
++        default:
++        {
++            const uint32_t physical = iop & 0x1FFFFFu;
++            const auto ram = m_memory.ram();
++            if (physical + size > ram.size() || size < 1024u)
++                return 0xFFFFFFFFu;
++            const uint32_t start = (mode & 3u) == 3u && arg(cpu, 4) >= iop ? arg(cpu, 4) - iop : 0u;
++            m_blockBuffer[channel] = iop;
++            m_blockSize[channel] = size;
++            m_mixer.startInput(static_cast<int>(channel), ram.data() + physical, size, start, (mode & 0x10u) != 0u);
++            return 0u;
++        }
++        }
++    }
++
++    // sceSdBlockTransStatus(channel, flag): where the input plays now, | 1 << 24 while in the second half.
++    uint32_t IopLibsd::blockTransStatus(uint32_t channel) const
++    {
++        if (!m_mixer.inputPlaying(static_cast<int>(channel)))
++            return 0u;
++        const uint32_t offset = m_mixer.inputOffset(static_cast<int>(channel));
++        const uint32_t second = offset >= m_blockSize[channel] / 2u ? 1u : 0u;
++        return (second << 24u) | (m_blockBuffer[channel] + offset);
++    }
++
++    // sceSdSetEffectAttr(core, attr): attr {int core; int mode (bit 8: clear the area first); short depth_L, depth_R;
++    // int delay; int feedback}. The depths are the effect volumes; the area is the mode's size below the effect end.
++    uint32_t IopLibsd::setEffectAttr(uint32_t core, uint32_t attr)
++    {
++        const uint32_t mode = m_memory.read32(attr + 4u);
++        if ((mode & 0xFFu) >= 10u)
++            return 0xFFFFFFFFu;
++        Effect &effect = m_effect[core];
++        effect.mode = mode & 0xFFu;
++        effect.delay = m_memory.read32(attr + 0xCu);
++        effect.feedback = m_memory.read32(attr + 0x10u);
++        const uint16_t depthL = m_memory.read16(attr + 8u), depthR = m_memory.read16(attr + 0xAu);
++        if (logging())
++            std::fprintf(stderr, "[audio] effect core %u mode %x depth %x/%x delay %u feedback %u end %x\n", core, mode, depthL,
++                         depthR, effect.delay, effect.feedback, m_effectEnd[core]);
++        if ((mode & 0x100u) != 0u)
++            m_mixer.clearEffectArea(static_cast<int>(effect.mode), m_effectEnd[core]);
++        m_mixer.setEffect(static_cast<int>(core), static_cast<int>(effect.mode), effect.delay, effect.feedback, m_effectEnd[core]);
++        m_mixer.setEffectVolume(static_cast<int>(core), 0, depthL);
++        m_mixer.setEffectVolume(static_cast<int>(core), 1, depthR);
++        return 0u;
++    }
++
++    void IopLibsd::getEffectAttr(uint32_t core, uint32_t attr)
++    {
++        const Effect &effect = m_effect[core];
++        m_memory.write32(attr + 4u, effect.mode);
++        m_memory.write16(attr + 8u, m_mixer.effectVolume(static_cast<int>(core), 0));
++        m_memory.write16(attr + 0xAu, m_mixer.effectVolume(static_cast<int>(core), 1));
++        m_memory.write32(attr + 0xCu, effect.delay);
++        m_memory.write32(attr + 0x10u, effect.feedback);
++    }
++
++    bool IopLibsd::dispatchImport(uint16_t ordinal, IopCpuState &cpu)
++    {
++        uint32_t &v0 = cpu.gpr[2];
++        const uint32_t a0 = arg(cpu, 0), a1 = arg(cpu, 1), a2 = arg(cpu, 2), a3 = arg(cpu, 3);
++        switch (ordinal)
++        {
++        case 2: v0 = 0u; return true; // sceSdQuit
++        case 4: reset(); v0 = 0u; return true; // sceSdInit
++        case 5: setParam(a0 & 0xFFFFu, a1); v0 = 0u; return true;
++        case 6: v0 = getParam(a0 & 0xFFFFu); return true;
++        case 7: setSwitch(a0 & 0xFFFFu, a1); v0 = 0u; return true;
++        case 8: v0 = getSwitch(a0 & 0xFFFFu); return true;
++        case 9: setAddr(a0 & 0xFFFFu, a1); v0 = 0u; return true;
++        case 10: v0 = getAddr(a0 & 0xFFFFu); return true;
++        case 11: setCoreAttr(a0 & 0xFFFFu, a1); v0 = 0u; return true;
++        case 12: v0 = getCoreAttr(a0 & 0xFFFFu); return true;
++        case 15: // sceSdProcBatch(batch, returns, count)
++            for (uint32_t i = 0; i < a2; ++i)
++            {
++                const uint32_t at = a0 + i * 8u;
++                const uint32_t result = batchOne(m_memory.read16(at), m_memory.read16(at + 2u), m_memory.read32(at + 4u));
++                if (a1 != 0u)
++                    m_memory.write32(a1 + i * 4u, result);
++            }
++            v0 = a2;
++            return true;
++        case 16: // sceSdProcBatchEx(batch, returns, count, voices): each entry for every voice of the mask
++        {
++            uint32_t written = 0u;
++            for (uint32_t i = 0; i < a2; ++i)
++            {
++                const uint32_t at = a0 + i * 8u;
++                const uint32_t function = m_memory.read16(at), entry = m_memory.read16(at + 2u), value = m_memory.read32(at + 4u);
++                for (uint32_t voice = 0; voice < 24u; ++voice)
++                {
++                    if ((a3 & (1u << voice)) == 0u)
++                        continue;
++                    const uint32_t result = batchOne(function, (entry & ~0x3Eu) | (voice << 1u), value);
++                    if (a1 != 0u)
++                        m_memory.write32(a1 + written * 4u, result);
++                    ++written;
++                }
++            }
++            v0 = written;
++            return true;
++        }
++        case 17: v0 = voiceTrans(cpu); return true;
++        case 18: v0 = blockTrans(cpu); return true;
++        case 19: v0 = 1u; return true; // sceSdVoiceTransStatus: done (transfers finish in the call)
++        case 20: v0 = blockTransStatus(a0 & 1u); return true;
++        case 21: // sceSdSetTransCallback(channel, function)
++        {
++            Callback &callback = m_transCallback[a0 & 1u];
++            v0 = callback.function;
++            callback = {a1, 0u, cpu.gpr[28]};
++            return true;
++        }
++        case 22: v0 = m_irqCallback; m_irqCallback = a0; return true; // sceSdSetIRQCallback
++        case 23: v0 = setEffectAttr(a0 & 1u, a1); return true;
++        case 24: getEffectAttr(a0 & 1u, a1); v0 = 0u; return true;
++        case 25: // sceSdClearEffectWorkArea(core, channel, mode)
++            if ((a2 & 0xFFu) < 10u)
++                m_mixer.clearEffectArea(static_cast<int>(a2 & 0xFFu), m_effectEnd[a0 & 1u]);
++            v0 = 0u;
++            return true;
++        case 26: // sceSdSetTransIntrHandler(channel, handler, argument)
++        {
++            Callback &handler = m_transHandler[a0 & 1u];
++            v0 = handler.function;
++            handler = {a1, a2, cpu.gpr[28]};
++            return true;
++        }
++        case 27: v0 = 0u; return true; // sceSdSetSpu2IntrHandler: no SPU2 interrupts here
++        default:
++            if (ordinal < 64u && (m_loggedOrdinals & (1ull << ordinal)) == 0u)
++            {
++                m_loggedOrdinals |= 1ull << ordinal;
++                std::fprintf(stderr, "[audio] native libsd: ordinal %u not taken over: libsd's own code runs\n", ordinal);
++            }
++            return false;
++        }
++    }
++}
+diff --git a/ps2xIOP/src/emulator/imports/iop_libsd.h b/ps2xIOP/src/emulator/imports/iop_libsd.h
+new file mode 100644
+index 0000000..945700a
+--- /dev/null
++++ b/ps2xIOP/src/emulator/imports/iop_libsd.h
+@@ -0,0 +1,74 @@
++#pragma once
++// libsd taken over at its API (PS2X_NATIVE_AUDIO=1): the game's IOP sound drivers keep calling libsd, and each call
++// acts on the native mixer (devices/iop_native_mixer.h) instead of the SPU2. From TheBozos/PS2Recomp native/gs-backend
++// (ps2xIOP/src/native_libsd.cpp, GPL-3.0); pop-sotc: an HLE import library like timrman, per emulator instead of
++// global, transfer interrupts through the emulator's guest callbacks.
++
++#include <cstdint>
++#include <functional>
++#include <unordered_map>
++
++namespace ps2x::audio
++{
++    class NativeMixer;
++}
++
++namespace ps2x::iop::detail
++{
++    struct IopCpuState;
++    class IopMemory;
++
++    class IopLibsd
++    {
++    public:
++        // Queues a guest call function(a0, a1) with gp, as an interrupt handler would make it, shortly after now.
++        using QueueCall = std::function<void(uint32_t function, uint32_t a0, uint32_t a1, uint32_t gp)>;
++
++        IopLibsd(IopMemory &memory, ps2x::audio::NativeMixer &mixer, QueueCall queueCall);
++
++        void reset();
++        // libsd's export ordinals 2-27 (sceSdQuit .. sceSdSetSpu2IntrHandler); false for any other (logged once): the
++        // caller then runs the loaded libsd module's own code (sceSdNote2Pitch / Pitch2Note are plain math).
++        [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu);
++
++    private:
++        struct Callback
++        {
++            uint32_t function = 0, argument = 0, gp = 0;
++        };
++        struct Effect
++        {
++            uint32_t mode = 0, delay = 0, feedback = 0;
++        };
++
++        uint32_t arg(const IopCpuState &cpu, int n) const;
++        void setParam(uint32_t entry, uint32_t value);
++        uint32_t getParam(uint32_t entry) const;
++        void setSwitch(uint32_t entry, uint32_t value);
++        uint32_t getSwitch(uint32_t entry) const;
++        void setAddr(uint32_t entry, uint32_t value);
++        uint32_t getAddr(uint32_t entry) const;
++        void setCoreAttr(uint32_t entry, uint32_t value);
++        uint32_t getCoreAttr(uint32_t entry) const;
++        uint32_t batchOne(uint32_t function, uint32_t entry, uint32_t value);
++        void transferDone(uint32_t channel);
++        uint32_t voiceTrans(const IopCpuState &cpu);
++        uint32_t blockTrans(const IopCpuState &cpu);
++        uint32_t blockTransStatus(uint32_t channel) const;
++        uint32_t setEffectAttr(uint32_t core, uint32_t attr);
++        void getEffectAttr(uint32_t core, uint32_t attr);
++
++        IopMemory &m_memory;
++        ps2x::audio::NativeMixer &m_mixer;
++        QueueCall m_queueCall;
++
++        // The rest of libsd's settings, kept as set (read back as set).
++        std::unordered_map<uint32_t, uint32_t> m_params, m_switches, m_addresses, m_coreAttributes;
++        uint32_t m_effectEnd[2] = {0x1DFFFFu, 0x1FFFFFu}; // sceSdInit's effect end addresses
++        Callback m_transCallback[2], m_transHandler[2];   // per DMA channel
++        uint32_t m_blockBuffer[2] = {}, m_blockSize[2] = {}; // the block transfer playing as each core's input
++        Effect m_effect[2];
++        uint32_t m_irqCallback = 0;
++        uint64_t m_loggedOrdinals = 0;
++    };
++}
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index caf5782..e4983cf 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -1,12 +1,14 @@
+ #include "iop_emulator.h"
+ #include "imports/iop_cdvd.h"
+ #include "devices/iop_sio2.h"
++#include "devices/iop_native_mixer.h"
+ #include "devices/iop_spu2.h"
+ #include "core/iop_cpu.h"
+ #include "imports/iop_heaplib.h"
+ #include "imports/iop_imports.h"
+ #include "imports/iop_intrman.h"
+ #include "imports/iop_ioman.h"
++#include "imports/iop_libsd.h"
+ #include "core/iop_kernel.h"
+ #include "imports/iop_loadcore.h"
+ #include "core/iop_memory.h"
+@@ -185,6 +187,10 @@ namespace ps2x::iop::detail
+             memory.attachSio2(&sio2);
+             spu2.reset();
+             spu2.setAudioSink([this](std::span<const int16_t> samples) { host.submitAudio(samples); });
++            libsd.reset();
++            libsdCalls.clear();
++            mixerCycle = 0u;
++            mixerOut.clear();
+             host.resetAudio();
+             memory.attachSpu2(&spu2, &totalCycles);
+             pendingDmaInterrupts.clear();
+@@ -460,6 +466,9 @@ namespace ps2x::iop::detail
+             if (iequals(call.library, "heaplib") && heaplib.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+ 
++            if (nativeAudio && iequals(call.library, "libsd") && libsd.dispatchImport(call.ordinal, cpu))
++                return ImportDisposition::Handled;
++
+             const uint32_t target = imports.resolve(call.library, call.ordinal, call.version);
+             if (target != 0u)
+             {
+@@ -776,6 +785,7 @@ namespace ps2x::iop::detail
+                 {
+                     servicePendingDmaInterrupts();
+                     servicePendingGuestCallbacks();
++                    serviceLibsdCalls();
+                     timrman.serviceDue(totalCycles, *this);
+                     IopThread *next = kernel.beginNextReady(totalCycles);
+                     if (!next)
+@@ -785,6 +795,8 @@ namespace ps2x::iop::detail
+                             nextWake = std::min(nextWake, completionCycle);
+                         if (!pendingGuestCallbacks.empty())
+                             nextWake = std::min(nextWake, pendingGuestCallbacks.begin()->first);
++                        if (!libsdCalls.empty())
++                            nextWake = std::min(nextWake, libsdCalls.begin()->first);
+                         nextWake = timrman.nextEventCycle(nextWake);
+                         totalCycles = std::max(totalCycles + 1u, std::min(target, nextWake));
+                         continue;
+@@ -795,7 +807,10 @@ namespace ps2x::iop::detail
+                     if (totalCycles == before)
+                         ++totalCycles;
+                 }
+-                spu2.advanceTo(totalCycles);
++                if (nativeAudio)
++                    renderMixer();
++                else
++                    spu2.advanceTo(totalCycles);
+             }
+             catch (...)
+             {
+@@ -1151,6 +1166,11 @@ namespace ps2x::iop::detail
+             {
+                 eeSyncCycle = totalCycles;
+                 hostAnchored = false;
++                // The native mixer's state is not in a state (states run the SPU2 path's libsd): start it clean.
++                libsd.reset();
++                libsdCalls.clear();
++                mixerCycle = totalCycles;
++                mixerOut.clear();
+                 host.resetAudio();
+                 activeCpu = nullptr;
+                 servicingDmaInterrupts = false;
+@@ -1174,6 +1194,48 @@ namespace ps2x::iop::detail
+         IopIoman ioman;
+         IopSio2 sio2;
+         IopSpu2 spu2;
++
++        // PS2X_NATIVE_AUDIO=1: libsd's calls go to the native mixer (imports/iop_libsd.h), which is rendered by IOP
++        // time here in place of the SPU2 (with PS2X_IOP_CLOCK=host, IOP time is real time).
++        const bool nativeAudio = []
++        {
++            const char *value = std::getenv("PS2X_NATIVE_AUDIO");
++            return value && *value == '1';
++        }();
++        ps2x::audio::NativeMixer mixer;
++        // libsd's transfer interrupts: guest calls function(a0, a1) due at a cycle. Not in states (see serialize).
++        std::multimap<uint64_t, std::array<uint32_t, 4>> libsdCalls;
++        IopLibsd libsd{memory, mixer, [this](uint32_t function, uint32_t a0, uint32_t a1, uint32_t gp)
++                       { libsdCalls.emplace(totalCycles + 2000u, std::array<uint32_t, 4>{function, a0, a1, gp}); }};
++        uint64_t mixerCycle = 0;
++        std::vector<int16_t> mixerOut;
++
++        void serviceLibsdCalls()
++        {
++            while (!libsdCalls.empty() && libsdCalls.begin()->first <= totalCycles)
++            {
++                const auto [function, a0, a1, gp] = libsdCalls.begin()->second;
++                libsdCalls.erase(libsdCalls.begin());
++                (void)callFunction(function, a0, a1, 0u, 0u, gp, 100000u);
++            }
++        }
++
++        void renderMixer()
++        {
++            constexpr uint64_t kCyclesPerFrame = kIopClockHz / ps2x::audio::NativeMixer::kSampleRate; // 768
++            const uint64_t frames = (totalCycles - mixerCycle) / kCyclesPerFrame;
++            if (frames == 0u)
++                return;
++            mixerCycle += frames * kCyclesPerFrame;
++            const size_t queued = mixerOut.size();
++            mixerOut.resize(queued + frames * 2u);
++            mixer.render(mixerOut.data() + queued, frames);
++            if (mixerOut.size() >= 1024u) // 512 frames per submit, as the SPU2 path does
++            {
++                host.submitAudio(mixerOut);
++                mixerOut.clear();
++            }
++        }
+         IopCpuCore cpuCore;
+         IopImportRegistry imports;
+         IopLoadcore loadcore;
+-- 
+2.54.0 (Apple Git-157)
+

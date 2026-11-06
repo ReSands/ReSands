@@ -55,7 +55,9 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   step 4c point 7). Step 5 and the `-GsOff` default flip wait for it; its hardware questions (N27 halo flicker,
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile: 0.3 native sound (below).
-- **6 Nov: 0.3 native sound started; plan `docs/native_sound.md` (start at step 1, offline).** Decided: 0.3 does not
+- **6 Nov: 0.3 native sound; plan + progress `docs/native_sound.md` step 3. (a) recompiled IOP modules (patch 51),
+  (b) IOP clock = PC clock (52), (c) native libsd + mixer (53) done offline and checked; next: reverb in the offline
+  check, then the PC build + in-game listen (TV on).** Decided: 0.3 does not
   wait on the DARE byte-match (DARE's EE + IOP driver code run recompiled; libsd -> native mixer, IOP plumbing native, route A in step 3);
   no outside decomp helps. DARE decomp paused at 248/669 (run 13); its desktop shortcut stays for nights the user
   wants it.
@@ -104,7 +106,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   closed (`taskkill /f /pid`, check `tasklist`).
 - **Builds:** PC `tools\windows\rebuild.ps1 -Play -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc`
   with `-Fast` (override/runtime-only) or `-SkipGhidra` (recompiler/runtime headers, 30-50 min). Runtime patches:
-  `tools/patches/pop-sotc/` (up to 52; 51-52 not yet on the PC; Mac: `~/tools/PS2Recomp-sotc` has all 52, `game/recomp-sotc/runtime-src` on the Mac is stale; after `git am` also check out its HEAD in `game\recomp-sotc\runtime-src`, the build reads that clone). Mac builds the `pop` branch only
+  `tools/patches/pop-sotc/` (up to 53; 51-53 not yet on the PC; Mac: `~/tools/PS2Recomp-sotc` has all 53, `game/recomp-sotc/runtime-src` on the Mac is stale; after `git am` also check out its HEAD in `game\recomp-sotc\runtime-src`, the build reads that clone). Mac builds the `pop` branch only
   (`tools/rebuild.sh`); native tools via CMake in `tools/native` -> `game/native-build`.
 - **Test loop:** edit -> bundle -> `game\jobs\stnative.ps1` (45 s save boots, R1 held). User bug checks:
   `play.ps1 -Mode hybrid|gs|native -Save <name>`. Offline: `pop_state_frame`, `tools/native/score_saves.sh`.

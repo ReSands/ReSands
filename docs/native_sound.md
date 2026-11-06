@@ -172,13 +172,40 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      (the Prince-Farah dialogue sync bug in step 8 is a candidate to change either way).
    - Known limits: the IOP still only runs when the EE thread accounts cycles, so while the EE thread sleeps
      (a vsync wait) IOP work comes in bursts afterwards (several 180 Hz updates at once). Fine for the
-     emulated SPU2 (it renders by IOP time); for the native mixer (c) the stream buffers must cover a frame or
-     so, else the IOP needs its own host thread. EE code that polls IOP results in tight RPC loops still gets
+     emulated SPU2 and the native mixer (c), which both render by IOP time and hand 512-frame blocks to the
+     host's audio queue; if bursts are ever heard, the IOP needs its own host thread. EE code that polls IOP results in tight RPC loops still gets
      patch 17's 2048 background cycles per call, so during load polling the IOP runs faster than real time
      (the emulated SPU2 renders that time early); it no longer stalls afterwards.
    - Left for (b): nothing else found in the kernel HLE that counts time outside `totalCycles` (timrman, vblank,
      DelayThread/`delayCurrentUntil`, SIF DMA and CDVD completions all use it). Revisit only if the in-game check
      shows a timing problem.
+
+   **(c) done offline (6 Nov): pop-sotc patch 53, `PS2X_NATIVE_AUDIO=1` (off by default): native libsd + mixer.**
+   - The fork's `native_libsd.cpp` / `native_mixer.*` (GPL-3.0), adapted: libsd is an HLE import library
+     (`imports/iop_libsd.*`) dispatched before the import resolves to the loaded libsd module; the mixer
+     (`devices/iop_native_mixer.*`) renders by IOP time where `spu2.advanceTo` ran, so with
+     `PS2X_IOP_CLOCK=host` it is real time; interpolation is the SPU2's Gaussian table (fork: Catmull-Rom).
+     Transfer-done / block-half interrupts are guest calls 2000 cycles later through their own queue (not in
+     states; `ScheduledGuestCallback` is saved raw, so growing it would break every saved state).
+   - What PoP uses: UbiSound 11 libsd calls (Init, Set/GetParam, Set/GetSwitch, Set/GetAddr, SetCoreAttr,
+     VoiceTrans(+Status), SetEffectAttr, ClearEffectWorkArea). sdrdrv (the EE's `sceSdRemote`: DARE's stream on
+     core 0 is BlockTrans through it) all of 4-27 and 30-33 = sdrdrv commands 0x8180/0x8190/0x81a0/0x81b0. The
+     EE's code holds only 0x8100 (BlockTransStatus) of those; 0x81a0/0x81b0 sit in the client's table at EE file
+     0x12cd4, so 30-33 are probably never sent. Ordinals not taken (13/14 note<->pitch math, 30-33) run libsd's
+     own code and are logged once; PMON/NON (not played by the mixer) are logged once when set.
+   - Check: `iop_native_check <elf> --sound <dir>` drives sdrdrv RPC as the EE does (sceSdInit, VoiceTrans of
+     a looping 40-block ADPCM sample using all 5 filters, voice params/ADSR/SSA, KON, KOFF, then a looping PCM
+     BlockTrans on core 0) on both paths and writes `spu2.wav` / `native.wav`: voice and stream correlation
+     1.00000, level 0.9999 / 1.0001, native voice 1 sample later (21 us; the real PS2 decides which is right).
+     A 12 % quieter voice in the native run fails it. WAVs: `game/analysis/sound/libsd_ab/`.
+   - Not covered offline: reverb (effect modes, the SPU2 path's reverb vs the mixer's), exponential ADSR,
+     EndX readback timing, the real banks and command stacks. Next: add a reverb section to `--sound`, then the
+     in-game check.
+   - **PC steps (boot: ask first, TV on):** `git am` patches 51-53 on `C:\tools\PS2Recomp-sotc` (and check out
+     HEAD in `game\recomp-sotc\runtime-src`), copy `game/analysis/iop/gen/*_iop.cpp`, `rebuild.ps1 -Play -Fast
+     -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative game\analysis\iop\gen`, then play with
+     `PS2X_IOP_NATIVE=1 PS2X_IOP_CLOCK=host PS2X_NATIVE_AUDIO=1` (A/B: drop `PS2X_NATIVE_AUDIO`): menus, music,
+     voice-over, a fight, water, a cutscene; look for `[audio] native libsd:` lines and the 10 s mixer stats.
 
    - Correct decompiles (Ghidra with `-processor MIPS:LE:32:default`; the default picked MIPS64 R6 and broke
      jump tables): `game/analysis/iop/ubisound_decomp.c`, `sdrdrv_decomp.c`. UbiSound RPC functions: 0 init
