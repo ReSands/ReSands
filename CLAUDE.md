@@ -58,7 +58,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
 - **6 Nov: 0.3 native sound; plan + progress `docs/native_sound.md` step 3. (a) recompiled IOP modules (patch 51),
   (b) IOP clock = PC clock (52), (c) native libsd + mixer (53, aligned to PCSX2 in 54) done offline; checked
   against PCSX2's SPU2 core as the reference (`tools/iop/pcsx2_ref`; our emulated SPU2 is not a reference); step 4
-  (states keep native sound, patch 55, reviewed) done offline; old SPU2-path saves still load silent with native
+  (states keep native sound, patch 55) done offline; patches 51-55 all reviewed, ready to bundle; old SPU2-path saves still load silent with native
   audio (conversion parked). Next: the PC build + in-game listen (TV on), checklist in `docs/native_sound.md`
   step 3 "PC steps" (now incl. step 4's checks). Offline work left meanwhile (6 Nov list): native sound under many
   voices / real banks offline; step 5 code (PCSX2 core in the play build); real-PS2 GS replay homebrew (0.2);

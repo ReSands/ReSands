@@ -367,3 +367,7 @@ mode boots the game check for an active display first, so a mistake like this ca
 - **Check a differential test can fail:** after "identical", break one generated instruction on the path you
   care about and make sure the check reports it (the first IOP check ran only 367 instructions until RPCs were
   added).
+- **Save-state coverage test (6 Nov, 0.3 step 4):** to check that a subsystem's state is fully saved, run an
+  existing offline script once straight and once with a save + load into a fresh instance after every step; the
+  outputs must be identical. Cheap, needs no game boot, and caught the native mixer being left out of states
+  (silent from the first reload). Pair it with a load check of real old states (`iop_native_check --state`).
