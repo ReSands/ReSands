@@ -236,8 +236,13 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      8. Step 4 checks (patch 55): with native audio on, quick-save (F5) and load it back: sound must continue.
         And one old-state boot on the SPU2 path with `PS2X_AUDIO_DUMP=<wav> PS2X_SPU2_STATS=1`: is it still
         silent (12 Oct report)? Dump with sound = the runtime's output side; silent dump = the EE stops feeding.
-   - Review status: patch 55 reviewed (/ponytail-review, 6 Nov; three findings fixed), patch 52 reviewed
-     (970f3e4). 51, 53, 54: no review recorded in git; review them before bundling to the PC (rule).
+   - Review status: all of 51-55 reviewed, ready to bundle. 52 (970f3e4); 55 (6 Nov, three findings fixed);
+     51, 53, 54 (6 Nov, /ponytail-review: no findings; checked the native unaligned loads/stores, slice budget on
+     every path, native entries cleared on unload/state load, mixer addresses masked to sound memory, the drivers'
+     read-backs (ENDX, NAX, VMIXEL/ER) all served by the mixer, backend forwarding). Watch in game: the IOP renders
+     in bursts (known limit above), so a stream's half callbacks and NAX can lag by up to one burst.
+     ps2xIOP emulator_tests "IOP RPC work advanced audio outside the EE clock budget" already fails at patch 50
+     (before 51-55): an older patch, not looked into.
 
    - Correct decompiles (Ghidra with `-processor MIPS:LE:32:default`; the default picked MIPS64 R6 and broke
      jump tables): `game/analysis/iop/ubisound_decomp.c`, `sdrdrv_decomp.c`. UbiSound RPC functions: 0 init
