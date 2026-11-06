@@ -218,11 +218,21 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      patch 53.
    - Not covered offline: many voices at once, the real banks and command stacks, EndX readback timing, SPU2
      interrupts, save-state loads. Next: the in-game check.
-   - **PC steps (boot: ask first, TV on):** `git am` patches 51-54 on `C:\tools\PS2Recomp-sotc` (and check out
-     HEAD in `game\recomp-sotc\runtime-src`), copy `game/analysis/iop/gen/*_iop.cpp`, `rebuild.ps1 -Play -Fast
-     -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative game\analysis\iop\gen`, then play with
-     `PS2X_IOP_NATIVE=1 PS2X_IOP_CLOCK=host PS2X_NATIVE_AUDIO=1` (A/B: drop `PS2X_NATIVE_AUDIO`): menus, music,
-     voice-over, a fight, water, a cutscene; look for `[audio] native libsd:` lines and the 10 s mixer stats.
+   - **PC steps (next session; the build needs no TV, the listen does: ask first):**
+     1. Wake the PC (`docs/reference.md`), check the user's game is closed (`tasklist`).
+     2. Mac: `git bundle create game/jobs/pop.bundle main`, copy it to the PC's `game\jobs\`, then on the PC
+        `git pull --ff-only game\jobs\pop.bundle main`.
+     3. PC: `git am` patches 51-54 (`tools\patches\pop-sotc\`) on `C:\tools\PS2Recomp-sotc`, then check out
+        that HEAD in `game\recomp-sotc\runtime-src` (the build reads that clone).
+     4. Copy the generated IOP modules `game/analysis/iop/gen/*_iop.cpp` (game material, scp, never git) to the
+        same path on the PC.
+     5. `tools\windows\rebuild.ps1 -Play -Fast -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative
+        game\analysis\iop\gen` (watch it with `tools/windows/watch-job.sh`).
+     6. User listens (TV on), `PS2X_IOP_NATIVE=1 PS2X_IOP_CLOCK=host PS2X_NATIVE_AUDIO=1`; A/B by dropping
+        `PS2X_NATIVE_AUDIO` (= the old emulated SPU2, known worse). Menus, music, voice-over, a fight, water, a
+        cutscene/movie, a save load. Logs: `[audio] native libsd:` lines, the 10 s mixer stats. Save states boot
+        without sound, so start from the memory card.
+     7. A difference that sounds wrong: reproduce it offline in `iop_native_check --sound` against PCSX2 first.
 
    - Correct decompiles (Ghidra with `-processor MIPS:LE:32:default`; the default picked MIPS64 R6 and broke
      jump tables): `game/analysis/iop/ubisound_decomp.c`, `sdrdrv_decomp.c`. UbiSound RPC functions: 0 init
