@@ -257,7 +257,9 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      reverb, input as an offset into IOP RAM, sample count), the queued transfer interrupts and unsent output.
      Check: `iop_native_check --sound` also runs the native script with the IOP saved and loaded into a fresh
      emulator after every step and requires identical output (229,680 frames identical; without patch 55 it
-     goes silent at frame 4801, exit 6). ps2xIOP tests: same failures before and after (spu2 x2, known;
+     goes silent at frame 4801, exit 6). `--state` first loads the state with native audio on and requires the
+     load to end at the runtime's next section (exit 7 otherwise): old states without `INAU` load fine. A native
+     state loaded with native audio off is silent (its SPU2 was never written); its queued libsd calls are dropped. ps2xIOP tests: same failures before and after (spu2 x2, known;
      emulator_tests "IOP RPC work advanced audio outside the EE clock budget", also there before).
    - **Open:** states saved on the SPU2 path (all saves so far) still load silent with native audio on. Converting
      them means mapping the SPU2 registers to libsd's settings and the mixer (reverb registers -> preset mode),

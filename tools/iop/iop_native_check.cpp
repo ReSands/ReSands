@@ -13,7 +13,8 @@
 //       section. PCSX2 is the reference short of the real PS2 (docs/native_sound.md 8b). Also runs the native
 //       script with the IOP saved and reloaded after every step: the output must be identical (exit 6 if not).
 //   iop_native_check <SLUS_207.43> --state <file.state> <out dir> [seconds, default 5]   a save state's IOP alone
-//       (no EE) on the emulated SPU2: level per 0.5 s, state.wav.
+//       (no EE) on the emulated SPU2: level per 0.5 s, state.wav. First checks the state also loads with native audio
+//       on (exit 7 if a load does not end at the runtime's next section).
 //   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
 //       rate must still move the IOP clock by 1 s (within 2 %), a 0.5 s stall must be skipped, not replayed, and
 //       after 5000 fast inline RPCs (run ahead) the IOP must keep real time, not wait for the PC to catch up.
@@ -26,6 +27,7 @@
 #include "ps2x/iop/iop_host.h"
 
 #include <chrono>
+#include <algorithm>
 #include <cmath>
 #include <tuple>
 #include <cstdio>
@@ -556,12 +558,32 @@ namespace
             std::printf("not a state with EMEM and IOPE\n");
             return 1;
         }
+        // Native sound on, the state must load and end where the runtime's next section (EVFS) starts, with or without
+        // the native sound section (INAU) in it.
+        {
+            setenv("PS2X_NATIVE_AUDIO", "1", 1);
+            ElfHost host(elf);
+            IopEmulator iop(host);
+            ps2x::state::Reader reader(state.data() + iope, state.size() - iope);
+            iop.loadState(reader);
+            if (!reader.nextSectionIs(ps2x::state::fourcc("EVFS")))
+            {
+                std::printf("STATE LOAD WITH NATIVE AUDIO does not end at EVFS\n");
+                return 7;
+            }
+            std::printf("loads with native audio: ok\n");
+        }
         setenv("PS2X_NATIVE_AUDIO", "0", 1);
         ElfHost host(elf);
         host.guest.assign(state.begin() + emem + 4, state.begin() + emem + 4 + (32u << 20));
         IopEmulator iop(host);
         ps2x::state::Reader reader(state.data() + iope, state.size() - iope);
         iop.loadState(reader);
+        if (!reader.nextSectionIs(ps2x::state::fourcc("EVFS")))
+        {
+            std::printf("STATE LOAD does not end at EVFS\n");
+            return 7;
+        }
         std::printf("loaded: IOP cycle %llu, %u modules, %u threads\n", (unsigned long long)iop.cycles(),
                     iop.loadedModuleCount(), iop.threadCount());
         const uint64_t steps = uint64_t(seconds / 0.001);

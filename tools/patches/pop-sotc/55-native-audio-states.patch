@@ -1,4 +1,4 @@
-From f12fd1bb11cb9adc3eafdcb7f3165283c4a9c5fa Mon Sep 17 00:00:00 2001
+From 4e12dfe16bb8591bffea68aa63dd32907f3e53ef Mon Sep 17 00:00:00 2001
 From: Jon <resands@proton.me>
 Date: Fri, 6 Nov 2026 15:53:04 +0000
 Subject: [PATCH] iop: native audio in save states (libsd settings, mixer
@@ -10,10 +10,10 @@ native mixer silent, as before.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_012y1nSeB5ALWKBgL9yiuaYc
 ---
- .../src/emulator/devices/iop_native_mixer.h   | 17 ++++++++++++++
- ps2xIOP/src/emulator/imports/iop_libsd.h      | 10 +++++++++
- ps2xIOP/src/emulator/iop_emulator.cpp         | 22 ++++++++++++++++++-
- 3 files changed, 48 insertions(+), 1 deletion(-)
+ .../src/emulator/devices/iop_native_mixer.h   | 17 +++++++++++++
+ ps2xIOP/src/emulator/imports/iop_libsd.h      | 10 ++++++++
+ ps2xIOP/src/emulator/iop_emulator.cpp         | 25 ++++++++++++++++++-
+ 3 files changed, 51 insertions(+), 1 deletion(-)
 
 diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.h b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
 index f05961c..35d1a39 100644
@@ -79,15 +79,16 @@ index 945700a..81a5b42 100644
          struct Callback
          {
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
-index 0030ea6..2f819a5 100644
+index 0030ea6..897b87f 100644
 --- a/ps2xIOP/src/emulator/iop_emulator.cpp
 +++ b/ps2xIOP/src/emulator/iop_emulator.cpp
-@@ -1162,11 +1162,13 @@ namespace ps2x::iop::detail
+@@ -1162,11 +1162,14 @@ namespace ps2x::iop::detail
              spu2.serialize(ar);
              ar.section(fourcc("IIMP"));
              imports.serialize(ar);
 +            // PS2X_NATIVE_AUDIO=1 adds the native path's sound (libsd's settings, the mixer's playback, transfer
-+            // interrupts due). A state without it (saved on the SPU2 path) loads with the native mixer silent.
++            // interrupts due). A state without it (saved on the SPU2 path) loads with the native mixer silent; one with it
++            // loads silent on the SPU2 path (its SPU2 was never written).
 +            constexpr uint32_t nativeTag = fourcc("INAU");
              if constexpr (Ar::kLoading)
              {
@@ -97,7 +98,7 @@ index 0030ea6..2f819a5 100644
                  libsd.reset();
                  libsdCalls.clear();
                  mixerCycle = totalCycles;
-@@ -1176,9 +1178,27 @@ namespace ps2x::iop::detail
+@@ -1176,9 +1179,29 @@ namespace ps2x::iop::detail
                  servicingDmaInterrupts = false;
                  servicingGuestCallbacks = false;
                  callDepth = 0u;
@@ -105,6 +106,8 @@ index 0030ea6..2f819a5 100644
 +                {
 +                    ar.section(nativeTag);
 +                    serializeNativeAudio(ar);
++                    if (!nativeAudio)
++                        libsdCalls.clear(); // the SPU2 path's libsd never started these transfers
 +                }
 +            }
 +            else if (nativeAudio)
