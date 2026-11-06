@@ -230,9 +230,14 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
         game\analysis\iop\gen` (watch it with `tools/windows/watch-job.sh`).
      6. User listens (TV on), `PS2X_IOP_NATIVE=1 PS2X_IOP_CLOCK=host PS2X_NATIVE_AUDIO=1`; A/B by dropping
         `PS2X_NATIVE_AUDIO` (= the old emulated SPU2, known worse). Menus, music, voice-over, a fight, water, a
-        cutscene/movie, a save load. Logs: `[audio] native libsd:` lines, the 10 s mixer stats. Save states boot
-        without sound, so start from the memory card.
+        cutscene/movie, a save load. Logs: `[audio] native libsd:` lines, the 10 s mixer stats. Old save states
+        (SPU2 path) boot without native sound, so start from the memory card.
      7. A difference that sounds wrong: reproduce it offline in `iop_native_check --sound` against PCSX2 first.
+     8. Step 4 checks (patch 55): with native audio on, quick-save (F5) and load it back: sound must continue.
+        And one old-state boot on the SPU2 path with `PS2X_AUDIO_DUMP=<wav> PS2X_SPU2_STATS=1`: is it still
+        silent (12 Oct report)? Dump with sound = the runtime's output side; silent dump = the EE stops feeding.
+   - Review status: patch 55 reviewed (/ponytail-review, 6 Nov; three findings fixed), patch 52 reviewed
+     (970f3e4). 51, 53, 54: no review recorded in git; review them before bundling to the PC (rule).
 
    - Correct decompiles (Ghidra with `-processor MIPS:LE:32:default`; the default picked MIPS64 R6 and broke
      jump tables): `game/analysis/iop/ubisound_decomp.c`, `sdrdrv_decomp.c`. UbiSound RPC functions: 0 init
