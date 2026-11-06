@@ -6,6 +6,13 @@ the compiler check: `docs/roadmap.md` "2.0".
 
 ## State (6 Nov; start here)
 
+- **Public + crowd-sourced (6 Nov evening, user):** the shared files moved from `game/decomp/dare/` to
+  `decomp/dare/` (in git): `dare.h`, `dare_fix.h`, `units.tsv`, `callees.tsv`, `globals.tsv`, and one
+  `<addr>.cpp` per matched function. `game/decomp/dare/` keeps the local-only inputs (`asm/`, `ghidra_c/`,
+  `protos.tsv`, `statics.tsv`, `vtables.tsv`, experiments). Contributors follow `AGENTS.md` (draft PR = claim,
+  never post disassembly). New PASSes on the PC: `qwen_match.py --export`, then `match.py --all`, commit. Before
+  merging a contributor's PR: `match.py --all` on the PC. `dare_header.py` now writes to `decomp/dare/dare.h`
+  (pass that path).
 - **Paused for 0.3 (user, 6 Nov):** 0.3 native sound goes ahead without the byte match (`docs/native_sound.md`).
   The "Qwen DARE audio decomp" shortcut stays and resumes the queue whenever the user starts it.
 - **Run 13 (5 Nov 22:07 - 6 Nov 07:22, stopped by me at the user's request): 248 of 669** (+9). Qwen 6 of 47
@@ -432,7 +439,7 @@ the compiler check: `docs/roadmap.md` "2.0".
   the source).
 - Regenerate the working files on the Mac (`game/decomp/dare/`, git-ignored):
   `python3 tools/decomp/dare_units.py game/proto/disc/POP1/POP1.ELF game/proto/analysis/retail_names_from_proto.tsv game/decomp/dare/units.tsv`,
-  `python3 tools/decomp/dare_header.py game/proto/disc/POP1/POP1.ELF game/decomp/dare/dare.h game/decomp/dare/protos.tsv`
+  `python3 tools/decomp/dare_header.py game/proto/disc/POP1/POP1.ELF decomp/dare/dare.h game/decomp/dare/protos.tsv`
   (create an empty `dare_fix.h` beside it; it also writes `statics.tsv` and `vtables.tsv`: copy them to the PC with the header). Retail assembly and Ghidra C for the 669 functions: `analyzeHeadless`
   with `PoPDisasm.java` and `PoPDecompileTo.java` on `game/decomp/dare/addrs.txt` (outputs `asm/`, `ghidra_c/`).
   **Ghidra headless needs `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`** (as in

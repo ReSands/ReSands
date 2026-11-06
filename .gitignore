@@ -57,3 +57,8 @@ gog/
 
 # Python caches
 __pycache__/
+
+# Decomp: objects and scratch copies the matcher writes beside dare.h
+*.o
+decomp/dare/_q_*
+decomp/dare/_perm/

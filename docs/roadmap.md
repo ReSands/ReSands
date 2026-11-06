@@ -134,8 +134,9 @@ off the roadmap ("Some time" below). 0.2 is now judged against the real PS2.
 - **Publish** (user, 15 Oct: at 1.0; moved to the 0.7 playtest on 5 Nov), as a base for the community; later
   versions follow as updates. Publishing is
   limited to our own code (overrides, tools, runtime patches under their licences, PS2Recomp is GPL-3.0); users supply
-  their own disc and build it. Never ship game data, generated code or prototype-derived material (GT4Recomp ships its
-  translated code; we do not copy that, only its launcher/manifest ideas).
+  their own disc and build it. Never ship game data, generated code or prototype files (GT4Recomp ships its
+  translated code; we do not copy that, only its launcher/manifest ideas). Changed 6 Nov (user): the repo is public
+  now, prototype findings and the byte-matching decomp sources (`decomp/`, crowd-sourced via `AGENTS.md`) included.
 
 ## 1.x: upgrades on top
 

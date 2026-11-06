@@ -1,8 +1,11 @@
 # match.py: compile one source file with CodeWarrior and compare one function with the retail bytes.
 #   python match.py <src.cpp> <mangled name> <retail addr hex> <size> [--cc <compiler dir>] [--elf <SLUS_207.43>]
+#   python match.py decomp/dare/<addr>.cpp        name and size from decomp/dare/units.tsv
+#   python match.py --all                         every decomp/dare/<addr>.cpp (exit 1 if any fails)
+#   python match.py --asm <addr hex>              the retail disassembly of one DARE function (local use only)
 # Prints MATCH or an aligned per-instruction diff (relocated fields masked on both sides, so call targets and
 # addresses of globals only need the right relocation, not the final address). Exit 0 = match.
-# Runs where mwccps2.exe runs (the PC); objdiff() alone also works on any machine with an object file.
+# mwccps2.exe is Win32: run directly on Windows, through Wine elsewhere.
 import difflib, os, re, struct, subprocess, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mipsdis import dis
@@ -12,6 +15,7 @@ CC = os.path.join(ROOT, 'game', 'decomp', 'compilers', '3.0.3-020716', 'mwccps2.
 # -sdatathreshold 0: DARE reaches every global via lui at / lw (at), never gp (checked 28 Oct)
 FLAGS = ['-c', '-nostdinc', '-O4,p', '-enum', 'min', '-sdatathreshold', '0']
 ELF = os.path.join(ROOT, 'game', 'ps2', 'disc', 'SLUS_207.43')
+HDR = os.path.join(ROOT, 'decomp', 'dare')  # shared dare.h, dare_fix.h, units.tsv and the matched <addr>.cpp files
 R_MIPS_26 = 4
 
 
@@ -125,10 +129,43 @@ def selftest():
 
 
 def compile_src(src, out_obj, cc=CC):
-    r = subprocess.run([cc] + FLAGS + ['-o', out_obj, os.path.basename(src)], cwd=os.path.dirname(os.path.abspath(src)),
+    # out_obj must sit beside src (every caller does this): plain file names survive Wine, unix paths may not
+    r = subprocess.run(([cc] if os.name == 'nt' else ['wine', cc]) + FLAGS + ['-o', os.path.basename(out_obj), os.path.basename(src)], cwd=os.path.dirname(os.path.abspath(src)),
                        capture_output=True, text=True, errors='replace', timeout=120)
     msg = (r.stdout + r.stderr).strip()
     return os.path.exists(out_obj) and r.returncode == 0, msg
+
+
+def units():
+    # units.tsv: file, mangled, POP1 size, retail addr hex (or -), retail size, same size -> {addr: row}
+    rows = (l.rstrip('\n').split('\t') for l in open(os.path.join(HDR, 'units.tsv')))
+    return {int(r[3], 16): r for r in rows if r[3] != '-'}
+
+
+def check(src, name, addr, size, elf, cc=CC):
+    obj = os.path.splitext(os.path.abspath(src))[0] + '.o'
+    if os.path.exists(obj):
+        os.remove(obj)
+    ok, msg = compile_src(src, obj, cc)
+    if not ok:
+        return 2, 'COMPILE ERROR\n' + msg
+    matched, text = objdiff(obj, name, addr, size, elf)
+    os.remove(obj)
+    return (0 if matched else 1), text
+
+
+def asm(addr, elf):
+    from qwen_match import callee_names  # here: qwen_match imports this module
+    u, name = units(), callee_names()
+    out = ['; ' + u[addr][1]]
+    for k in range(int(u[addr][4]) // 4):
+        pc = addr + 4 * k
+        w, = struct.unpack_from('<I', elf, pc - 0x100000 + 0x100)
+        t = dis(w, pc)
+        if w >> 26 == 3:  # jal: the callee's name (from the prototype's symbols) where known
+            t += '   ; ' + name.get((w & 0x3ffffff) << 2, '?')
+        out.append('%08x  %s' % (pc, t))
+    return '\n'.join(out)
 
 
 def main(a):
@@ -136,17 +173,32 @@ def main(a):
         return selftest()
     cc = a[a.index('--cc') + 1] if '--cc' in a else CC
     elf = open(a[a.index('--elf') + 1] if '--elf' in a else ELF, 'rb').read()
-    src, name, addr, size = a[0], a[1], int(a[2], 16), int(a[3])
-    obj = os.path.splitext(os.path.abspath(src))[0] + '.o'
-    if os.path.exists(obj):
-        os.remove(obj)
-    ok, msg = compile_src(src, obj, cc)
-    if not ok:
-        print('COMPILE ERROR\n' + msg)
-        return 2
-    matched, text = objdiff(obj, name, addr, size, elf)
+    if a[0] == '--asm':
+        print(asm(int(a[1], 16), elf))
+        return 0
+    if a[0] == '--all':
+        u, bad = units(), []
+        srcs = sorted(f for f in os.listdir(HDR) if re.fullmatch(r'[0-9a-f]{8}\.cpp', f))
+        for f in srcs:
+            r = u.get(int(f[:8], 16))
+            if not r:
+                bad.append(f)
+                print(f, 'not in units.tsv')
+                continue
+            rc, text = check(os.path.join(HDR, f), r[1], int(r[3], 16), int(r[4]), elf, cc)
+            if rc:
+                bad.append(f)
+                print('%s %s: %s' % (f, r[1], text.splitlines()[0][:120]))
+        print('%d of %d match' % (len(srcs) - len(bad), len(srcs)))
+        return 1 if bad else 0
+    if len(a) == 1 or a[1].startswith('--'):
+        r = units()[int(os.path.basename(a[0])[:8], 16)]
+        name, addr, size = r[1], int(r[3], 16), int(r[4])
+    else:
+        name, addr, size = a[1], int(a[2], 16), int(a[3])
+    rc, text = check(a[0], name, addr, size, elf, cc)
     print(text)
-    return 0 if matched else 1
+    return rc
 
 
 if __name__ == '__main__':

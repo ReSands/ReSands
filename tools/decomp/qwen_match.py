@@ -5,8 +5,9 @@ Usage (on the PC, where mwccps2 and llama-server run):
   python tools/decomp/qwen_match.py <...> --prompt      print the first prompt only (no model, no compiler)
   python tools/decomp/qwen_match.py <...> --try <file>  judge a file as a round would (runner test without the model)
   python tools/decomp/qwen_match.py --queue | --summary  the night queue (addrs left, in order) / the results so far
+  python tools/decomp/qwen_match.py --export            copy new PASSes into decomp/dare/<addr>.cpp (then match.py --all)
 --rounds N = N more rounds; --until <unix time>: no new round after it.
-Needs game/decomp/dare/ (dare.h, dare_fix.h, units.tsv, protos.tsv, callees.tsv, globals.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
+Needs decomp/dare/ (dare.h, dare_fix.h, units.tsv, callees.tsv, globals.tsv) and game/decomp/dare/ (protos.tsv, asm/, ghidra_c/): see docs/decomp_dare.md.
 """
 import os, re, shutil, struct, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -100,7 +101,7 @@ Original local variable names: {locals}
 
 def row(key):
     # units.tsv: file, mangled, POP1 size, retail addr, retail size, same size
-    for line in open(os.path.join(DARE, 'units.tsv')):
+    for line in open(os.path.join(match.HDR, 'units.tsv')):
         f = line.rstrip('\n').split('\t')
         if f[3] != '-' and key in (f[1], f[3], f[3].lstrip('0')) or f[3] == key.lstrip('0'):
             return f[1], int(f[3], 16), int(f[4]), f[0]
@@ -110,7 +111,7 @@ def row(key):
 def header_blocks():
     # top-level struct definitions (members commented with their offsets from the DARE_CHECK lines, which are
     # dropped), enums, C declarations and globals, by name
-    lines = open(os.path.join(DARE, 'dare.h')).read().splitlines(True)
+    lines = open(os.path.join(match.HDR, 'dare.h')).read().splitlines(True)
     ofs = {(m.group(1), m.group(2)): int(m.group(3)) for m in
            (re.search(r'DARE_OFS\((\w+), (\w+)\) == (\d+)', l) for l in lines) if m}
     size = {m.group(1): int(m.group(2)) for m in (re.search(r'sizeof\((\w+)\) == (\d+)', l) for l in lines) if m}
@@ -241,12 +242,12 @@ def diff_hints(report):
 
 def callee_names():
     # callees.tsv (dare_callees.py): retail call target -> POP1 name, kept only when it outvotes all other names
-    p = os.path.join(DARE, 'callees.tsv')
+    p = os.path.join(match.HDR, 'callees.tsv')
     rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
     names = {int(a, 16): n for a, n, v, other in rows if int(v) > int(other) and int(a, 16) not in WRONG_NAMES}
     # a DARE function's own retail address (units.tsv) beats a vote (5 Nov: 2 of 87 one-vote names disagreed)
     names.update(EXTRA_NAMES)
-    names.update((int(f[3], 16), f[1]) for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+    names.update((int(f[3], 16), f[1]) for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv')))
                  if f[3] != '-')
     return names
 
@@ -280,7 +281,7 @@ def name_callees(asm, ghidra):
 
 def annotate(asm, ghidra, addr, size):
     # globals.tsv names on the instructions that reach them (and Ghidra's DAT_ names); float constants on mtc1
-    p = os.path.join(DARE, 'globals.tsv')
+    p = os.path.join(match.HDR, 'globals.tsv')
     rows = [l.rstrip('\n').split('\t') for l in open(p)] if os.path.exists(p) else []
     gl = {int(a, 16): (n, int(sz)) for a, n, sz, v, other in rows if int(v) > int(other)}
     # an address inside a named object (its base from any name+0xK): name+offset (5 Nov: gs_listMemoryCluster
@@ -342,7 +343,7 @@ EXAMPLES_BUDGET = 4000  # characters of matched code from the same source file
 def examples(file, addr):
     # matched functions of the same source file (smallest first): the developer's style for this compiler
     # (comparisons, loops, switches), which the hand-match lessons only describe (1 Nov, after fnvdecomp's agents.md)
-    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv'))]
     out, size = [], 0
     for r in sorted((r for r in rows if r[0] == file and r[3] != '-' and int(r[3], 16) != addr), key=lambda r: int(r[4])):
         p = os.path.join(QWEN, 'dare_%08x' % int(r[3], 16))
@@ -414,7 +415,7 @@ def prompt(mangled, addr, size, file):
 
 def judge(path, mangled, addr, size, elf):
     # -> (matched, matching instruction count, report); compiled beside dare.h, which it includes
-    src = os.path.join(DARE, '_q_%08x.cpp' % addr)
+    src = os.path.join(match.HDR, '_q_%08x.cpp' % addr)
     obj = src[:-4] + '.o'
     shutil.copy(path, src)
     if os.path.exists(obj):
@@ -498,7 +499,7 @@ def queue():
     # functions not yet PASS / HEADER: RETRY-marked first (reopened after a header or prompt fix; closest miss
     # first), then untried, then the same-size ones (most likely to match POP1's layouts), smallest first.
     # A miss within PERMUTE_FIRST instructions that the permuter has not had yet is left to it (5 Nov).
-    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv'))]
     at = lambda r, f: os.path.exists(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16), f))
     gap = {r[3]: best_diffs(os.path.join(QWEN, 'dare_%08x' % int(r[3], 16))) for r in rows if r[3] != '-'}
     rows = sorted((r for r in rows if r[3] != '-'), key=lambda r: (
@@ -511,7 +512,7 @@ def queue():
 
 def summary():
     # one line per state, then the near misses (best attempt, matching instructions of the retail size)
-    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv')))
              if f[3] != '-'}
     state, near = {'PASS': 0, 'HEADER': 0, 'tried': 0}, []
     for d in sorted(os.listdir(QWEN)) if os.path.isdir(QWEN) else []:
@@ -534,7 +535,7 @@ def summary():
 def rejudge():
     # every PASS's best.cpp against the current dare.h (after a header change): prints the ones that no longer match
     elf, bad, n = open(match.ELF, 'rb').read(), [], 0
-    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv')))
+    units = {int(f[3], 16): f for f in (l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv')))
              if f[3] != '-'}
     for d in sorted(os.listdir(QWEN)):
         p = os.path.join(QWEN, d)
@@ -605,6 +606,16 @@ def main(argv):
         return rejudge()
     if argv[0] == '--summary':
         summary()
+        return 0
+    if argv[0] == '--export':
+        # every PASS's best.cpp into the shared tree (decomp/dare/<addr>.cpp) unless already there; check with match.py --all
+        n = 0
+        for d in sorted(os.listdir(QWEN)):
+            dst = os.path.join(match.HDR, d[5:] + '.cpp')
+            if d.startswith('dare_') and os.path.exists(os.path.join(QWEN, d, 'PASS')) and not os.path.exists(dst):
+                shutil.copy(os.path.join(QWEN, d, 'best.cpp'), dst)
+                n += 1
+        print(n, 'exported to', match.HDR)
         return 0
     mangled, addr, size, file = row(argv[0])
     first = prompt(mangled, addr, size, file)

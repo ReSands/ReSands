@@ -249,7 +249,7 @@ def winit(addr, mangled, size):
     d = os.path.join(DARE, '_perm', '%d' % os.getpid())
     os.makedirs(d, exist_ok=True)
     for h in ('dare.h', 'dare_fix.h'):
-        shutil.copy(os.path.join(DARE, h), d)
+        shutil.copy(os.path.join(match.HDR, h), d)
     W.update(dir=d, addr=addr, mangled=mangled, size=size, elf=open(match.ELF, 'rb').read())
 
 
@@ -346,7 +346,7 @@ def run(addr_hex, minutes, jobs, start=None, seed=None):
 def queue(max_off=10):
     # tried, not PASS / HEADER, best attempt within max_off differing instructions, and not yet permuted from it
     # (PERMUTED = start hash + minutes spent)
-    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(DARE, 'units.tsv'))]
+    rows = [l.rstrip('\n').split('\t') for l in open(os.path.join(match.HDR, 'units.tsv'))]
     out = []
     for r in rows:
         if r[3] == '-':

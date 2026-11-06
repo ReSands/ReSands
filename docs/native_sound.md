@@ -15,7 +15,7 @@ GT4Recomp pacing in `docs/reference.md`; the 14 Oct stream bug history in `docs/
   source is the leak, which we can't use). Our own sources are better:
   1. `game/analysis/iop/ubisound.irx` (= the disc's `DARE_RT.IRX`), **unstripped**: the driver we replace, with
      its function names.
-  2. POP1.ELF DWARF: DARE's EE structs, names, file split (`game/decomp/dare/dare.h`, `protos.tsv`).
+  2. POP1.ELF DWARF: DARE's EE structs, names, file split (`decomp/dare/dare.h`, `game/decomp/dare/protos.tsv`).
   3. The prototype disc's `DARE_DG.IRX` (debug driver; not opened yet, may have asserts/logging).
   4. **PCSX2's SPU2 core, built into our game as the reference sound backend** (user, 6 Nov; not the full
      PCSX2 program). Our own SPU2 model in the recomp is glitchy and unreliable: never compare against it.

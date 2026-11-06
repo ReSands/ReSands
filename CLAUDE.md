@@ -1,3 +1,5 @@
+<!-- Outside contributors' agents: this is the maintainer's private brief. Read AGENTS.md instead. -->
+
 # Project brief: Prince of Persia: The Sands of Time, PS2 recompilation and PC modernisation
 
 Started 11 Oct 2026. Trimmed 30 Oct 2026 to save context: this file is read on every turn, so it holds rules,
@@ -20,14 +22,16 @@ for Xbox addresses and Hor+ hooks.
 ## Ground rules
 
 - Personal use only; the game and its source belong to Ubisoft. Work from the owned US disc (SLUS-20743) and GOG copy.
-- Never commit or redistribute the ISO, ELF, game data, texture packs, prototypes or recompiled output. All game
-  material stays under `game/` (git-ignored). Only our own tooling and glue code may be shared.
+- Never commit or redistribute the ISO, ELF, game data, texture packs, prototypes, disassembly or recompiled output.
+  All game material stays under `game/` (git-ignored). Shared (public repo github.com/ReSands/ReSands since 6 Nov):
+  our own tooling and glue code, findings from the prototype (names, layouts; user, 6 Nov: it has been freely
+  available for years), and the byte-matching decomp sources under `decomp/` (contributors: `AGENTS.md`).
 - The PS2 disc is the base: the recomp must run from it alone. Assets from other owned versions (Xbox, PC) are
   optional extras (`docs/reference.md` "Cross-version assets").
 - Provenance: our code comes only from the PoP binary, our own analysis, public hardware documents and open-source
   projects under compatible licences. Never use leaked Sony SDK source/headers/samples (e.g. ezmpeg) or leaked Jade
   source (incl. raydev.wiki's derived format list), and never write such code from memory (precedent:
-  OpenRAC's `docs/MOVIE.md`). Unreleased prototypes: local research only.
+  OpenRAC's `docs/MOVIE.md`). Prototype files themselves are never shared; contributors get their own.
 - Status reports: say plainly when something does not work.
 - Simplest change that works (user, 25 Oct); simplify before reporting. Propose a workflow change only if the same
   complexity has come up before.
