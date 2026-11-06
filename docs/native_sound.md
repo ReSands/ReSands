@@ -17,8 +17,10 @@ GT4Recomp pacing in `docs/reference.md`; the 14 Oct stream bug history in `docs/
      its function names.
   2. POP1.ELF DWARF: DARE's EE structs, names, file split (`game/decomp/dare/dare.h`, `protos.tsv`).
   3. The prototype disc's `DARE_DG.IRX` (debug driver; not opened yet, may have asserts/logging).
-  4. The running recomp, whose emulated sound is right in most places: the reference to record against (with the
-     known exceptions below; our SPU2 emulation is not ground truth, `independent-reference` rule).
+  4. **PCSX2 = the source of truth for how it should sound** (user, 6 Nov). Our own IOP/SPU2 emulation in the
+     recomp is glitchy and unreliable: never compare against it. It is only useful for logging the commands DARE
+     sends (the EE side is the same code either way). Same scene in both: an in-game save on the shared PCSX2
+     `.ps2` memory card (patch 49), loaded in PCSX2 and in ours.
 
 ## The boundary (what native sound replaces)
 
@@ -51,16 +53,21 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
    keeps the IOP alive (not the 0.3 goal). Write the choice here.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
-5. **Reference recordings (needs a boot: ask first, TV on).** One run logs every command (and stream refill) with
-   timestamps beside a WAV of the emulated output (`PS2X_AUDIO_DUMP`), on saves covering menus, music, voice-over,
-   fights, water, sand powers, a cutscene. Becomes the offline test input for the mixer.
+5. **Reference recordings (needs a boot: ask first, TV on).**
+   - **Truth:** PCSX2 WAV recordings (its audio capture; check which option dumps the raw SPU2 output) of the same
+     scenes from in-game saves on the shared memory card: menus, music, voice-over, fights, water, sand powers, a
+     cutscene. Check PCSX2 is installed on the PC and its settings (interpolation, reverb on, no time-stretch).
+   - **Input:** our recomp logs every command and stream refill with timestamps on the same saves (our own
+     emulated audio from that run is not used). Becomes the offline test input for the mixer.
 6. **Native mixer** (portable, SDL3 audio out): sample banks in our own memory (no SPU2 RAM model), PS2 ADPCM
    decode, ADSR, pitch, volume/pan, the stream input straight from RPS2's buffer, reverb from the libsd presets;
    GT4Recomp-style rate control (never block the game thread). Offline first: drive it from step 5's logs and
    compare with the WAVs.
-7. **In game, both at once**, then compare (`docs/native_renderer.md` "QA plan for sound"): dual render vs the
-   emulation in ~100 ms blocks, glitch detectors, every sound alone against vgmstream overnight.
-8. **Known audio bugs, checked on both paths:** quiet/missing fight track, Prince-Farah in-engine dialogue out of
+7. **In game, then compare against PCSX2** (`docs/native_renderer.md` "QA plan for sound"): the same save +
+   the same actions in PCSX2 and in ours, WAVs aligned by cross-correlation and compared in ~100 ms blocks with a
+   tolerance (runs are not frame-locked, so levels/spectra per block, not samples); glitch detectors on our output;
+   every sound alone against vgmstream and against PCSX2 overnight. Not against our current SPU2 emulation.
+8. **Known audio bugs, checked against PCSX2:** quiet/missing fight track, Prince-Farah in-engine dialogue out of
    sync, sound slows with the frame rate (`docs/history.md`), and crash 2 (only watched, emulated-sound related?)
    should go away with the IOP.
 9. **Close:** native sound on by default in `play.ps1` (switch back to the emulation kept as the reference), user
@@ -72,4 +79,7 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
   voice status)?
 - How does sound timing follow the frame rate today (the "slows with the frame rate" bug), and should the native
   mixer run on its own clock?
-- Reverb: does our current SPU2 emulation do it at all (unchecked), so is the reference silent on reverb?
+- Which PCSX2 settings make the reference closest to a real PS2 (interpolation mode, reverb, sync), and is PCSX2's
+  audio capture taken before or after its time-stretch?
+- How closely can a scene be repeated in both (input script vs by hand); is a per-sound comparison enough where
+  whole scenes drift?
