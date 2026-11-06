@@ -67,7 +67,7 @@ frame rather than causes: to confirm with the why-lines.
   draws 9101, native 8984, not replayed 0; frames 13200, pure 12797, **ended by water +0x88 206**. The 117 non-native
   water draws were the silent `b.indices.empty()` path (all triangles clipped: the GS got an empty colour pass that still
   closed the purity). Fixed: skipped as native, as particles already were. A 45 fps dip seen once: performance, later.
-  Re-check (build 4e7a046, user, `play_20261101_160837.log`, looks right): water 9294 / 9294 native; frames 6300, ended by
+  Re-check (build 6a85733, user, `play_20261101_160837.log`, looks right): water 9294 / 9294 native; frames 6300, ended by
   ref +0x2c 1 only (the rest not pure at +0x88 = menu / load frames, "ended within 0").
 So the steady game, title and movie are covered; the open fallbacks are the ones only seen in play (blended Pinch, now
 native; water; single calls).
@@ -96,7 +96,7 @@ A = play.ps1 defaults, B = + POP_NATIVE_PRESENT=1): no crash, fps and native cou
 - Save menu 192114 (static): B vs A mean 0.5-1.3 / 255, < 0.1% of pixels off by more than 8.
 - Fight 185602 (HUD, tutorial text) and the cold-boot intro movie: right by eye (the runs are not in step, so no pixel score).
 - Save 192103 (loading screen kept in the save, not redrawn): B first showed the title's last "Loading options" box (our
-  memory does not come back with a save state). Fixed (221548a): the GS's picture is shown when no native picture came for
+  memory does not come back with a save state). Fixed (86d556f): the GS's picture is shown when no native picture came for
   0.5 s; rerun: identical to A (0.00). The movie after it: the same movie frames in A and B (0.0 apart), shown a few
   fields apart (movie playback follows the clock; not a presenter error).
 **User TV check 1 Nov (passed):** cold boot, `play.ps1 -Env 'POP_NATIVE_PRESENT=1'`: intro movie, title, loading,
@@ -302,7 +302,7 @@ layout B object matrix at VU 0; row vectors. Live posing: `poseSkinned` in `tool
    since 30 Oct (P5 GFX particles on by default offline, `docs/native_bugs.md`); every chain particle range is drawn in
    the vu1 build (202926, 184926, 115853), the empty two in 115853 are behind the camera and culled, as in the game.
 
-**Step 4c leftovers (1 Nov, 00ec530).** (a) *Lit static passes* (a held club in 134636_1) now take the object matrix (VU 0)
+**Step 4c leftovers (1 Nov, bf4ec0a).** (a) *Lit static passes* (a held club in 134636_1) now take the object matrix (VU 0)
 the chain drew them with (`g_chainBones` with one matrix; live: null hook): 131 -> 133 posed from the chain, 8 fight
 saves slightly better. (b) *2D:* two saves draw 2D the offline frame lost: 174131 (HUD + tutorial text) and gate 134636
 (HUD). Their list +0xB8 count is 0 but last frame's entries are still behind it (as the shadow lists); offline the count

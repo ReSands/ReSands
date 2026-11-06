@@ -48,7 +48,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   (`-NoNative*` switches send parts back to the GS). 0.2 (GS off by default; plan + progress `docs/gs_off.md`):
   steps 1-4c done (census, native presenter patch 45, GS off `POP_GS_OFF=1` / `-GsOff` patch 46, native vs GS on the
   same offline frame via `POP_STATE_CHAIN`; scenery, effects, menus, movies match). PC play build has all of it.
-  Closed 1 Nov: progressive-scan crash (patch 48), camera X in fixed views (21ab2c7). Render gate (13 GS-only saves,
+  Closed 1 Nov: progressive-scan crash (patch 48), camera X in fixed views (035e5e7). Render gate (13 GS-only saves,
   `game/analysis/gsref1027/states/`) pixel-identical. Docs: `docs/native_renderer.md`, `docs/native_bugs.md`,
   `docs/native_2d.md`, `docs/renderer_audit.md`.
 - **Next (user, 1 Nov): set up the real PS2 and the pipeline to test on it** (`docs/gs_off.md` step 5 /
@@ -73,7 +73,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   (`docs/roadmap.md` 0.5 "Pad + rumble progress").
 - **4 Nov:** rope bridges fixed at any frame rate (fixed 1/30 s steps + extrapolation; user-checked), ropes look
   the same at 30/60, `POP_60FPS=0` now really forces 30 fps (`docs/native_bugs.md` "Bridges"; 1.4 re-check list in roadmap).
-- **0.1:** crash 1 closed 30 Oct (3b80b66). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
+- **0.1:** crash 1 closed 30 Oct (9d33d3c). Crash 2 only watched (full dump on a freeze; no speculative emulated-sound fixes).
 - **Rules in force:** hybrid-frame bugs park until 0.2, bugs in native code are fixed now; all performance work waits
   until fully native (user). The user's in-motion check is the reference for short effects; our GS emulation is not
   ground truth. Render-gate reference saves must be GS-only.

@@ -523,10 +523,10 @@ Back to the native renderer after the VU1 speed work (the fights are VU1-bound: 
   native (on the GS it closed the frame's purity: "ended by water +0x88" in 1,929 of 2,400 frames without P6). Fountain save
   202926, 45 s hands-off: water draws 6,099, native 2,232, not replayed 0, 60 fps; the rest stay on the GS because a GS GFX
   draw earlier in +0x88 ends the purity first (2,285 frames; the prefix rule, 0.2). The user watched it: looks good. **On by default since 30 Oct** (`POP_NATIVE_P6=0` off; still only with `-NativeLate`).
-- **Review 30 Oct** (5c9733e..4e0debf). Fixed (3170ab5): water records went to the renderer with a content key, so the
+- **Review 30 Oct** (848f255..c78d5dd). Fixed (6fbab87): water records went to the renderer with a content key, so the
   kept-mesh cache stored ~200 KB of one-frame geometry per frame at the fountain (estimate) until the 512 MB budget
   dropped everything and the whole world was resent (the N5 path). `DrawMaterial::frameOnly` now sends them with key 0,
-  as posed characters; the same for halos, P9 sprites, P5 and CPU particles, and (cddb051) the lit statics' environment-map
+  as posed characters; the same for halos, P9 sprites, P5 and CPU particles, and (54f7e11) the lit statics' environment-map
   pass (its UVs follow the camera; pass 1's baked light stays cached). Not verified live yet. Open: no render-gate save has
   water (162246, 162621, 155110 checked): make a GS-only fountain save on the PC and add it as a `vu1` gate line.
 - **Baseline** (`tools/native/score_saves.sh <states> <out>`: pop_state_frame + viewer + popstate --frame +
@@ -664,7 +664,7 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   2.66 ms per frame (read 0.88, upload 0.94, draw + readback 0.84), **~3 ms from submit to the uploads**
   after the first frame (20 ms: all geometry and textures sent). Full-frame scores after tonight's renderer
   changes (`score_saves.sh` -> `game/analysis/play1019/native_pnf7/`): mean 18.64 -> 17.98 over the 49 saves;
-  44 better, 5 worse by 0.01-0.07 (185052, 185102, 185301, 191317, 192114). The change comes from d23ebe9
+  44 better, 5 worse by 0.01-0.07 (185052, 185102, 185301, 191317, 192114). The change comes from bf89188
   (GS-exact depth, half-pixel sampling offset), not PNF7 (byte-identical on the fight save). PNF7 cut the frame from 8.2 MB to 79 KB and
   the wait from ~9 ms. The play build with the mode compiles and links.
 - **Known risks, to check in the first boot:** (1) the hook runs on the async VIF/VU thread
@@ -689,7 +689,7 @@ point of the frame where its 3D starts, so everything the GS draws afterwards (c
   waits 3.3 ms; responsiveness like the GS path (user). The world was missing after loading in and in the
   fixed vault camera: 1,789 frames refused as "unexpected buffers" (ZBUF ZMSK 1). Saves 171143/171355: the
   last state before the marker is ZBUF ZMSK 1 + ALPHA 0x44 with no VU1 run before it; the game sets ZMSK 0
-  right after the marker. Fixed (bd89bd4: the write mask is not checked); retest: 9,600 frames injected,
+  right after the marker. Fixed (2872aa8: the write mask is not checked); retest: 9,600 frames injected,
   0 missed, 0 refused, world there at once and through vaults (user). (3) Shadows (lever, save 172041)
   flicker more than on the GS: the native Z is nearer than VU1's on 26.7% of world pixels (49 saves of
   19 Oct, 2.9M pixels: p50 -19, p90 +15, p99 +106, p99.9 +442 Z24 units), so GEQUAL second passes fail
@@ -991,7 +991,7 @@ again). Same scene, the same stale camera on the first 2 frames.
   picture is written straight into the displayed buffer: the flash. (The "both buffers" test also wrote it into
   buffer 0, so the flash stayed.)
 - Frame 2 has a clear and draws the full stale-camera world on both paths (GS ~10k primitives).
-- **Fixed with (a) (85587ef), checked in game 23 Oct ~19:15.** Fix candidates were: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
+- **Fixed with (a) (a03de4b), checked in game 23 Oct ~19:15.** Fix candidates were: (a) never inject into the buffer on screen / take the frame's real target from the game (its own
   buffer index at Display3DElements) instead of the GS state at the marker; (b) honour the frame's missing clear: no
   injection (or a Z-tested merge) when the Z buffer was not cleared before the marker.
 
@@ -1164,19 +1164,19 @@ Decompiled C in `game/analysis/shadow/decomp/` (PoPDecompileTo). Projected-textu
 - Stats: `[pop:world] late lists: ...` every 300 frames (frames pure at +0x88, ended within, calls native/GS,
   particles native, the five commonest causes). On by default in `play.ps1` (`-NoNativeLate`); in-game check pending.
 - Next: sprites (VU1 curve program), the two textures, then +0x98 natively (skip EraseAlphaBuffer when pure).
-- **30 Oct night: purity to the HUD.** (1) Instanced lightmaps native (4446928): a ref with a +0x5C entry used to be
+- **30 Oct night: purity to the HUD.** (1) Instanced lightmaps native (5783f44): a ref with a +0x5C entry used to be
   refused (`g_worldLmRefs`), so instanced walls ended purity in +0x2C (sun 162621: ref 018639d0; the why-line was capped
   at 20 and fired only at load, so last evening's log looked silent). Now `refDisplayRecord` draws pass 3 through
   `lightmapRecord` (shared with elements; the ref's pass-3 packet is ref +0xC) over a native base; `pop_state_frame`
-  replays kind-10 lightmap entries. (2) +0x98 native while pure (108d60f): `worldStateOk` takes it with the late lists
+  replays kind-10 lightmap entries. (2) +0x98 native while pure (6ae207a): `worldStateOk` takes it with the late lists
   (alpha only via render state 0x44; Z writes per flag 0x200), and EraseAlphaBuffer (0x4AF140; Display3DElements calls it
   before +0x68 and +0x98, PS2_Clear too) is skipped from Display3DElements while pure: the injected picture already
   holds the frame's final native alpha, which the GS clear would wipe; native alpha is 0 before +0x98 anyway. Its
   ZBUF/TEST changes need no replacement (FUN_004B1D40 after it marks the render state for a full resend). (3) +0xA8
-  with Z / alpha writes native while pure (16ed183; the old "neither" rule existed only because +0x98 was on the GS).
+  with Z / alpha writes native while pure (a1474b0; the old "neither" rule existed only because +0x98 was on the GS).
   Live (eve1030j, 25 s each, -NativeLate): sun pure at +0x88 1199/1200, halos native 1084/1088; fountain 202926
   102,566 late calls native, 343 GS; sand 115853 42,546 / 277; all three now end at the HUD (list 0x18 +0xB8, 0.14).
-  Pinch at the sand save: 3 calls, still on the GS (why-line added, d5bf53c).
+  Pinch at the sand save: 3 calls, still on the GS (why-line added, 671260d).
 
 ## Native sprites on the VU1 interpreter (24 Oct evening)
 
@@ -1277,7 +1277,7 @@ while the frame is pure after +0xA8): five GS sprites through `gifToBatch`: clea
 before it, mesh.frag bit 256 averages the copy's alpha over the core square, 8x8 samples), the halo (blend kind 6 + dest
 alpha), restore (image -4: the same copy read per pixel, no new copy). The copy covers only the spread's square
 (`Draw::copyRect`, from its vertices in `frame_loader`; review 30 Oct: ~30 full copies a frame in torch rooms otherwise); a
-halo whose texture index is not in the texture list stays on the GS. Live it asks only for a pure frame (22697b4,
+halo whose texture index is not in the texture list stays on the GS. Live it asks only for a pure frame (40782fe,
 review 30 Oct): `worldStateOk` judged the leftover +0xA8 sub-material, usually +0x98's glow mask, and refused nearly
 every halo. Halo geometry is sent with key 0 (`frameOnly`, see the water review). Nightly gate: the `vu1` lines of
 `tools/nightly/render_gate.txt` (162621, 145139 through `pop_state_frame_vu1 --noglow`). Shortcut: halos with ghosts stay on the GS (none

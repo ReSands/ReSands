@@ -113,7 +113,7 @@ the compiler check: `docs/roadmap.md` "2.0".
   declarations missing (`TFader` -> "implicit int"): ~6; "NEEDS HEADER CHANGE" written inside the code block (compiled
   as code, so the request was lost): seen in 182c80.
 
-- **Tweaks after run 3 (31 Oct, 6b5d617; `qwen_match.py --selftest`):** readable names in the prompt (the `@NNN`
+- **Tweaks after run 3 (31 Oct, 705c62c; `qwen_match.py --selftest`):** readable names in the prompt (the `@NNN`
   constants as their string literal, `__FILE__` for file names, pointer-to-member or plain compiler constants;
   `x$localstaticN$f` as the static local of `f`; static members and callees as `Class::name`, template arguments
   demangled; offsets kept); the `sndCList` template now reaches the header excerpt (`header_blocks` skipped

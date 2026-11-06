@@ -24,7 +24,7 @@ code, 60 fps; the native world `POP_NATIVE_WORLD` was **not** on). Filed 22 Oct;
   Native-vs-game scores of every save (`tools/native/score_saves.sh`): `game/analysis/play1020/native/` and
   `game/analysis/play1021/native/` (`scores.txt`; see the summary at the end).
 
-## Bug 1: camera X reversed in fixed-camera views (closed 1 Nov, 21ab2c7)
+## Bug 1: camera X reversed in fixed-camera views (closed 1 Nov, 035e5e7)
 User: the saves at 20:43 and 20:46 on 21 Oct (`play_20261021_204309`, `play_20261021_204628`) had the camera's X
 axis reversed again, probably because the game was showing a fixed camera angle. The 20:43 frame is a high,
 fixed view over a cliff ledge (`frames/play_20261021_204309.png`).
@@ -55,7 +55,7 @@ seen from high above; copy `game/analysis/saves1031/`):** +0x90 = 1, +0x94 / +0x
 candidate signal (zero = fixed camera) is refuted. Same session's `play_20261031_111155`: +0x90 = 0, again not known to be first
 person. So +0x90 / +0x94 are not the camera mode; the real fix is still to find the mode the game switches on.
 
-**Fix (1 Nov, 21ab2c7, override `updateCameraInvert`):** the mode is the camera's current zone type. Camera
+**Fix (1 Nov, 035e5e7, override `updateCameraInvert`):** the mode is the camera's current zone type. Camera
 object = world view 0's object (`*(*(*0x674840 + 0x30) + 0xA0)`, as `AI_EvalFunc_VIEWGetObject_C`); its data
 (+0x18 -> +0x4 -> +0x44) + 0x410 = current zone object; zone data + 0x1B4 = type (`FUN_002ebd00`; read by
 `Mdl00005261_fn_GetZoneBehavior`, and `Mdl0000263C_fnf_GetFreeCamSightOffset` acts only on type 4). Saves: 204309,
@@ -96,7 +96,7 @@ add an entry at every call's return address; then look for other functions split
 PS2 recomp projects first (rule). Related: the nightly check's missing target 0x16AA0C in RPS2::UpdateBuffer.
 
 **Seen again 24 Oct 20:24** (same log line, fight; save `play_20261024_202314.state` a minute before, full dump
-`game/analysis/crash1024/crash.dmp` on the PC). **Fix built 24 Oct (3b80b66), in-game check pending:** the override
+`game/analysis/crash1024/crash.dmp` on the PC). **Fix built 24 Oct (9d33d3c), in-game check pending:** the override
 registers FUN_00172840 at 0x172844 too (its first instruction, 0x172840, is the jal's delay slot, a nop, so running
 it from there is the resume). A scan of every function in `functions.csv` for a last instruction that is a call:
 this is the only one in the ELF. **25 Oct:** save 202314 fought for 300 s with R1 held (50-56 fps), no

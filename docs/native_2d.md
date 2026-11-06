@@ -94,7 +94,7 @@ kind 6 x2 and the logo as one kind-4 mesh in +0xB8; nothing new), 192103 loading
    `POP_NATIVE_WORLD_WHY=1` names what ended purity). **Boot 1 Nov** (`game\jobs\twod1101*.ps1`, 5 saves, native vs +2D,
    shots `game\recomp-sotc\shots1101*`): the frame stays pure through +0xB8 (enders list18 / rect / idx +0xb8 gone
    but 1 per 600 frames), no slot mismatch, fps unchanged, STR text right (tutorial, pause, save menu). Fixed the same
-   day (39f6c78): the queuing call of FUN_004B4580 (state 10) also draws (its GS sprite covered the native picture: save
+   day (b003184): the queuing call of FUN_004B4580 (state 10) also draws (its GS sprite covered the native picture: save
    menu at half brightness); natively it now queues the kind-11 entry itself and draws the rectangle. **Open:** (a) the
    HUD ring above the life bar has 4 gaps and the small ring under the sand tanks shows glyph-like garbage instead of a
    circle; (b) the save menu's 9-piece panel shows its overlaps (edges darker, corners lighter; GS: even). Both are

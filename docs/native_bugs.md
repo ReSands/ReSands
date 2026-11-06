@@ -8,7 +8,7 @@ hypothesis (marked as such), status.
 brightness and the save-point pop (late lists back on the GS; user in-motion checks 25 Oct), N5 (41 over-budget
 generation switches in the 25 Oct sessions, no black flash), N9 (user saw the door right). Parked until they recur
 (the user captures a save then): N3 stairs flash, N4 combat camera teleport. Watch in long sessions: N8 wall hue,
-N11 wall missing (fix 3664837). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
+N11 wall missing (fix 4bb7021). Still open from the list: N6 (heavier scene fps), N7 (dagger flash, probably original).
 
 **First: the renderer audit's five steps (user, 27 Oct; one at a time; findings `docs/renderer_audit.md`).**
 1. **Done 27 Oct (Mac, offline):** shader alpha test (audit 1 + 3) and the one-liners 4, 5, 7; item 2 reverted (see
@@ -107,11 +107,11 @@ it: fix now. Not in 1: park.
 **Done 29 Oct evening: every repeatable bug had its look (user on the TV, `play.ps1 -Mode ... -Save ...`).**
 1. **N13 / N14 / N16 flicker: fixed** (baths saves `game/analysis/saves1025e/` 162246, 162442, 162819, 163042; all
    four: seen in hybrid and native, not in gs). Two causes, each checked in game by the user:
-   (a) ae260d9 (162246, 162442, 162819): with translucents native, a blended draw of +0x68/+0x78/+0x4C went native
+   (a) c772d5e (162246, 162442, 162819): with translucents native, a blended draw of +0x68/+0x78/+0x4C went native
    even after an earlier draw had gone to the GS (instanced walls with a lightmap entry, +0x2C, are not native yet);
    the GS then drew those walls over the native corner-stone overlay (162246 draw 835), which showed per pixel as
    the camera moved. Found by switches (world only / + shadows: none; + translucents: flicker). Blended or Z-less
-   draws now need a pure frame, like the late lists. (b) f8daecb (163042, moss decal: draw 711, blend kind 1, no
+   draws now need a pure frame, like the late lists. (b) 00f2c15 (163042, moss decal: draw 711, blend kind 1, no
    depth write): whole patches dropped out for single frames, camera still. Our Z differs from VU1's by tens of
    units, so the decal's GEQUAL against its wall flipped; on the GS it passes. Draws without depth write move nearer
    by `POP_NATIVE_DECAL_ZBIAS` GS Z units (mesh.vert; 1 still flickered in motion, 32 gone, nothing showing
@@ -164,7 +164,7 @@ of (start, duration, factor) per object and pass the blended factor to FUN_001BE
 The tint is not found yet. A scripted boot (184926, long triangle at 7 s, `game/jobs/n1slow.ps1`) slowed nobody, so
 the input still needed is a quick-save taken by hand while an enemy is slowed (with its draw lists filled).
 
-**Found and fixed 25 Oct (957ae46 + follow-up; user saw the sandy enemy in a native save-state boot at 14:45).**
+**Found and fixed 25 Oct (6e0253c + follow-up; user saw the sandy enemy in a native save-state boot at 14:45).**
 User saves 134636 / 134815 (`game/analysis/saves1025c/`). The user noted the clock times the tint showed: only in the
 GS-only boots, never native (the screenshots had missed it: two frames per run, see `docs/lessons.md`). The slow is
 `FUN_00377E40` (from FUN_00271B00): time scale via FX_Freeze_Add plus an SFX modifier (FUN_00271440 sets its
@@ -176,7 +176,7 @@ op 0x16). Native decoded textures from the packs only, so it drew the disc palet
 when its flags have 0x40) differs from the pack's is decoded with the RAM palette each frame under key
 `kPaletteKey + texture index` (shadow key range: resent with pixels, updated in place). Log:
 `recoloured texture <key> ...`. Ruled out on the way: lighting / constant colour (native reads the game's constant
-colour correctly; a fix there, 8732934, was reverted), skinned pass 2 (none). First live try failed: the "no pack
+colour correctly; a fix there, 9bc678d, was reverted), skinned pass 2 (none). First live try failed: the "no pack
 palette" result was cached before the enemy's pack had loaded (packs load late after a state load), and per-frame
 keys changed meaning between frames. **Closed 25 Oct**: the user confirmed slowed enemies render properly from a cold boot.
 
@@ -247,7 +247,7 @@ camera cut. Capture key needed.
 Saves, captures and the session log (`play_20261024_195257.log`, in `game\recomp-sotc\` on the PC) copied to
 `game/analysis/saves1024e/`; `score/` = `tools/native/score_saves.sh` (offline native vs the game's picture, `.side.png`),
 `gv/`, `gv30/` = glitchview output, `sheets/` = 5x4 contact sheets of a capture (every 30th frame, ffmpeg tile).
-The session ran **before** the N5 fix (30ef5d5 was built at 20:45). Three groups:
+The session ran **before** the N5 fix (d2064f0 was built at 20:45). Three groups:
 
 **A. N8, N9, N11: the live path draws an element wrong that offline draws right (stale per-address caches, hypothesis).**
 - N8 (200833): offline has the back wall in shadow; live shows a flat bright panel behind the Prince.
@@ -263,7 +263,7 @@ fresh), but `g_fromPacket` ((element << 8) | pass: lightmap pass-3 batches, pack
 (lit passes), `g_skinned` and `g_skipped` are never invalidated. When a level section streams in and reuses the memory
 of an unloaded one, a new element gets its base mesh right but its lightmap / lit pass / pass-2 layer / skinned-or-
 skipped status from the old object at that address. Offline runs a fresh process per save, so it never sees this.
-All three bugs are in areas just entered. **Fix built 25 Oct (3664837):** `readElement` erases every per-address
+All three bugs are in areas just entered. **Fix built 25 Oct (4bb7021):** `readElement` erases every per-address
 cache entry for the element (g_skinned, g_skipped, g_fromPacket and g_litBatches for passes 0-7). The regression
 boots (184926 / 115837 / 115853 / 202314) are unchanged. Not covered: g_litBatches entries keyed by a
 CJMeshElementRef's address (refs are not created through ReadElement); if a lit instanced object shows the same
@@ -295,7 +295,7 @@ boundary that test depth (the +0x98 glow mask, the halos) test against native Z 
 or the GS's exact Z depending on which side drew the save point's parts, so the glow flips with the camera. The pop
 goes away for good when the passes after the late lists are native too (halos/glow, 0.13 / 0.2).
 Also seen: Esc did not quit the second session (killed with taskkill).
-**Decision (user, 25 Oct):** late lists back on the GS by default (`play.ps1 -NativeLate` opts in; 065fc09); revisit if
+**Decision (user, 25 Oct):** late lists back on the GS by default (`play.ps1 -NativeLate` opts in; 47356fe); revisit if
 0.13 (native halos/glow) does not fix it. Fps cost: none. Fight saves, R1 held, 45 s (`game/jobs/latefps.ps1`, 3
 samples each): 184926 49.7 (GS) vs 49.5 (native), 115837 53.7 vs 46.2, 115853 58.2 vs 56.3.
 
@@ -311,13 +311,13 @@ until the crash): 33-43 ms, the same reason throughout. N6's capture (200200): l
 (`purity ended by ref +0x2c`), 18-19 ms. Two costs:
 1. A shadow projector goes back to the GS when a receiver has no record: the log's `list entries without records`
    rises 6,559 -> 9,054 over the slow stretch (the enemies; known gaps: CJIdxMesh entries, blob receivers). Once the
-   shadow is on the GS, every later list (+0x88/+0x98/+0xA8, particles, sprites) is too. **Fixed 25 Oct (e5ba9a5):**
+   shadow is on the GS, every later list (+0x88/+0x98/+0xA8, particles, sprites) is too. **Fixed 25 Oct (34895a7):**
    the entries were pass-1 entries of an element with no pass-1 packet (they draw nothing); saves 115837/115853 now
    stay native to +0x98 in ~2,095 of 2,100 frames (`docs/native_renderer.md` "Entries without records"). In-game
    check (save-point glow with many enemies) pending.
 2. `spriteRecord` runs the P9 VU1 interpreter on every sprite draw **before** checking whether the frame can still
    be native: in the slow stretch `quads` rose by ~350-390k per log interval while `native` stayed at 45,316. The
-   interpreter work is thrown away and the GS runs the same draw again. **Fixed 25 Oct (3664837):** with
+   interpreter work is thrown away and the GS runs the same draw again. **Fixed 25 Oct (4bb7021):** with
    POP_NATIVE_WORLD on, spriteRecord returns to the GS before interpreting when the frame is no longer pure.
    (The "P9 not loaded yet ... draws 0" line in save 184926's boots only means that save has no sprites on screen;
    the other loaded saves run the P9 path.)
@@ -331,7 +331,7 @@ Kept meshes reached generation 11 (11 over-budget drops in 16 minutes). Cause un
 (a `-Profile` session, or a save-state boot once conversion after a load exists).
 
 **Not bugs of ours / not triaged:** 201751 = camera X in a fixed view (known, `docs/saves_1021.md`); 202314 =
-crash 1 (fix 3b80b66 built after this session). 201039 = curtain corridor, offline and live agree. 201244 / 201248 =
+crash 1 (fix 9d33d3c built after this session). 201039 = curtain corridor, offline and live agree. 201244 / 201248 =
 torches with halos (game picture only; the halos are not in the offline frame).
 
 ## Reported 24 Oct 20:08-20:24 (play session from 19:52, log `play_20261024_195257.log` in `game\recomp-sotc\`), triaged above
@@ -343,14 +343,14 @@ Saves on the PC in `game\ps2\disc\states\` (each with `.glitch` + `.glitch.txt`;
   source with N2 (fog) and the save-point glow (CLAUDE.md handoff item 4). Hypothesis: the GS halo/glow pass
   (FUN_004ABFC0) tests visibility against the depth buffer, which now partly comes from the native world.
 - **N11 wall features drawn but the wall itself missing (20:16, dungeon, save ~201642 / 201650).**
-- **Camera X inverted again in a fixed-camera view (20:18, save ~201751):** the known bug in `docs/saves_1021.md` (closed 1 Nov, 21ab2c7).
+- **Camera X inverted again in a fixed-camera view (20:18, save ~201751):** the known bug in `docs/saves_1021.md` (closed 1 Nov, 035e5e7).
 - **N12 frame rate down to 30 fps (20:21, save ~202014 / 202128).**
 - **Crash 20:24 (save 202314, the minute before):** crash 1 again; fix built (`docs/saves_1021.md`).
 The exact save-to-report mapping above is by time (user's minutes vs save names); check each picture.
 
 ## Reported 25 Oct 12:46-12:55 (play log `play_20261025_124621.log`; copies in `game/analysis/saves1025b/`)
 
-Session on the N12 fix build (e5ba9a5): ~60 fps, every shadow projector native (143,782 of 143,782).
+Session on the N12 fix build (34895a7): ~60 fps, every shadow projector native (143,782 of 143,782).
 - **125052: reference save, looking down into the bottom of a chasm** (user: for checking later that it renders right).
 - **125331 / 125417: save point missing on entering the room, then only its white cloud, the light column appearing
   gradually over the fight.** A/B from 125417 (`game\jobs\glowab.ps1`: the same save with all native switches on, and
@@ -449,7 +449,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     kHaloRestoreKey -4, "the frame copy"): check what each one sends.
   - **Static shots match (in-motion only):** N21 193240, N22 193355. N26's shots diverge (the shake is random).
   - **Post chain (`POP_NATIVE_POST=1`): glow native 0** on every save: in world mode the after-effect hooks were never
-    installed (only on the offline path). Fixed in a6feee4; rerun `game/jobs/post1030.ps1` (20:00): glow native 596 /
+    installed (only on the offline path). Fixed in 621f09e; rerun `game/jobs/post1030.ps1` (20:00): glow native 596 /
     600 (202926), 590 (115837), 596 (194005), 598 (193636), 112 (145139: purity ends in +0x88 there). Against GS-only:
     202926 7.36 -> 6.55, **194005 9.61 -> 6.66, 193636 7.63 -> 2.82**: N24 and N25 were the GS's glow over the native
     picture (a hybrid effect); with the native post chain the halos and the dagger glow match the GS. Draw +0.3-0.5 ms.
@@ -472,14 +472,14 @@ mapping is by time (the user's minutes vs save names); check each picture first.
     Glitch captures made while moving: `game/analysis/glitch1030/play_20261030_202309` / `_202313` (.glitch, .txt, .state;
     `_202313_all/` = all 600 frames via `glitchview.py --every 1`; mean of the circled spot at half size (82-122,
     180-215) moves smoothly 34.7 -> 30.9 -> 36.9 with the camera, nothing visible at half size yet). All frames pure.
-    **Fixed (31 Oct, 4a8c5bf; user in-motion check: "reflection is consistent as I move", two overlapping animations
+    **Fixed (31 Oct, 2b04087; user in-motion check: "reflection is consistent as I move", two overlapping animations
     as the original).** A/B first: `POP_NATIVE_NOUVM=1` (scroll frozen) had no hop, so the scroll was involved. Cause: the
     native "drawn this frame" key (element or ref << 16 | matrix index | pass bits) left out the entry's layer.
     CElementList::Render (cases 0x24-0x2B) picks the sub-material by the entry's layer byte (+0xC) and sets 0x70000034 per
     entry, so one element is drawn once per layer. Draw 418's element has two caustic layers (U+V scroll blend 0x600, V-only)
     and four caustic refs beside it have two each; only the first in the depth sort was kept, and that order changes as
     the Prince moves. Fix: `drawKeyBits` (was `alphaPassBit`) adds a 14-bit hash of 0x70000034 at bits 42-55. Offline
-    202313: 481 -> 488 draws (both layers), render gate unchanged (16 saves). The 724edd9 UV-sub hook stays (right by the code).
+    202313: 481 -> 488 draws (both layers), render gate unchanged (16 saves). The d33d091 UV-sub hook stays (right by the code).
 - **N20, 31 Oct (user looks + offline):** with the post chain on, the cyan column beside the Prince is gone and the
   window's shaft brightness is right. **Left: rays native only** (diagonal up the wall to the left, horizontal across the
   floor); `gs` mode shows only a much fainter general glow on the wall that pops in and out as the camera turns (**real-PS2
@@ -495,7 +495,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   0x200 clear). **Next:** a GS-only trace (`PS2X_GS_TRACE`) of 193136 to read the GS's test sprite, its Z buffer under the
   core and the alpha after halving, against ours (debug print of the halo's screen box: add back in `haloRecord` before
   `onScreen`).
-- **N20 + N21 fixed (31 Oct, fbf650f; user checks: 193136 "no rays up the wall, glow on the wall looks good", candle save
+- **N20 + N21 fixed (31 Oct, 6ad399e; user checks: 193136 "no rays up the wall, glow on the wall looks good", candle save
   `play_20261031_111155` (Mac copy `game/analysis/saves1031/`, first-person view at the wall candles) "identical to the GS
   render"; before: a near-white square over the candles).** Cause: the halo's restore read the copy the spread took, after
   the clear and the test had written alpha into the core square, so the core kept the test's alpha instead of the glow mask
@@ -511,29 +511,29 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   1. **The frame was hybrid there** (`purity ended by ref +0x88`, ~85 late draws on the GS each frame). Cause: texture
      600001ce (8x8, format 3, white) refused by `assets.cpp` texture8: it is sent at its own size (TRXREG 8x8), so it is
      linear PSMT8, not the PSMCT32 half-size swizzle the decoder assumed (refused for being under a 16x16 block). Fix
-     (e4cf885): TRXREG width == w -> linear; `jadetex.py` the same.
+     (472d4df): TRXREG width == w -> linear; `jadetex.py` the same.
      Live after: pure at +0x88 in 3,899 / 3,900 frames. **Flicker unchanged** (so the hybrid was not the cause).
   2. **The dark line is the lightmap pass + our decal depth bias.** Offline (draws 0-347 vs 0-460: material flags
      0x30284 = CLMElementList's lightmaps) the seams at the blocks' feet are lightmap darkening. Live switches:
      `POP_NATIVE_DECAL_ZBIAS=256`: no flicker with the camera, slight with the Prince; a slope-scaled bias
-     (added then reverted: 0346867 / 9a1505f) made it subtler; 256 + slope 2: no flicker but the seam "judders".
+     (added then reverted: 0f0ea6e / 3ea267a) made it subtler; 256 + slope 2: no flicker but the seam "judders".
      **Stills** (job `game/jobs/n18shots.ps1`, PC `game\recomp-sotc\shots1031\n18_{gs,native,nobias}_field-25262.png`):
      native with the default bias has a hard dark line along the big block's foot (y ~0.81 of the frame, left two
-     thirds) that GS has not; **native with ZBIAS=0 looks like GS.** Reading: the bias (f8daecb, 29 Oct, for the N16 moss
+     thirds) that GS has not; **native with ZBIAS=0 looks like GS.** Reading: the bias (00f2c15, 29 Oct, for the N16 moss
      decal) also moved the lightmaps nearer, so the part of a block's lightmap just under the ground showed through as a
      line, blinking with depth precision. N18 was first reported 30 Oct, the day after that change.
-  3. **Fix in place (2fdf0fa): no decal bias for lightmaps** (`native_renderer.cpp`, `mat->fogAlpha` = flags 0x30284).
+  3. **Fix in place (05dbfad): no decal bias for lightmaps** (`native_renderer.cpp`, `mat->fogAlpha` = flags 0x30284).
      Gate and blend test unchanged. **User check: still a faint flicker** (not described further; the session ended).
   4. **1 Nov (user at the TV, annotated `game/analysis/saves1101/n18_side_by_side_GS-left_NATIVE-right.png`):** the
      faint flicker is at the foot of the lower big block (two spots along it, the left more often), **only when the
      Prince moves, never with the camera.** That points at the shadow receivers (the Prince's projector follows him and
      looks straight down; receivers redraw the base's own triangles, GEQUAL, no Z write, so they still had the decal
-     bias). Fix 527fca4: no bias for `clampUv` materials (= receivers only). **GS shows the same flicker once in a while**
+     bias). Fix b78aa1f: no bias for `clampUv` materials (= receivers only). **GS shows the same flicker once in a while**
      (user saw one): the original has the same mechanism at the GS's rounding scale; the bias widened it. Real-PS2 check
      wanted for that one. The thin diagonal light line in the native still is not visible in play (user): dropped.
      A/B boots (user at the TV, same save, Prince running along the upper ledge): `-NoNativeShadows`: same rate as
      native (so the receivers were not the main cause); `POP_NATIVE_DECAL_ZBIAS=0`: about the same, perhaps a bit rarer.
-  5. **`invariant gl_Position` in `mesh.vert` (e51a848; blend test 0 wrong):** user: "maybe a LITTLE bit more than GS
+  5. **`invariant gl_Position` in `mesh.vert` (6891790; blend test 0 wrong):** user: "maybe a LITTLE bit more than GS
      but hard to tell". **Closed 1 Nov (native ~ GS at that spot).** Left for the real-PS2 check: whether the original
      flickers there too (our GS does, rarely). If it ever comes back: the decal bias (32) is the remaining suspect.
   **Next, with fresh eyes:** (a) ask what the faint flicker looks like now (the seam line, or something else at the same
@@ -546,7 +546,7 @@ mapping is by time (the user's minutes vs save names); check each picture first.
   bias 0 vs 32, since the remaining flicker may be a real decal there; (e) re-check N16's moss save 163042 is still
   clean (unchanged for decals, but confirm). Captures: `game/analysis/saves1031/`, offline scratch: rerun
   `pop_state_frame_vu1` + `POP_VIEW_LIST=1 pop_native_view` on the save.
-- **N19 (orange band on the wall at frieze height, 192645): closed 1 Nov (afa2244; user TV check: band and moss brightening gone).**
+- **N19 (orange band on the wall at frieze height, 192645): closed 1 Nov (6dcf65a; user TV check: band and moss brightening gone).**
   **Fix (1 Nov):** `refDisplayRecord` poses skinned refs like skinned elements: `poseSkinned(element, index)` (the ref Display
   decompile, 0x4C7B40, uses the element's palette at ref +0x20 -> +0x48 and the same first-bone table), records them in
   `g_framePosed`, replays the driver switch. Ref packets are REF tags (3 qw per instance at ref +0x10, then the element's
@@ -769,7 +769,7 @@ sand areas), MotionSmooth / FixBlend, then ZoomSmooth 0 (the Haste power; Spiral
 
 ## Native Pinch (30 Oct, offline; not yet live-checked)
 
-**Live (eve1030k, 30 Oct 18:42, `-NativeLate` build d5bf53c; read 31 Oct):** 115837 pinch 488 calls, **478 native**; 115853
+**Live (eve1030k, 30 Oct 18:42, `-NativeLate` build 671260d; read 31 Oct):** 115837 pinch 488 calls, **478 native**; 115853
 3 calls, 0 native, no why-line (the +0x74 / grid refusal never fired), all within the first stats window: the save's
 rewind ends right after the load, so its few calls fall in the first frames, before the frame is open / pure (115837's
 10 GS calls likely the same). So Pinch is native live; 115853 cannot test it. GS / native shots

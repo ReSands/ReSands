@@ -1,6 +1,6 @@
 # Native renderer audit (27 Oct 2026, review only)
 
-Baseline audit of the native renderer as it stood at edd6cb4. Read: `tools/native/src/native_renderer.{h,cpp}`,
+Baseline audit of the native renderer as it stood at 23d5945. Read: `tools/native/src/native_renderer.{h,cpp}`,
 the shaders, `frame_loader.cpp`, `tools/overrides/pop_native_world.cpp`, ~20% of `pop_native_live.cpp` (native/GS
 boundary, materials, palettes, vertex colours), texture decode in `assets.cpp`. Not read: `viewer.cpp`,
 `state_frame.cpp`, post-effect shaders (own judge), VU1 ports (own judges), mesh decoder, `pop_live_client.cpp`,
