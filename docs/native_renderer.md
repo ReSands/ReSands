@@ -86,8 +86,8 @@ Same principle as the graphics plan: checks run in the background during one nor
 leave a list of flagged moments. Judge sound from WAV files (`PS2X_AUDIO_DUMP`), never through
 Moonlight (it added its own pops).
 
-- **Render twice and compare** (changed 6 Nov, user: the reference is **PCSX2**, not our own glitchy IOP/SPU2
-  emulation; current plan `docs/native_sound.md`). Originally: the game's sound calls drive
+- **Render twice and compare** (changed 6 Nov, user: the reference is **PCSX2's SPU2 core built into our game**, not our
+  own glitchy SPU2 model; current plan `docs/native_sound.md`). Originally: the game's sound calls drive
   both it and the native mixer; both outputs are written to WAV and compared in blocks of about
   100 ms after alignment by cross-correlation (latency and interpolation differ). Compare levels and
   spectra per block with a tolerance, not exact samples. Flag blocks that disagree, with the sound

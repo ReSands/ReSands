@@ -17,10 +17,17 @@ GT4Recomp pacing in `docs/reference.md`; the 14 Oct stream bug history in `docs/
      its function names.
   2. POP1.ELF DWARF: DARE's EE structs, names, file split (`game/decomp/dare/dare.h`, `protos.tsv`).
   3. The prototype disc's `DARE_DG.IRX` (debug driver; not opened yet, may have asserts/logging).
-  4. **PCSX2 = the source of truth for how it should sound** (user, 6 Nov). Our own IOP/SPU2 emulation in the
-     recomp is glitchy and unreliable: never compare against it. It is only useful for logging the commands DARE
-     sends (the EE side is the same code either way). Same scene in both: an in-game save on the shared PCSX2
-     `.ps2` memory card (patch 49), loaded in PCSX2 and in ours.
+  4. **PCSX2's SPU2 core, built into our game as the reference sound backend** (user, 6 Nov; not the full
+     PCSX2 program). Our own SPU2 model in the recomp is glitchy and unreliable: never compare against it.
+     With PCSX2's SPU2 core (precedent: fukami, `docs/reference.md` "Sound") fed by the same run, the reference
+     and the native mixer hear the same commands at the same moment, so the outputs line up sample for sample.
+     **Gap:** the SPU2 core is only the bottom half. The IOP driver above it still runs in our IOP emulation (timers,
+     RPC scheduling, AutoDMA; patches 16, 17, 19), which may be part of why the current sound is glitchy. So
+     where the reference sounds wrong or the two disagree in a way that points at timing, settle it with the
+     full PCSX2 program on the same in-game save (the `.ps2` memory card is shared since patch 49): a tie-breaker
+     only, by hand.
+     **Licence:** PCSX2 is GPL-3.0. Fine in the personal build; keep it a separate, optional reference module so
+     the 0.7 public release can leave it out or ship under the GPL (decide then).
 
 ## The boundary (what native sound replaces)
 
@@ -53,24 +60,24 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
    keeps the IOP alive (not the 0.3 goal). Write the choice here.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
-5. **Reference recordings (needs a boot: ask first, TV on).**
-   - **Truth:** PCSX2 WAV recordings (its audio capture; check which option dumps the raw SPU2 output) of the same
-     scenes from in-game saves on the shared memory card: menus, music, voice-over, fights, water, sand powers, a
-     cutscene. Check PCSX2 is installed on the PC and its settings (interpolation, reverb on, no time-stretch).
-   - **Input:** our recomp logs every command and stream refill with timestamps on the same saves (our own
-     emulated audio from that run is not used). Becomes the offline test input for the mixer.
+5. **Swap PCSX2's SPU2 core into the runtime, then record (boots: ask first, TV on).** Replace our SPU2 model
+   behind the same register/DMA interface (SPU2 registers, core DMA, AutoDMA, the IRQ back to the IOP), with a
+   switch back to the old model for A/B. Then one run per save logs every command and stream refill with
+   timestamps beside the PCSX2-core WAV: menus, music, voice-over, fights, water, sand powers, a cutscene. The
+   logs are the offline input for the mixer, the WAVs its reference. First check: do the known bugs (step 8)
+   go away with the new core? If not, they are on the IOP/EE side.
 6. **Native mixer** (portable, SDL3 audio out): sample banks in our own memory (no SPU2 RAM model), PS2 ADPCM
    decode, ADSR, pitch, volume/pan, the stream input straight from RPS2's buffer, reverb from the libsd presets;
    GT4Recomp-style rate control (never block the game thread). Offline first: drive it from step 5's logs and
    compare with the WAVs.
-7. **In game, then compare against PCSX2** (`docs/native_renderer.md` "QA plan for sound"): the same save +
-   the same actions in PCSX2 and in ours, WAVs aligned by cross-correlation and compared in ~100 ms blocks with a
-   tolerance (runs are not frame-locked, so levels/spectra per block, not samples); glitch detectors on our output;
-   every sound alone against vgmstream and against PCSX2 overnight. Not against our current SPU2 emulation.
-8. **Known audio bugs, checked against PCSX2:** quiet/missing fight track, Prince-Farah in-engine dialogue out of
+7. **In game, both at once** (`docs/native_renderer.md` "QA plan for sound"): the same run drives the PCSX2
+   core and the native mixer; both write WAVs, compared in ~100 ms blocks (same run, so only a fixed latency to
+   align); glitch detectors on our output; every sound alone against vgmstream and the PCSX2 core overnight.
+   Disagreements that look like timing: check with the full PCSX2 program on the same in-game save.
+8. **Known audio bugs, checked against the PCSX2 core (and the full program if still there):** quiet/missing fight track, Prince-Farah in-engine dialogue out of
    sync, sound slows with the frame rate (`docs/history.md`), and crash 2 (only watched, emulated-sound related?)
    should go away with the IOP.
-9. **Close:** native sound on by default in `play.ps1` (switch back to the emulation kept as the reference), user
+9. **Close:** native sound on by default in `play.ps1` (the PCSX2-core path kept as the reference switch), user
    listening check on the TV (never over Moonlight).
 
 ## Open questions
@@ -79,7 +86,7 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
   voice status)?
 - How does sound timing follow the frame rate today (the "slows with the frame rate" bug), and should the native
   mixer run on its own clock?
-- Which PCSX2 settings make the reference closest to a real PS2 (interpolation mode, reverb, sync), and is PCSX2's
-  audio capture taken before or after its time-stretch?
-- How closely can a scene be repeated in both (input script vs by hand); is a per-sound comparison enough where
-  whole scenes drift?
+- How self-contained is PCSX2's SPU2 core (what it needs from PCSX2's IOP, DMA and timing code), and which
+  version to take? Read fukami's integration first.
+- Which PCSX2 SPU2 settings are closest to a real PS2 (interpolation mode, reverb)?
+- How much of today's glitchiness is our IOP emulation rather than our SPU2 model (step 5's first check)?
