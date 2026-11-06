@@ -56,7 +56,7 @@ Keep this short: finished work goes to the topic docs, replaced bullets to `docs
   N28 Retry fade, N30 enemy white vs sandy, N15/N17, single GS calls, parked hybrid bugs) are listed there.
   Meanwhile: 0.3 native sound (below).
 - **6 Nov: 0.3 native sound started; plan `docs/native_sound.md` (start at step 1, offline).** Decided: 0.3 does not
-  wait on the DARE byte-match (it keeps DARE's EE code as recompiled and replaces the IOP driver + SPU2 under it);
+  wait on the DARE byte-match (DARE's EE + IOP driver code run recompiled; libsd -> native mixer, IOP plumbing native, route A in step 3);
   no outside decomp helps. DARE decomp paused at 248/669 (run 13); its desktop shortcut stays for nights the user
   wants it.
 - **5 Nov:** 0.4 closed with FFmpeg (decoder native since 16 Oct; `docs/roadmap.md` 0.4). Working on 0.5's

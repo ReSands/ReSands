@@ -33,6 +33,30 @@ Flags (unbaked table): R=PS2Recomp O=own recompiler S=SotC fork G=PCSX2 GS L=par
 | moesuito/gt4-staticrecomp (GT4Recomp, MIT) | Gran Turismo 4, release 1.2.3, ps2-web-recomp base | pacing + audio rate control, crash-safe memory card, SDL3 pad, ultrawide, FPU oracle (23 Oct; `docs/reference.md` "GT4Recomp") |
 | matt-pulsipher/GT3-revisited (MIT) | Gran Turismo 3, clean-room **reimplementation** (not a recomp), SDL3, all platforms | for 0.4: own MPEG-2 + IPU intra decoder (`src/video/`, ~1.5k lines, ±2 vs FFmpeg `-idct int`, IEEE 1180 IDCT test), SPU2 reverb with libsd presets + 4-point Gaussian voice mixer + ADSR (`src/audio/`, `docs/behaviour/sound.md`); rules: behaviour in prose, disc tests skip without `GT3R_DISC` (1 Nov) |
 
+## 6 Nov survey (recomp.fyi + recomphaven.com)
+
+Both sites render their tables in the browser; fetch the raw data instead: `https://recomp.fyi/data/projects.json`
+(all systems, filter `system` contains `PS2`) and `https://recomphaven.com/data/recomps.js` (one JSON object per
+line, `"console": "ps2"`; parse as text, never run it). 228 PS2 entries, **182 not in our earlier surveys** (83
+decomps, 78 recomps, 17 native ports); list in `game/analysis/recompfyi/2026-11-06/ps2_new_since_oct.json`,
+READMEs of the ones read beside it. Still no Jade-engine or Ubisoft project: `psam09/prince-of-persia-ps2-recomp`
+is listed but the repo is gone (404). PS2Recomp is still the only common PS2 toolchain (ps2kit, "exoteric33's PS2
+Native Recomp tool" and ps-recomp appear once each).
+
+| Project | What | Notes |
+|---|---|---|
+| **thebozos/vp2s_recomp** (no licence: read only) + TheBozos/PS2Recomp `native/gs-backend` (GPL-3.0) | Valkyrie Profile 2; same team: Twisted Metal Black (released), Dark Cloud, Third Age, SC III, Jade Cocoon 2 | closest to our plan: **no GS, VU1, VIF1 or SPU2 by default** (`VP2S_GS=1` for comparison), IOP modules recompiled to C++, native renderer from the game's model records, **native libsd + mixer** (`native_libsd.cpp`, `native_mixer.cpp`; see `docs/native_sound.md` step 2), PCSX2 as the visual/audio reference, streamed-music VU decoder compiled offline and checked bit-exact (`docs/vp2_music.md`) |
+| henrykun55/celosia (GPL-3.0) | Shadow of the Colossus, PS2Recomp, Metal / GLES (Vita) | all 49 tracked render features native, SPU2 reimplemented as host code, PCSX2-compatible `Mcd001.ps2`; progress page henrykun55.github.io/celosia; `SOTC_NATIVE=2` draws native unseen for side-by-side |
+| jjmhalew/rampagere (GPL-3.0) | Rampage: Total Destruction | recomp as reference, reverse-engineered native code replaces it part by part (our migrate-part-by-part route); `docs/NATIVE.md` |
+| davvidmac/ps2recomp-devilkings (GPL-3.0) | PS2Recomp + Devil Kings runtime fixes | VU1 rec tool, VIF1 thread, paraLLEl-GS Vulkan option, SNR2 relocatable modules, `ps2xRuntime/DIAGNOSTICS.md` |
+| bigdaddyjrich/hctp-recomp (GPL-3.0) | WWE HCTP, on Def Jam Vendetta's runtime | native D3D11 GS renderer, native libsdr hookup, `audio_check.py`, autotest with screenshots + audio dump |
+| jcsix694/def-jam-vendetta-recomp (GPL-3.0) | Def Jam Vendetta, playable | settings app builds from disc; `VENDETTA_SPU_INTERP` (Gaussian vs linear) |
+| presidentraptor/ace-combat-04-pc-port | AC04, from the AC5 recomp | native AC4 sound services (`runtime/src/ps2_hle_ac4.c`), stale IOP staging reads fixed a startup audio spike; `docs/audio-and-rendering.md` |
+| leandrossb/moh-vanguard-recomp (GPL-3.0) | MoH Vanguard | RAM A/B against PCSX2 at the same logical point (`abdiff`); PS2Recomp PRs #400-404 (LQ/SQ alignment, cdvdfsv HLE) |
+| plaught-armor/berserk-recomp (GPL-3.0) | Berserk, Odin port | HLE of the game's own IOP sound module; effect mix not applied |
+| z3xox/tenkaichi3decomp (AGPL-3.0) | BT3 on a matching decomp | own Vulkan/GL renderer keeping the PS2 effects, 60-240 fps smoothing |
+| tekrantgaming/cartoon-network-racing-recompiled (GPL-3.0) | CN Racing | PCSX2 GS/SPU2/VU via KillzoneRecomp's fork; launcher |
+
 ## From the surveys
 
 | Game / title | Repo (owner/repo) | Flags | Source |

@@ -8,7 +8,7 @@ GT4Recomp pacing in `docs/reference.md`; the 14 Oct stream bug history in `docs/
 ## Decisions (6 Nov)
 
 - **Not waiting on the DARE byte-matching decomp.** 0.3 keeps DARE's EE code exactly as it runs recompiled
-  today and replaces what sits under it (the IOP driver and SPU2). A byte match would give cleaner source for the
+  today and replaces what sits under it (the IOP emulation and SPU2; route chosen in step 3). A byte match would give cleaner source for the
   EE functions that send commands, but no new knowledge: Ghidra + POP1.ELF's DWARF already show what they send.
   The DARE desktop shortcut stays for nights the user wants it (`docs/decomp_dare.md`); nothing here depends on it.
 - **No outside decomp helps** (searched 6 Nov: no public DARE / UbiSound / Ubisoft PS2 decomp; the only Jade
@@ -55,9 +55,38 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
    (its `docs/` sound pages; `docs/reference.md` recomp.fyi entry), OpenGOAL's ISC, GT3-revisited's
    `spu_reverb.cpp` / `voice_mixer.cpp` (MIT; the 10 libsd reverb presets, Gaussian interpolation, ADSR),
    GT4Recomp pacing. Note what to take.
-3. **Choose the cut point** (after 1-2): most likely the EE side, by overriding the RPC call per command and the
-   RPS2 SIF DMA / `sceSdRemote` calls, so the IOP and SPU2 can be switched off; or at the IOP RPC server, which
-   keeps the IOP alive (not the 0.3 goal). Write the choice here.
+   **Added by the 6 Nov survey (`docs/ps2_projects.md` "6 Nov survey"); read these first:** TheBozos/PS2Recomp
+   branch `native/gs-backend` (GPL-3.0, same licence as our base): `ps2xIOP/src/native_audio/native_libsd.cpp`
+   (555 lines) + `native_mixer.cpp/.h` (786 + 193 lines), libsd taken over at its API (`PS2X_NATIVE_AUDIO=1`):
+   48 voices, PS2 ADPCM, ADSR, pitch, 4-tap interpolation, libsd reverb presets 0-9 at 24 kHz in sound memory,
+   `sceSdBlockTrans` PCM input with half callbacks, MMIX routing, movie PCM pushed straight in; no noise or pitch
+   modulation. Used by Valkyrie Profile 2 (thebozos/vp2s_recomp: no GS/VU1/SPU2 by default, IOP modules recompiled
+   to C++; README has no licence: read only). This is a **third cut point** for step 3: keep `ubisound.irx` (DARE's
+   IOP driver) recompiled and swap only libsd under it, so the driver's own logic (voice allocation, RPC) needs no
+   rewrite. Chosen as the route (step 3). Copies of
+   the three files: `game/analysis/recompfyi/2026-11-06/`. Also: plaught-armor/berserk-recomp (own HLE of a game's
+   IOP sound module, Odin; effect mix not applied), bigdaddyjrich/hctp-recomp `tools/audio_check.py` (stereo
+   offset / click analysis, idea for step 7's glitch detectors).
+3. **Cut point: chosen 6 Nov (user): route A, recompiled IOP driver on native plumbing.** "No emulation" means
+   the same for the IOP as for the EE: the game's code runs, recompiled; nothing under it is simulated.
+   - **Recompile** the sound modules (`UbiSound_Driver`, `sdr_driver`; the others too if cheap) from R3000 to
+     C++ ahead of time, like the EE (precedents: VP2S's ten IOP modules, Waffle565 GoW's 8, black-recomp). No
+     R3000 interpreter on the sound path.
+   - **libsd** is replaced at its API by the native mixer (start from TheBozos `native_libsd.cpp` /
+     `native_mixer.cpp`, GPL-3.0; see step 2). No SPU2 registers, DMA or chip timing.
+   - **The plumbing, rewritten native** (user: this is where today's bugs live, patches 16/17/19): the IOP kernel
+     services the modules import (threads, semaphores, event flags, alarms/timers, memory, interrupts) as host
+     code on host threads, timers on the PC clock instead of counted IOP cycles; SIF RPC as a direct queue
+     between the EE caller and the driver's server thread (no simulated SIF DMA); `sceSdBlockTrans` play
+     position from the mixer's real output position. First job (offline): list every import of those modules
+     and how the driver's update thread is woken (history: "an IOP hardware timer"; if it programs timer
+     registers directly, that gets a native stand-in too).
+   - **Accuracy:** the driver's behaviour is the game's own code, so the open questions are only the mixer
+     (checked against PCSX2's SPU2 core, steps 5-7) and timing (the native plumbing must deliver wake-ups and
+     buffer refills at the console's rate, checked by the same WAV comparison).
+   - Fallback if the plumbing can't be made right: route B, the EE-side cut (override each UbiSound RPC command
+     and the RPS2 / `sceSdRemote` calls; driver logic rewritten from `ubisound.irx`).
+   Step 1 still matters: the command table tells us what each refill and wake-up should look like when checking.
 4. **Sound in save-state boots** (save-state boots have no sound today): needed to work from saves offline.
    Check what a load skips (module load, bank upload, RPC bind) and replay it.
 5. **Swap PCSX2's SPU2 core into the runtime, then record (boots: ask first, TV on).** Replace our SPU2 model
