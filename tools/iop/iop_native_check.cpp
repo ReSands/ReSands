@@ -4,18 +4,21 @@
 // all of IOP RAM, the IOP clock and every thread's state. Exit 0 = identical.
 //
 //   iop_native_check <SLUS_207.43> [EE seconds, default 2]
-//   iop_native_check <SLUS_207.43> --sound <out dir>   the SPU2 path (real libsd + emulated SPU2) against
-//       PS2X_NATIVE_AUDIO=1 (native libsd + mixer), driven the EE's way (sceSdRemote = sdrdrv RPC 0x80000701): a
-//       looping ADPCM voice on core 0 (all 5 filters) keyed on and off, and a PCM block input; writes spu2.wav and
-//       native.wav and compares level, timing and shape. Our SPU2 emulation is not ground truth: a difference
-//       points at one of the two, the WAVs (and the real PS2) decide.
+//   iop_native_check <SLUS_207.43> --sound <out dir>   PS2X_NATIVE_AUDIO=1 (native libsd + mixer) against the
+//       reference, the real libsd on PCSX2's SPU2 core (tools/iop/pcsx2_ref), driven the EE's way (sceSdRemote =
+//       sdrdrv RPC 0x80000701); the runtime's own emulated SPU2 is printed beside for information. A
+//       looping ADPCM voice on core 0 (all 5 filters) keyed on and off, a PCM block input, a voice with exponential
+//       envelope and a volume sweep, and UbiSound's reverb set-up (hall, echo, echo with effects switched off at the key off); writes pcsx2.wav, native.wav
+//       and emulated.wav; passes when native matches PCSX2 in shape (correlation >= 0.999) and level (2 %) per
+//       section. PCSX2 is the reference short of the real PS2 (docs/native_sound.md 8b).
 //   iop_native_check <SLUS_207.43> --clock     PS2X_IOP_CLOCK=host: 1 s of wall time fed with EE cycles at the wrong
 //       rate must still move the IOP clock by 1 s (within 2 %), a 0.5 s stall must be skipped, not replayed, and
 //       after 5000 fast inline RPCs (run ahead) the IOP must keep real time, not wait for the PC to catch up.
 //
-// Build (ps2xIOP from the pop-sotc tree with patch 51; <gen> = the generated *_iop.cpp, game material, not in git):
-//   c++ -std=c++20 -O2 -I<sotc>/ps2xIOP/include -I<sotc>/ps2xIOP/src tools/iop/iop_native_check.cpp <gen>/*.cpp
-//       <build>/libps2_iop.a -o game/native-build/iop_native_check
+// Build (ps2xIOP from the pop-sotc tree with patches 51-54; <gen> = the generated *_iop.cpp, game material, not in
+// git; PCSX2's SPU2: python3 tools/iop/pcsx2_ref/build.py --iop-include <sotc>/ps2xIOP/include):
+//   c++ -std=c++20 -O2 -I<sotc>/ps2xIOP/include -I<sotc>/ps2xIOP/src -Itools/iop tools/iop/iop_native_check.cpp
+//       <gen>/*.cpp <build>/libps2_iop.a game/native-build/pcsx2_ref/libpcsx2_spu2.a -o game/native-build/iop_native_check
 #include "emulator/iop_emulator.h"
 #include "ps2x/iop/iop_host.h"
 
@@ -24,6 +27,8 @@
 #include <tuple>
 #include <cstdio>
 #include <filesystem>
+#include "pcsx2_ref/pcsx2_spu2_backend.h"
+#include <map>
 #include <thread>
 #include <cstdlib>
 #include <cstring>
@@ -261,13 +266,28 @@ namespace
     }
 
     // sceSdRemote as the EE makes it: sdrdrv's command number is the RPC function, arguments at +4, +8, ...
-    std::vector<int16_t> soundRun(const std::vector<uint8_t> &elf, bool nativeAudio)
+    struct SoundRun
     {
+        std::vector<int16_t> audio;                    // 48 kHz stereo
+        std::vector<std::tuple<std::string, size_t, size_t>> sections; // name, first and end frame
+    };
+
+    // PCSX2: the real libsd on PCSX2's SPU2 core (the reference); Native: PS2X_NATIVE_AUDIO=1; Emulated: the real
+    // libsd on the runtime's own SPU2 model (what playtests used so far; for information only).
+    enum class Path { Pcsx2, Native, Emulated };
+
+    SoundRun soundRun(const std::vector<uint8_t> &elf, Path path)
+    {
+        SoundRun run;
+        const bool nativeAudio = path == Path::Native;
         setenv("PS2X_NATIVE_AUDIO", nativeAudio ? "1" : "0", 1);
         ElfHost host(elf);
         IopEmulator iop(host);
+        const std::unique_ptr<ps2x::iop::Spu2Backend> pcsx2 = path == Path::Pcsx2 ? pop::makePcsx2Spu2Backend() : nullptr;
+        iop.setSpu2Backend(pcsx2.get());
         Result result;
-        loadSoundModules(iop, result, nativeAudio ? "native" : "spu2");
+        const char *label = path == Path::Pcsx2 ? "pcsx2" : nativeAudio ? "native" : "emulated";
+        loadSoundModules(iop, result, label);
         auto runFor = [&](double seconds)
         {
             for (uint64_t done = 0, cycles = uint64_t(seconds * 294912000.0); done < cycles; done += 294912u)
@@ -293,7 +313,12 @@ namespace
             return reply;
         };
         enum : uint32_t { kInit = 0x8000, kSetParam = 0x8010, kSetSwitch = 0x8030, kSetAddr = 0x8050, kSetCoreAttr = 0x8070,
-                          kVoiceTrans = 0x80d0, kBlockTrans = 0x80e0, kVoiceTransStatus = 0x80f0 };
+                          kVoiceTrans = 0x80d0, kBlockTrans = 0x80e0, kVoiceTransStatus = 0x80f0, kSetEffectAttr = 0x8130,
+                          kClearEffectWorkArea = 0x8150 };
+        // Output frame n is IOP cycle n * 768 on both paths.
+        size_t sectionStart = 0;
+        auto begin = [&] { sectionStart = size_t(iop.cycles() / 768u); };
+        auto end = [&](const char *name) { run.sections.emplace_back(name, sectionStart, size_t(iop.cycles() / 768u)); };
         sd(kInit, {0u});
         runFor(0.05);
 
@@ -317,7 +342,7 @@ namespace
         const uint32_t sent = sd(kVoiceTrans, {0u, 0u, iopSample, kSpuSample, uint32_t(adpcm.size())});
         runFor(0.02);
         const uint32_t status = sd(kVoiceTransStatus, {0u, 1u});
-        std::printf("  %s: VoiceTrans %#x status %#x\n", nativeAudio ? "native" : "spu2", sent, status);
+        std::printf("  %s: VoiceTrans %#x status %#x\n", label, sent, status);
 
         // Core 0: master and voice volumes, voice 0 to the dry output, the sample at a fifth above its rate.
         for (uint32_t core = 0; core < 2u; ++core)
@@ -333,10 +358,12 @@ namespace
         sd(kSetParam, {0x0300u, 0x0A8Fu}); // ADSR1: attack linear rate 10, decay 8, sustain level 15
         sd(kSetParam, {0x0400u, 0x4C4Bu}); // ADSR2: sustain decreasing, rate 0x31; release linear rate 11
         sd(kSetAddr, {0x2040u, kSpuSample}); // SSA voice 0
+        begin();
         sd(kSetSwitch, {0x1500u, 1u}); // KON
         runFor(0.4);
         sd(kSetSwitch, {0x1600u, 1u}); // KOFF
         runFor(0.2);
+        end("voice");
 
         // A streamed input on core 0 (as DARE's stream): a looping 2-half PCM buffer, 1 kHz square, left only.
         std::vector<int16_t> pcm(2u * 2u * 512u, 0);
@@ -347,11 +374,70 @@ namespace
         (void)iop.writeMemory(iopStream, pcm.data(), pcm.size() * 2u);
         sd(kSetParam, {0x0F80u, 0x7FFFu}); // BVOLL core 0
         sd(kSetParam, {0x1080u, 0x7FFFu}); // BVOLR
+        begin();
         sd(kBlockTrans, {0u, 0x10u, iopStream, uint32_t(pcm.size() * 2u)});
         runFor(0.2);
+        end("stream"); // before the stop: the SPU2 path plays its queued input on (32 samples), native stops at once
         sd(kBlockTrans, {0u, 2u, 0u, 0u});
         runFor(0.05);
-        return std::move(host.audio);
+
+        // Envelope and volume modes the banks can use: voice 1, exponential attack / sustain / release, the left
+        // volume a linear sweep up, the right a fixed level.
+        sd(kSetSwitch, {0x1800u, 2u});
+        sd(kSetSwitch, {0x1A00u, 2u});
+        sd(kSetParam, {0x0002u, 0x8050u}); // VOLL voice 1: sweep, linear increase, rate 0x50
+        sd(kSetParam, {0x0102u, 0x3000u}); // VOLR
+        sd(kSetParam, {0x0202u, 0x1000u}); // PITCH
+        sd(kSetParam, {0x0302u, 0x8C8Bu}); // ADSR1: attack exponential rate 12, decay 8, sustain level 11
+        sd(kSetParam, {0x0402u, 0xCC6Bu}); // ADSR2: sustain exponential decreasing rate 0x31; release exponential 11
+        sd(kSetAddr, {0x2042u, kSpuSample});
+        begin();
+        sd(kSetSwitch, {0x1500u, 2u});
+        runFor(0.4);
+        sd(kSetSwitch, {0x1600u, 2u});
+        runFor(0.3);
+        end("envelope");
+
+        // Reverb as UbiSound sets it (SND_fn_vPostInitEngineConfSfx, SPUDMAManager_Update, SND_fn_vSetEffectSfx):
+        // core 0, effect end 0x1fffff, effect on, the work area cleared, the mode with its depths. Voice 2 goes to
+        // the effect only (no dry), so the output is the reverb's return: during the note and its tail.
+        sd(kSetSwitch, {0x1800u, 0u});
+        sd(kSetSwitch, {0x1A00u, 0u});
+        sd(kSetSwitch, {0x1900u, 4u}); // VMIXEL core 0: voice 2
+        sd(kSetSwitch, {0x1B00u, 4u}); // VMIXER
+        sd(kSetAddr, {0x1D00u, 0x1FFFFFu}); // EEA core 0
+        sd(kSetCoreAttr, {2u, 1u});         // effect enable core 0
+        sd(kSetParam, {0x0004u, 0x3FFFu});
+        sd(kSetParam, {0x0104u, 0x3FFFu});
+        sd(kSetParam, {0x0204u, 0x0C00u});
+        sd(kSetParam, {0x0304u, 0x0A8Fu});
+        sd(kSetParam, {0x0404u, 0x1FCBu}); // sustain held, release linear 11
+        sd(kSetAddr, {0x2044u, kSpuSample});
+        // sceSdSetEffectAttr reads its attribute from the RPC buffer: {core, mode, depth L | depth R << 16, delay,
+        // feedback} at +0, +4, +8, +C, +10 (the helper fills from +4).
+        // effectsOff: switched off at the key off; the reverb keeps running and sounding, but writes nothing back.
+        auto effect = [&](const char *name, uint32_t mode, uint32_t delay, uint32_t feedback, bool effectsOff = false)
+        {
+            sd(kClearEffectWorkArea, {0u, 1u, mode});
+            runFor(0.05);
+            sd(kSetEffectAttr | 0u, {mode, 0x3FFFu | (0x3FFFu << 16), delay, feedback});
+            runFor(0.02);
+            begin();
+            sd(kSetSwitch, {0x1500u, 4u});
+            runFor(0.15);
+            sd(kSetSwitch, {0x1600u, 4u});
+            if (effectsOff)
+                sd(kSetCoreAttr, {2u, 0u});
+            runFor(0.8);
+            end(name);
+            if (effectsOff)
+                sd(kSetCoreAttr, {2u, 1u});
+        };
+        effect("reverb hall", 5u, 0u, 0u);
+        effect("reverb echo", 7u, 0x40u, 0x40u);
+        effect("effects off", 7u, 0x40u, 0x40u, true);
+        run.audio = std::move(host.audio);
+        return run;
     }
 
     void writeWav(const std::string &path, const std::vector<int16_t> &stereo)
@@ -365,60 +451,63 @@ namespace
         out.write(reinterpret_cast<const char *>(stereo.data()), bytes);
     }
 
-    // Level and timing per 10 ms window, then the correlation of the two outputs.
+    // Native against PCSX2 per section: level per 100 ms, then the best correlation of both channels over +-8
+    // frames and the RMS ratio; pass: same shape (>= 0.999) and level (within 2 %). The emulated SPU2 is printed
+    // beside them for information (it has no reverb or volume sweep).
     int soundCheck(const std::vector<uint8_t> &elf, const std::string &outDir)
     {
-        const std::vector<int16_t> spu2 = soundRun(elf, false), native = soundRun(elf, true);
+        const SoundRun refRun = soundRun(elf, Path::Pcsx2), nativeRun = soundRun(elf, Path::Native),
+                       emuRun = soundRun(elf, Path::Emulated);
+        const std::vector<int16_t> &ref = refRun.audio, &native = nativeRun.audio, &emu = emuRun.audio;
         std::filesystem::create_directories(outDir);
-        writeWav(outDir + "/spu2.wav", spu2);
+        writeWav(outDir + "/pcsx2.wav", ref);
         writeWav(outDir + "/native.wav", native);
-        const size_t frames = std::min(spu2.size(), native.size()) / 2u;
-        std::printf("frames: spu2 %zu native %zu\n", spu2.size() / 2u, native.size() / 2u);
-        auto firstSound = [](const std::vector<int16_t> &a)
+        writeWav(outDir + "/emulated.wav", emu);
+        const size_t frames = std::min({ref.size(), native.size(), emu.size()}) / 2u;
+        std::printf("frames: pcsx2 %zu native %zu emulated %zu\n", ref.size() / 2u, native.size() / 2u, emu.size() / 2u);
+        auto rms = [&](const std::vector<int16_t> &a, size_t from, size_t to, int channel)
         {
-            for (size_t i = 0; i < a.size(); ++i)
-                if (std::abs(a[i]) > 64)
-                    return double(i / 2u) / 48000.0;
-            return -1.0;
+            double sum = 0;
+            for (size_t i = from; i < to; ++i)
+                sum += double(a[i * 2u + channel]) * a[i * 2u + channel];
+            return to > from ? std::sqrt(sum / double(to - from)) : 0.0;
         };
-        std::printf("first sound: spu2 %.4f s native %.4f s\n", firstSound(spu2), firstSound(native));
-        std::printf("window(10ms)  spu2 L/R rms      native L/R rms\n");
-        for (size_t w = 0; w + 480u <= frames; w += 480u * 4u)
+        std::printf("window(10ms)  pcsx2 L/R      native L/R     emulated L/R\n");
+        for (size_t w = 0; w + 480u <= frames; w += 4800u)
+            std::printf("%6.2f s   %6.0f %6.0f   %6.0f %6.0f   %6.0f %6.0f\n", double(w) / 48000.0, rms(ref, w, w + 480u, 0),
+                        rms(ref, w, w + 480u, 1), rms(native, w, w + 480u, 0), rms(native, w, w + 480u, 1),
+                        rms(emu, w, w + 480u, 0), rms(emu, w, w + 480u, 1));
+        bool ok = !refRun.sections.empty() && refRun.sections == nativeRun.sections;
+        auto compare = [&](const std::vector<int16_t> &a, const std::vector<int16_t> &b, size_t first, size_t last)
         {
-            double r[4] = {};
-            for (size_t i = w; i < w + 480u; ++i)
-                for (int c = 0; c < 2; ++c)
-                {
-                    r[c] += double(spu2[i * 2u + c]) * spu2[i * 2u + c];
-                    r[2 + c] += double(native[i * 2u + c]) * native[i * 2u + c];
-                }
-            std::printf("%6.2f s   %7.0f %7.0f    %7.0f %7.0f\n", double(w) / 48000.0, std::sqrt(r[0] / 480), std::sqrt(r[1] / 480),
-                        std::sqrt(r[2] / 480), std::sqrt(r[3] / 480));
-        }
-        // Per section (voice 0.1-0.3 s, stream 0.71-0.88 s): best correlation of the left channels over +-8 samples,
-        // and the RMS ratio. Pass: same shape (>= 0.999) and level (within 2 %).
-        bool ok = frames > 0.9 * 48000;
-        for (const auto &[name, t0, t1] : {std::tuple{"voice", 0.1, 0.3}, std::tuple{"stream", 0.71, 0.88}})
-        {
-            const size_t i0 = size_t(t0 * 48000), i1 = std::min(size_t(t1 * 48000), frames - 8u);
+            const size_t i0 = first + 8u, i1 = std::min(last, frames - 8u);
             double best = -1.0, ratio = 0.0;
             int bestLag = 0;
             for (int lag = -8; lag <= 8; ++lag)
             {
                 double xy = 0, xx = 0, yy = 0;
                 for (size_t i = i0; i < i1; ++i)
-                {
-                    const double x = spu2[i * 2u], y = native[(i + lag) * 2u];
-                    xy += x * y, xx += x * x, yy += y * y;
-                }
+                    for (size_t c = 0; c < 2u; ++c)
+                    {
+                        const double x = a[i * 2u + c], y = b[(i + lag) * 2u + c];
+                        xy += x * y, xx += x * x, yy += y * y;
+                    }
                 const double c = xx > 0 && yy > 0 ? xy / std::sqrt(xx * yy) : 0.0;
                 if (c > best)
                     best = c, bestLag = lag, ratio = xx > 0 ? std::sqrt(yy / xx) : 0.0;
             }
-            std::printf("%s: correlation %.5f at lag %d samples, native/spu2 level %.4f\n", name, best, bestLag, ratio);
-            ok &= best >= 0.999 && ratio > 0.98 && ratio < 1.02;
+            return std::tuple{best, bestLag, ratio};
+        };
+        for (const auto &[name, first, last] : refRun.sections)
+        {
+            const auto [c, lag, ratio] = compare(ref, native, first, last);
+            const auto [ce, lage, ratioe] = compare(ref, emu, first, last);
+            const bool sectionOk = c >= 0.999 && ratio > 0.98 && ratio < 1.02;
+            std::printf("%-12s %.2f-%.2f s: native %.5f lag %d level %.4f %s | emulated %.5f lag %d level %.4f\n",
+                        name.c_str(), first / 48000.0, last / 48000.0, c, lag, ratio, sectionOk ? "ok" : "DIFFERS", ce, lage, ratioe);
+            ok &= sectionOk;
         }
-        std::printf("%s\n", ok ? "sound ok" : "SOUND DIFFERS");
+        std::printf("%s\n", ok ? "sound ok (native matches PCSX2)" : "SOUND DIFFERS (native vs PCSX2)");
         return ok ? 0 : 5;
     }
 }

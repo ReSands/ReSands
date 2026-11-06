@@ -1,0 +1,635 @@
+From 773fc30d966d326c7902fa2997bcc9797d5ff092 Mon Sep 17 00:00:00 2001
+From: Jon <resands@proton.me>
+Date: Fri, 6 Nov 2026 13:49:11 +0000
+Subject: [PATCH] iop: native mixer follows PCSX2's SPU2; SPU2 backend hook for
+ a reference SPU2
+
+Checked offline against PCSX2's SPU2 core driven by the real libsd (PoP tools/iop/pcsx2_ref):
+- envelope and volume sweep: PCSX2 V_ADSR::Calculate / V_VolumeSlide::Update (phase, counter minimum);
+  a voice whose sustain reaches 0 stops
+- reverb: one side per output sample, position and side from the global sample count (kept across mode
+  changes), PCSX2's 39-tap down/up resampling; with effects off it still runs and sounds, writing nothing back
+- EVOL is a plain volume (was swept and doubled: reverb 2x too loud)
+- a started input is heard from the next 256-sample half of the input ring (hardware latency)
+
+Spu2Backend (ps2x/iop/spu2_backend.h, IopEmulator::setSpu2Backend): every SPU2 register access, DMA and time
+step goes to another SPU2 instead of the emulated one. admaWrite takes the IOP cycle.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012y1nSeB5ALWKBgL9yiuaYc
+---
+ ps2xIOP/include/ps2x/iop/spu2_backend.h       |  32 +++
+ ps2xIOP/src/emulator/core/iop_memory.cpp      |   2 +-
+ .../src/emulator/devices/iop_native_mixer.cpp | 185 ++++++++++--------
+ .../src/emulator/devices/iop_native_mixer.h   |  17 +-
+ ps2xIOP/src/emulator/devices/iop_spu2.cpp     |  25 ++-
+ ps2xIOP/src/emulator/devices/iop_spu2.h       |   6 +-
+ ps2xIOP/src/emulator/iop_emulator.cpp         |   7 +
+ ps2xIOP/src/emulator/iop_emulator.h           |   7 +
+ 8 files changed, 195 insertions(+), 86 deletions(-)
+ create mode 100644 ps2xIOP/include/ps2x/iop/spu2_backend.h
+
+diff --git a/ps2xIOP/include/ps2x/iop/spu2_backend.h b/ps2xIOP/include/ps2x/iop/spu2_backend.h
+new file mode 100644
+index 0000000..eda8044
+--- /dev/null
++++ b/ps2xIOP/include/ps2x/iop/spu2_backend.h
+@@ -0,0 +1,32 @@
++#pragma once
++// Another SPU2 behind the IOP's SPU2 registers and DMA (IopEmulator::setSpu2Backend): every register access, DMA and
++// time step the emulated SPU2 gets goes to it instead, and its output is the IOP's sound. pop-sotc uses it for
++// PCSX2's SPU2 core as the reference (PoP tools/iop/pcsx2_ref). Not in save states.
++
++#include <cstddef>
++#include <cstdint>
++#include <functional>
++#include <span>
++
++namespace ps2x::iop
++{
++    class Spu2Backend
++    {
++    public:
++        using AudioSink = std::function<void(std::span<const int16_t>)>; // 48 kHz stereo
++
++        virtual ~Spu2Backend() = default;
++        virtual void reset() = 0;
++        // Physical addresses 0x1F900000-0x1F9007FF (and the 0x1F900800+ shared registers); cycle: the IOP clock.
++        virtual uint16_t read16(uint32_t physicalAddress, uint64_t cycle) = 0;
++        virtual void write16(uint32_t physicalAddress, uint16_t value, uint64_t cycle) = 0;
++        // DMA channel 4 (core 0) / 7 (core 1): whether a write goes to the core's sound data input (AutoDMA), and
++        // the transfers, whole, at their start. The IOP's DMA completion is timed by the caller.
++        virtual bool autoDma(uint32_t core) const = 0;
++        virtual void dmaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle) = 0;
++        virtual void dmaRead(uint32_t core, uint8_t *destination, size_t bytes, uint64_t cycle) = 0;
++        virtual void admaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle) = 0;
++        // Mixes up to cycle and hands the output to sink.
++        virtual void advanceTo(uint64_t cycle, const AudioSink &sink) = 0;
++    };
++}
+diff --git a/ps2xIOP/src/emulator/core/iop_memory.cpp b/ps2xIOP/src/emulator/core/iop_memory.cpp
+index 56023f1..b0f4387 100644
+--- a/ps2xIOP/src/emulator/core/iop_memory.cpp
++++ b/ps2xIOP/src/emulator/core/iop_memory.cpp
+@@ -361,7 +361,7 @@ namespace ps2x::iop::detail
+         {
+             m_admaProgress[core] = AdmaProgress{madr, static_cast<uint32_t>(bytes), cycle, (chcr & 1u) != 0u};
+             if ((chcr & 1u) != 0u)
+-                m_spu2->admaWrite(core, m_ram.data() + madr, bytes);
++                m_spu2->admaWrite(core, m_ram.data() + madr, bytes, cycle);
+             return;
+         }
+         if ((chcr & 1u) != 0u)
+diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp b/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
+index 247797a..380f414 100644
+--- a/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_native_mixer.cpp
+@@ -3,6 +3,7 @@
+ #include "emulator/devices/iop_spu2.h"
+ 
+ #include <algorithm>
++#include <array>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -29,40 +30,47 @@ namespace ps2x::audio
+             return (a * b) >> 15;
+         }
+ 
+-        // One step of an envelope or a volume sweep: rate is (shift << 2) | step, 0..127, at 48 kHz.
++        // One step of an ADSR phase (PCSX2 V_ADSR::Calculate): rate is (shift << 2) | step, 0..127, at 48 kHz.
+         void envelopeStep(int32_t &level, uint32_t &counter, uint32_t rate, bool decreasing, bool exponential)
+         {
+             const int32_t shift = static_cast<int32_t>(rate >> 2u);
+             int32_t step = 7 - static_cast<int32_t>(rate & 3u);
+             if (decreasing)
+                 step = ~step;
+-            uint32_t increment = 0x8000u;
+-            if (shift < 11)
+-                step *= 1 << (11 - shift);
+-            else if (shift > 11)
+-                increment = shift - 11 < 16 ? increment >> (shift - 11) : 0u;
++            uint32_t increment = 0x8000u >> std::max(0, shift - 11);
++            int32_t delta = step * (1 << std::max(0, 11 - shift));
+             if (exponential)
+             {
++                if (!decreasing && level > 0x6000)
++                    increment >>= 2u;
+                 if (decreasing)
+-                    step = (step * level) >> 15;
+-                else if (level >= 0x6000)
+-                {
+-                    if (shift < 10)
+-                        step >>= 2;
+-                    else if (shift >= 11)
+-                        increment >>= 2;
+-                    else
+-                    {
+-                        step >>= 1;
+-                        increment >>= 1;
+-                    }
+-                }
++                    delta = static_cast<int16_t>((delta * level) >> 15);
+             }
+-            counter += increment;
+-            if ((counter & 0x8000u) == 0u)
++            counter += std::max(1u, increment);
++            if (counter < 0x8000u)
+                 return;
+             counter = 0u;
+-            level = std::clamp(level + step, 0, 0x7FFF);
++            level = std::clamp(level + delta, 0, 0x7FFF);
++        }
++
++        // PCSX2's 39-tap half-band filter for the reverb's 48 -> 24 kHz input; the output filter is it doubled.
++        using ReverbTaps = std::array<int16_t, 39>;
++        constexpr ReverbTaps kReverbDown = {-1, 0, 2, 0, -10, 0, 35, 0, -103, 0, 266, 0, -616, 0, 1332, 0, -2960, 0, 10246,
++                                            16384, 10246, 0, -2960, 0, 1332, 0, -616, 0, 266, 0, -103, 0, 35, 0, -10, 0, 2, 0, -1};
++        constexpr ReverbTaps kReverbUp = []
++        {
++            ReverbTaps up{};
++            for (size_t i = 0; i < up.size(); ++i)
++                up[i] = static_cast<int16_t>(std::clamp(kReverbDown[i] * 2, -0x8000, 0x7FFF));
++            return up;
++        }();
++        int32_t reverbFilter(const int16_t *buffer, uint32_t position, const ReverbTaps &taps)
++        {
++            const uint32_t first = (position - 39u) & 63u;
++            int32_t sum = 0;
++            for (uint32_t i = 0; i < 39u; ++i)
++                sum += buffer[first + i] * taps[i];
++            return clamp16(sum >> 15);
+         }
+ 
+         // libsd's reverb presets (its table, mode 0 off .. 9 pipe): dAPF1, dAPF2, vIIR, vCOMB1..4, vWALL, vAPF1, vAPF2,
+@@ -99,14 +107,40 @@ namespace ps2x::audio
+             level = static_cast<int16_t>(static_cast<uint16_t>(value << 1u));
+     }
+ 
++    // PCSX2 V_VolumeSlide::Update: bit 15 sweep, 14 exponential, 13 decreasing, 12 phase (negative), 6-0 rate.
+     void NativeMixer::Volume::tick()
+     {
+         if ((setting & 0x8000u) == 0u)
+             return;
+-        const bool negative = (setting & 0x1000u) != 0u;
+-        int32_t magnitude = std::abs(level);
+-        envelopeStep(magnitude, counter, setting & 0x7Fu, (setting & 0x2000u) != 0u, (setting & 0x4000u) != 0u);
+-        level = negative ? -magnitude : magnitude;
++        const uint32_t shift = (setting >> 2u) & 0x1Fu, step = setting & 3u;
++        const bool decreasing = (setting & 0x2000u) != 0u, exponential = (setting & 0x4000u) != 0u,
++                   negative = (setting & 0x1000u) != 0u;
++        int32_t stepSize = 7 - static_cast<int32_t>(step);
++        if (decreasing)
++            stepSize = ~stepSize;
++        uint32_t increment = 0x8000u >> std::max(0, static_cast<int32_t>(shift) - 11);
++        int32_t delta = stepSize * (1 << std::max(0, 11 - static_cast<int32_t>(shift)));
++        if (exponential)
++        {
++            if (!decreasing && level > 0x6000)
++                increment >>= 2u;
++            if (decreasing)
++                delta = static_cast<int16_t>((delta * level) >> 15);
++        }
++        if (step != 3u && shift != 0x1Fu)
++            increment = std::max(1u, increment);
++        counter += increment;
++        if (!(exponential && decreasing))
++            delta = negative ? -delta : delta;
++        if (counter < 0x8000u)
++            return;
++        counter = 0u;
++        if (!decreasing)
++            level = std::clamp(level + delta, -0x8000, 0x7FFF);
++        else if (exponential)
++            level = std::clamp(level + delta, 0, 0x7FFF);
++        else
++            level = std::clamp(level + delta, negative ? -0x8000 : 0, negative ? 0 : 0x7FFF);
+     }
+ 
+     void NativeMixer::reset()
+@@ -115,6 +149,7 @@ namespace ps2x::audio
+         for (Group &group : m_groups)
+             group = Group{};
+         m_groups[1].mix = 0xFFCu;
++        m_samples = 0u;
+     }
+ 
+     void NativeMixer::write(uint32_t address, const uint8_t *data, uint32_t bytes)
+@@ -269,7 +304,7 @@ namespace ps2x::audio
+     void NativeMixer::setEffectVolume(int group, int side, uint16_t value)
+     {
+         std::lock_guard<std::mutex> lock(m_mutex);
+-        m_groups[group].effect[side].set(value);
++        m_groups[group].effect[side] = static_cast<int16_t>(value);
+     }
+     uint16_t NativeMixer::masterVolume(int group, int side) const
+     {
+@@ -279,7 +314,7 @@ namespace ps2x::audio
+     uint16_t NativeMixer::effectVolume(int group, int side) const
+     {
+         std::lock_guard<std::mutex> lock(m_mutex);
+-        return m_groups[group].effect[side].setting;
++        return static_cast<uint16_t>(m_groups[group].effect[side]);
+     }
+ 
+     uint32_t NativeMixer::effectAreaBytes(int mode)
+@@ -312,8 +347,6 @@ namespace ps2x::audio
+         end = (end | 0x1FFFFu) & (kSoundMemory - 1u);
+         reverb.size = kAreaSizes[mode] * 4u;
+         reverb.start = ((end + 1u) / 2u - reverb.size) & (kSoundMemory / 2u - 1u);
+-        reverb.position = 0u;
+-        reverb.input[0] = reverb.input[1] = reverb.out[0] = reverb.out[1] = reverb.previous[0] = reverb.previous[1] = 0;
+     }
+ 
+     void NativeMixer::setEffectEnable(int group, bool enable)
+@@ -331,9 +364,9 @@ namespace ps2x::audio
+             m_memory[(end + 1u - bytes + i) & (kSoundMemory - 1u)] = 0u;
+     }
+ 
+-    // One step of the console's reverb (24 kHz): the same-side and cross IIR lines, four combs, two all-pass filters,
+-    // on the delay lines in sound memory, which advance a sample each step.
+-    void NativeMixer::stepReverb(Reverb &reverb, const int32_t send[2], int32_t out[2])
++    // One side's step of the console's reverb (each side at 24 kHz, interleaved): the same-side and cross IIR lines, four combs, two all-pass filters,
++    // on the delay lines in sound memory.
++    int32_t NativeMixer::stepReverb(Reverb &reverb, int side, int32_t input)
+     {
+         const uint32_t size = reverb.size;
+         const auto at = [&](uint32_t offset, int32_t delta = 0)
+@@ -348,6 +381,8 @@ namespace ps2x::audio
+         };
+         const auto store = [&](uint32_t offset, int32_t value)
+         {
++            if (!reverb.enabled) // PCSX2 / no$psx: with effects off the reverb still runs, but writes nothing back
++                return;
+             const uint32_t a = at(offset);
+             const uint16_t v = static_cast<uint16_t>(clamp16(value));
+             m_memory[a] = static_cast<uint8_t>(v);
+@@ -364,32 +399,24 @@ namespace ps2x::audio
+                        mRCOMB4 = line(23), dLDIFF = line(24), dRDIFF = line(25), mLAPF1 = line(26), mRAPF1 = line(27),
+                        mLAPF2 = line(28), mRAPF2 = line(29);
+ 
+-        const int32_t lin = mul15(clamp16(send[0]), vLIN);
+-        const int32_t rin = mul15(clamp16(send[1]), vRIN);
+-        store(mLSAME, mul15(lin + mul15(load(dLSAME), vWALL) - load(mLSAME, -1), vIIR) + load(mLSAME, -1));
+-        store(mRSAME, mul15(rin + mul15(load(dRSAME), vWALL) - load(mRSAME, -1), vIIR) + load(mRSAME, -1));
+-        store(mLDIFF, mul15(lin + mul15(load(dRDIFF), vWALL) - load(mLDIFF, -1), vIIR) + load(mLDIFF, -1));
+-        store(mRDIFF, mul15(rin + mul15(load(dLDIFF), vWALL) - load(mRDIFF, -1), vIIR) + load(mRDIFF, -1));
+-
+-        int32_t lout = mul15(vCOMB1, load(mLCOMB1)) + mul15(vCOMB2, load(mLCOMB2)) + mul15(vCOMB3, load(mLCOMB3)) +
+-                       mul15(vCOMB4, load(mLCOMB4));
+-        int32_t rout = mul15(vCOMB1, load(mRCOMB1)) + mul15(vCOMB2, load(mRCOMB2)) + mul15(vCOMB3, load(mRCOMB3)) +
+-                       mul15(vCOMB4, load(mRCOMB4));
++        // PCSX2 DoReverb for one side: the same-side and cross IIR lines, four combs, two all-pass filters.
++        const bool right = side == 1;
++        const int32_t in = mul15(input, right ? vRIN : vLIN);
++        const uint32_t sameDst = right ? mRSAME : mLSAME, diffDst = right ? mRDIFF : mLDIFF;
++        store(sameDst, mul15(vIIR, in + mul15(vWALL, load(right ? dRSAME : dLSAME)) - load(sameDst, -1)) + load(sameDst, -1));
++        store(diffDst, mul15(vIIR, in + mul15(vWALL, load(right ? dLDIFF : dRDIFF)) - load(diffDst, -1)) + load(diffDst, -1));
++        int32_t out = mul15(vCOMB1, load(right ? mRCOMB1 : mLCOMB1)) + mul15(vCOMB2, load(right ? mRCOMB2 : mLCOMB2)) +
++                      mul15(vCOMB3, load(right ? mRCOMB3 : mLCOMB3)) + mul15(vCOMB4, load(right ? mRCOMB4 : mLCOMB4));
+         const auto allPass = [&](int32_t value, uint32_t destination, uint32_t delay, int32_t coefficient)
+         {
+             const int32_t delayed = load(destination, -static_cast<int32_t>(delay));
+-            value = clamp16(value - mul15(coefficient, delayed));
+-            store(destination, value);
+-            return mul15(value, coefficient) + delayed;
++            const int32_t stage = value - mul15(coefficient, delayed);
++            store(destination, stage);
++            return delayed + mul15(coefficient, stage);
+         };
+-        lout = allPass(lout, mLAPF1, dAPF1, vAPF1);
+-        rout = allPass(rout, mRAPF1, dAPF1, vAPF1);
+-        lout = allPass(lout, mLAPF2, dAPF2, vAPF2);
+-        rout = allPass(rout, mRAPF2, dAPF2, vAPF2);
+-
+-        reverb.position = reverb.position + 1u >= size ? 0u : reverb.position + 1u;
+-        out[0] = clamp16(lout);
+-        out[1] = clamp16(rout);
++        out = allPass(out, right ? mRAPF1 : mLAPF1, dAPF1, vAPF1);
++        out = allPass(out, right ? mRAPF2 : mLAPF2, dAPF2, vAPF2);
++        return clamp16(out);
+     }
+ 
+     void NativeMixer::setMix(int group, uint16_t mix)
+@@ -435,6 +462,7 @@ namespace ps2x::audio
+         input.position = input.samples != 0u ? inputSampleAt(offset) % input.samples : 0u;
+         input.loop = loop;
+         input.playing = memory != nullptr && input.samples != 0u;
++        input.waiting = true;
+     }
+     void NativeMixer::stopInput(int group)
+     {
+@@ -508,6 +536,8 @@ namespace ps2x::audio
+             break;
+         case Voice::Phase::Sustain:
+             envelopeStep(voice.level, voice.envelopeCounter, (a2 >> 6u) & 0x7Fu, (a2 & 0x4000u) != 0u, (a2 & 0x8000u) != 0u);
++            if (voice.level == 0) // PCSX2: a voice stays in sustain until key off or silence
++                voice.phase = Voice::Phase::Off;
+             break;
+         case Voice::Phase::Release:
+             envelopeStep(voice.level, voice.envelopeCounter, (a2 & 0x1Fu) << 2u, true, (a2 & 0x20u) != 0u);
+@@ -607,7 +637,11 @@ namespace ps2x::audio
+                 Group &group = m_groups[g];
+                 int32_t dry[2] = {0, 0}, wet[2] = {0, 0};
+                 int32_t input[2] = {0, 0};
+-                if (group.input.playing)
++                // A new input is heard from the SPU2's next half boundary: its first block went into the half of the
++                // ring not being played (PCSX2 AutoDMAReadBuffer / ReadInput; hardware latency 0-256 samples).
++                if (group.input.waiting && m_samples % 256u == 0u)
++                    group.input.waiting = false;
++                if (group.input.playing && !group.input.waiting)
+                 {
+                     Input &in = group.input;
+                     const uint32_t at = inputOffsetOf(in.position);
+@@ -664,13 +698,10 @@ namespace ps2x::audio
+                     if ((group.wet[1] & bit) != 0u)
+                         wet[1] += mul15(value, voice.volume[1].level);
+                 }
+-                // The reverb: the send averaged over two output samples, a step every other sample, its output
+-                // eased between steps; at the group's effect volume.
++                // The reverb (PCSX2 DoReverb), at the group's effect volume.
+                 int32_t returned[2] = {0, 0};
+                 Reverb &reverb = group.reverb;
+-                group.effect[0].tick();
+-                group.effect[1].tick();
+-                if (reverb.enabled && reverb.mode != 0)
++                if (reverb.mode != 0)
+                 {
+                     int32_t send[2] = {clamp16(wet[0]), clamp16(wet[1])};
+                     if ((group.mix & 0x200u) == 0u)
+@@ -686,24 +717,21 @@ namespace ps2x::audio
+                     }
+                     send[0] = clamp16(send[0]);
+                     send[1] = clamp16(send[1]);
+-                    if (reverb.phase)
+-                    {
+-                        const int32_t average[2] = {(reverb.input[0] + send[0]) >> 1, (reverb.input[1] + send[1]) >> 1};
+-                        reverb.previous[0] = reverb.out[0];
+-                        reverb.previous[1] = reverb.out[1];
+-                        stepReverb(reverb, average, reverb.out);
+-                    }
+-                    else
+-                    {
+-                        reverb.input[0] = send[0];
+-                        reverb.input[1] = send[1];
+-                    }
++                    // PCSX2: the send into the down filter's buffer, one side stepped per output sample (left, then
++                    // right), its result into the up filter's buffer (0 for the other side), both filtered at 48 kHz.
++                    const uint32_t at = reverb.bufferPosition;
+                     for (int side = 0; side < 2; ++side)
+-                    {
+-                        const int32_t value = reverb.phase ? (reverb.previous[side] + reverb.out[side]) >> 1 : reverb.out[side];
+-                        returned[side] = mul15(value, group.effect[side].level);
+-                    }
+-                    reverb.phase = !reverb.phase;
++                        reverb.down[side][at] = reverb.down[side][at | 64u] = static_cast<int16_t>(send[side]);
++                    // Left on even samples, right on odd; the lines move every other sample (PCSX2 DoReverb /
++                    // RevbGetIndexer: both from the global count, so a mode change keeps them, as do the buffers).
++                    const int side = static_cast<int>(m_samples & 1u);
++                    reverb.position = (m_samples >> 1u) % reverb.size;
++                    const int16_t stepped = static_cast<int16_t>(stepReverb(reverb, side, reverbFilter(reverb.down[side], at, kReverbDown)));
++                    reverb.up[side][at] = reverb.up[side][at | 64u] = stepped;
++                    reverb.up[1 - side][at] = reverb.up[1 - side][at | 64u] = 0;
++                    reverb.bufferPosition = (at + 1u) & 63u;
++                    for (int s = 0; s < 2; ++s)
++                        returned[s] = mul15(reverbFilter(reverb.up[s], reverb.bufferPosition, kReverbUp), group.effect[s]);
+                 }
+                 group.master[0].tick();
+                 group.master[1].tick();
+@@ -729,6 +757,7 @@ namespace ps2x::audio
+             out[frame * 2u] = static_cast<int16_t>(clamp16(mixed[0]));
+             out[frame * 2u + 1u] = static_cast<int16_t>(clamp16(mixed[1]));
+             m_stats.peak = std::max({m_stats.peak, std::abs(clamp16(mixed[0])), std::abs(clamp16(mixed[1]))});
++            ++m_samples;
+         }
+     }
+ }
+diff --git a/ps2xIOP/src/emulator/devices/iop_native_mixer.h b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+index 078fd7d..f05961c 100644
+--- a/ps2xIOP/src/emulator/devices/iop_native_mixer.h
++++ b/ps2xIOP/src/emulator/devices/iop_native_mixer.h
+@@ -9,6 +9,9 @@
+ // sound chip here: no registers, no DMA, no interrupts, no chip timing. What a driver sets is a voice's playback
+ // state, what it reads back (a voice's envelope, which voices reached their end) is that state as it plays.
+ //
++// pop-sotc: envelope, volume sweep and reverb resampling follow PCSX2's SPU2 (ADSR.cpp, ReverbResample.cpp, Reverb.cpp,
++// GPL-3.0+), the independent reference; the fork had DuckStation-style exponential steps and averaging/linear resampling.
++//
+ // Reverb: each group's effect send through libsd's reverb presets (room ... pipe, echo and delay with their delay
+ // time and feedback), the reverb's delay lines in sound memory below the effect end address as the drivers place
+ // them, at 24 kHz as on the console, mixed back at the group's effect volume.
+@@ -137,15 +140,17 @@ namespace ps2x::audio
+             bool enabled = false;
+             uint16_t settings[32] = {}; // the preset's: dAPF1, dAPF2, vIIR ... mRAPF2, vLIN, vRIN (offsets in 8 bytes)
+             uint32_t start = 0, size = 0;  // the delay lines: first sample (16-bit units) and how many
+-            uint32_t position = 0;
+-            bool phase = false;            // the reverb steps every other output sample
+-            int32_t input[2] = {}, out[2] = {}, previous[2] = {};
++            uint32_t position = 0;          // in the area: (output sample / 2) % size, as the console's free-running counter
++            // The 48 <-> 24 kHz resampling buffers (39-tap FIR, mirrored at +64 for a linear read).
++            int16_t down[2][128] = {}, up[2][128] = {};
++            uint32_t bufferPosition = 0;
+         };
+         struct Input
+         {
+             const uint8_t *memory = nullptr;
+             uint32_t samples = 0, position = 0; // in stereo samples
+             bool playing = false, loop = false;
++            bool waiting = false; // started, until the SPU2 reaches the half of its input ring the first block went to
+             int16_t volume[2] = {0x7FFF, 0x7FFF};
+         };
+         struct Group
+@@ -153,7 +158,8 @@ namespace ps2x::audio
+             Voice voices[kVoices];
+             uint32_t ended = 0;
+             uint32_t dry[2] = {}, wet[2] = {};
+-            Volume master[2], effect[2];
++            Volume master[2];
++            int16_t effect[2] = {}; // EVOL: a plain volume, no sweep (PCSX2 FxVol)
+             Reverb reverb;
+             uint16_t mix = 0xFF0u;
+             Input input;
+@@ -162,7 +168,7 @@ namespace ps2x::audio
+         void decode(Voice &voice);
+         void stepEnvelope(Voice &voice);
+         int32_t sample(Group &group, int index, Voice &voice);
+-        void stepReverb(Reverb &reverb, const int32_t send[2], int32_t out[2]);
++        int32_t stepReverb(Reverb &reverb, int side, int32_t input); // one side's step at 24 kHz
+ 
+         struct Stats
+         {
+@@ -176,5 +182,6 @@ namespace ps2x::audio
+         std::vector<uint8_t> m_memory = std::vector<uint8_t>(kSoundMemory, 0u);
+         Group m_groups[kGroups];
+         std::function<void(int group, int half)> m_inputHalf;
++        uint32_t m_samples = 0; // output samples since reset (PCSX2 Cycles): the input ring's position, the reverb's step
+     };
+ }
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.cpp b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+index 4d4f9ed..f09e013 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.cpp
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.cpp
+@@ -138,6 +138,8 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::reset()
+     {
++        if (m_backend)
++            m_backend->reset();
+         m_regs.fill(0u);
+         std::fill(m_ram.begin(), m_ram.end(), uint16_t{0});
+         for (auto &core : m_voices)
+@@ -163,6 +165,8 @@ namespace ps2x::iop::detail
+ 
+     uint16_t IopSpu2::read16(uint32_t physicalAddress, uint64_t cycle)
+     {
++        if (m_backend)
++            return m_backend->read16(physicalAddress, cycle);
+         advanceTo(cycle);
+         const uint32_t offset = (physicalAddress - kBase) & 0x7FEu;
+         if (offset >= kSharedBase)
+@@ -212,6 +216,8 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::write16(uint32_t physicalAddress, uint16_t value, uint64_t cycle)
+     {
++        if (m_backend)
++            return m_backend->write16(physicalAddress, value, cycle);
+         advanceTo(cycle);
+         const uint32_t offset = (physicalAddress - kBase) & 0x7FEu;
+         ++g_spu2Stats.writes;
+@@ -318,16 +324,22 @@ namespace ps2x::iop::detail
+ 
+     bool IopSpu2::autoDma(uint32_t core) const noexcept
+     {
++        if (m_backend)
++            return m_backend->autoDma(core);
+         return (reg(core * kCoreStride + kAutoDma) & (core + 1u)) != 0u;
+     }
+ 
+     void IopSpu2::dmaStarted(uint32_t core) noexcept
+     {
++        if (m_backend)
++            return;
+         reg(core * kCoreStride + kStatus) |= kStatusDmaReady;
+     }
+ 
+     void IopSpu2::dmaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle)
+     {
++        if (m_backend)
++            return m_backend->dmaWrite(core, source, bytes, cycle);
+         advanceTo(cycle);
+         g_spu2Stats.dmaBytes += bytes;
+         uint32_t address = m_transferAddress[core];
+@@ -339,8 +351,10 @@ namespace ps2x::iop::detail
+         m_transferAddress[core] = address;
+     }
+ 
+-    void IopSpu2::admaWrite(uint32_t core, const uint8_t *source, size_t bytes)
++    void IopSpu2::admaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle)
+     {
++        if (m_backend)
++            return m_backend->admaWrite(core, source, bytes, cycle);
+         g_spu2Stats.dmaBytes += bytes;
+         constexpr size_t kBlockBytes = 1024u;
+         constexpr size_t kMaxQueued = 48000u; // 1 s; more means nothing is consuming it
+@@ -387,6 +401,8 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::dmaRead(uint32_t core, uint8_t *destination, size_t bytes, uint64_t cycle)
+     {
++        if (m_backend)
++            return m_backend->dmaRead(core, destination, bytes, cycle);
+         advanceTo(cycle);
+         uint32_t address = m_transferAddress[core];
+         for (size_t i = 0; i + 2u <= bytes; i += 2u)
+@@ -400,6 +416,13 @@ namespace ps2x::iop::detail
+ 
+     void IopSpu2::advanceTo(uint64_t cycle)
+     {
++        if (m_backend)
++        {
++            m_cycle = cycle;
++            if (m_audioSink)
++                m_backend->advanceTo(cycle, m_audioSink);
++            return;
++        }
+         if (cycle <= m_cycle)
+             return;
+         const uint64_t samples = (cycle - m_cycle) / kCyclesPerSample;
+diff --git a/ps2xIOP/src/emulator/devices/iop_spu2.h b/ps2xIOP/src/emulator/devices/iop_spu2.h
+index 6d93e28..365a100 100644
+--- a/ps2xIOP/src/emulator/devices/iop_spu2.h
++++ b/ps2xIOP/src/emulator/devices/iop_spu2.h
+@@ -1,4 +1,5 @@
+ #pragma once
++#include "ps2x/iop/spu2_backend.h"
+ 
+ #include <array>
+ #include "ps2x/state_io.h"
+@@ -43,11 +44,13 @@ namespace ps2x::iop::detail
+         // (256 left samples, then 256 right, 16-bit); the core plays it at 48 kHz, mixed by the
+         // MMIX input bits and the AVOL input volume. On hardware the transfer finishes only as fast
+         // as the samples are played, so the IOP driver refills at playback speed.
+-        void admaWrite(uint32_t core, const uint8_t *source, size_t bytes);
++        void admaWrite(uint32_t core, const uint8_t *source, size_t bytes, uint64_t cycle);
+         [[nodiscard]] static uint64_t admaCycles(size_t bytes) noexcept { return (bytes / 4u) * kCyclesPerSample; }
+ 
+         void advanceTo(uint64_t cycle);
+         void setAudioSink(std::function<void(std::span<const int16_t>)> sink) { m_audioSink = std::move(sink); }
++        // Another SPU2 in place of this one (nullptr: this one); see ps2x/iop/spu2_backend.h.
++        void setBackend(Spu2Backend *backend) noexcept { m_backend = backend; }
+         void flushAudio();
+ 
+         [[nodiscard]] uint32_t nextAddress(uint32_t core, uint32_t voice) const noexcept { return m_voices[core][voice].nextA; }
+@@ -136,6 +139,7 @@ namespace ps2x::iop::detail
+         std::array<int16_t, 1024> m_audioBuffer{};
+         size_t m_audioFrames = 0u;
+         std::function<void(std::span<const int16_t>)> m_audioSink;
++        Spu2Backend *m_backend = nullptr;
+         // AutoDMA input: transfers queued as ranges of IOP RAM and read sample by sample when
+         // played, as the hardware does, so data the game writes after the DMA started (it refills
+         // just behind the play position) is still heard. Layout per 1024-byte block: 256 left
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index e4983cf..0030ea6 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -1408,6 +1408,13 @@ namespace ps2x::iop::detail
+         return physical <= IopMemory::RamSize && size <= IopMemory::RamSize - physical;
+     }
+ 
++    void IopEmulator::setSpu2Backend(Spu2Backend *backend) noexcept
++    {
++        m_impl->spu2.setBackend(backend);
++        if (backend)
++            backend->reset();
++    }
++
+     uint64_t IopEmulator::eeCyclesUntilBatch() const noexcept
+     {
+         const int64_t threshold = static_cast<int64_t>(kIopBatchCycles * 8u);
+diff --git a/ps2xIOP/src/emulator/iop_emulator.h b/ps2xIOP/src/emulator/iop_emulator.h
+index f6cde63..4a942a8 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -10,6 +10,11 @@
+ #include <string_view>
+ #include <vector>
+ 
++namespace ps2x::iop
++{
++    class Spu2Backend;
++}
++
+ namespace ps2x::iop::detail
+ {
+     class IopEmulator
+@@ -44,6 +49,8 @@ namespace ps2x::iop::detail
+         [[nodiscard]] uint32_t threadCount() const noexcept;
+         [[nodiscard]] std::vector<std::string> describeThreads() const;
+         [[nodiscard]] uint32_t rpcServerCount() const noexcept;
++        // Another SPU2 in place of the emulated one (nullptr: the emulated one); see ps2x/iop/spu2_backend.h.
++        void setSpu2Backend(Spu2Backend *backend) noexcept;
+ 
+         void saveState(ps2x::state::Writer &out);
+         void loadState(ps2x::state::Reader &in);
+-- 
+2.54.0 (Apple Git-157)
+

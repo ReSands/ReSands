@@ -194,14 +194,31 @@ retail asm, 6 Nov; by callee name, so calls through a pointer would be missed). 
      0x12cd4, so 30-33 are probably never sent. Ordinals not taken (13/14 note<->pitch math, 30-33) run libsd's
      own code and are logged once; PMON/NON (not played by the mixer) are logged once when set.
    - Check: `iop_native_check <elf> --sound <dir>` drives sdrdrv RPC as the EE does (sceSdInit, VoiceTrans of
-     a looping 40-block ADPCM sample using all 5 filters, voice params/ADSR/SSA, KON, KOFF, then a looping PCM
-     BlockTrans on core 0) on both paths and writes `spu2.wav` / `native.wav`: voice and stream correlation
-     1.00000, level 0.9999 / 1.0001, native voice 1 sample later (21 us; the real PS2 decides which is right).
-     A 12 % quieter voice in the native run fails it. WAVs: `game/analysis/sound/libsd_ab/`.
-   - Not covered offline: reverb (effect modes, the SPU2 path's reverb vs the mixer's), exponential ADSR,
-     EndX readback timing, the real banks and command stacks. Next: add a reverb section to `--sound`, then the
-     in-game check.
-   - **PC steps (boot: ask first, TV on):** `git am` patches 51-53 on `C:\tools\PS2Recomp-sotc` (and check out
+     a looping 40-block ADPCM sample using all 5 filters, voice params/ADSR/SSA, KON, KOFF, a looping PCM
+     BlockTrans on core 0, a voice with exponential ADSR + a linear volume sweep, UbiSound's reverb set-up in hall
+     and echo, echo with effects switched off at the key off) and compares native against the reference per
+     section (correlation >= 0.999 over +-8 samples, level within 2 %). Exit 5 on a difference. WAVs
+     `pcsx2.wav` / `native.wav` / `emulated.wav` in `game/analysis/sound/libsd_ab/`.
+   - **The reference (patch 54, 6 Nov): PCSX2's SPU2 core, driven by the real libsd.** Our emulated SPU2
+     (`iop_spu2.cpp` + patches 06/07, the playtest one so far) is *not* a reference (user, 6 Nov): no reverb,
+     volume sweeps play as 0, an older envelope model, streams start early. `tools/iop/pcsx2_ref/build.py`
+     fetches PCSX2's `pcsx2/SPU2` at a pinned commit into `game/analysis/pcsx2_spu2/<commit>/` (never committed;
+     GPL-3.0), keeps only the plain reverb resampler (the SIMD ones need GSVector), and builds it with our shims
+     (`shim/`) and glue (`pcsx2_spu2_backend.cpp`, in place of PCSX2's `spu2.cpp`: clock, whole DMA transfers at
+     once, AutoDMA blocks queued one at a time, raw output without PCSX2's host DC filter) into
+     `game/native-build/pcsx2_ref/libpcsx2_spu2.a`. The glue is a ps2xIOP `Spu2Backend`
+     (`IopEmulator::setSpu2Backend`, patch 54), the same hook step 5 can use in the playtest build. Shortcut:
+     SPU2 interrupts are counted, not raised on the IOP (neither SPU2 path raises them).
+   - Result (6 Nov, after patch 54): voice 1.00000, stream 0.99995, envelope 1.00000, hall 0.99999, echo
+     0.99998, effects off 0.99925; levels within 0.1 %. Native was wrong where the reference disagreed: EVOL
+     swept and doubled (reverb 2x), streams heard at once instead of from the next half of the 512-sample input
+     ring, reverb position/side reset on a mode change instead of following the global sample count, reverb
+     silent with effects off (PCSX2 / no$psx: it runs and sounds, only writes stop). The emulated SPU2 fails
+     stream (0.34) and has no reverb. The ps2_iop SPU2 tests' 2 failures (Gaussian levels, voice mask) predate
+     patch 53.
+   - Not covered offline: many voices at once, the real banks and command stacks, EndX readback timing, SPU2
+     interrupts, save-state loads. Next: the in-game check.
+   - **PC steps (boot: ask first, TV on):** `git am` patches 51-54 on `C:\tools\PS2Recomp-sotc` (and check out
      HEAD in `game\recomp-sotc\runtime-src`), copy `game/analysis/iop/gen/*_iop.cpp`, `rebuild.ps1 -Play -Fast
      -RecompSrc C:\tools\PS2Recomp-sotc -Out game\recomp-sotc -IopNative game\analysis\iop\gen`, then play with
      `PS2X_IOP_NATIVE=1 PS2X_IOP_CLOCK=host PS2X_NATIVE_AUDIO=1` (A/B: drop `PS2X_NATIVE_AUDIO`): menus, music,
