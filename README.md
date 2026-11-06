@@ -60,11 +60,14 @@ If you're interested in contributing to ReSands, here's how you can help:
 
 ## 1.0 Roadmap
 
-- 0.1 - Playable start to finish with emulated graphics and sound
-- 0.2 - Graphics ported to a fully native Vulkan-based renderer
-- 0.3 - Sound ported to a native engine
-- 0.4 - Native pre-rendered video playback
-- 0.5 - Native memory card and gamepad support
+We're currently working on 0.3, with some of 0.4 and 0.5 done early.
+
+- 0.1 - Playable start to finish with emulated graphics and sound **(done)**
+- 0.2 - Graphics ported to a fully native Vulkan-based renderer **(mostly done: the native renderer is on by
+  default; switching off the emulated graphics for good waits on comparisons with a real PS2)**
+- 0.3 - Sound ported to a native engine **(in progress)**
+- 0.4 - Native pre-rendered video playback **(done)**
+- 0.5 - Native memory card and gamepad support **(in progress: memory card done; gamepad and rumble being tested)**
 - 0.6 - Support for PAL and JP discs
 - 1.0 - Cleaned up code, performance optimised
 
